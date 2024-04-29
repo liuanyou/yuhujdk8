@@ -17414,7 +17414,7 @@ elif test "x$TOOLCHAIN_TYPE" = xclang; then
   fi
   # Collapse compiler output into a single line
   COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT`
-  COMPILER_VERSION_NUMBER=`$EcHO $COMPILER_VERSION_OUTPUT | \
+  COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
     $SED -e 's/^.*clang version \([1-9][0-9.]*\).*$/\1/'`
 else
   as_fn_error $? "Unknown toolchain type $TOOLCHAIN_TYPE." "$LINENO" 5
@@ -17996,6 +17996,1307 @@ case "x$ac_cv_prog_cc_c89" in
 esac
 if test "x$ac_cv_prog_cc_c89" != xno; then :
 
+fi
+
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+COMPILER_NAME=C++
+SEARCH_LIST="$TOOLCHAIN_CXX_BINARY"
+
+if test "x$CXX" != x; then
+  # User has supplied compiler name already, always let that override.
+  { $as_echo "$as_me:${as_lineno-$LINENO}: Will use user supplied compiler CXX=$CXX" >&5
+  $as_echo "$as_me: Will use user supplied compiler CXX=$CXX" >&6; }
+  if test "x`basename $CXX`" = "x$CXX"; then
+    # A command without a complete path is provided, search $PATH.
+    for ac_prog in $CXX; do
+      # Extract the first word of "$ac_prog", so it can be a program name with args.
+      set dummy $ac_prog; ac_word=$2
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+      $as_echo_n "checking for $ac_word... " >&6; }
+      if ${ac_cv_path_POTENTIAL_CXX+:} false; then :
+        $as_echo_n "(cached) " >&6
+      else
+        case $POTENTIAL_CXX in
+        [\\/]* | ?:[\\/]*)
+        ac_cv_path_POTENTIAL_CXX="$POTENTIAL_CXX" # Let the user override the test with a path.
+        ;;
+        *)
+        as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+        for as_dir in $PATH; do
+          IFS=$as_save_IFS
+          test -z "$as_dir" && as_dir=.
+          for ac_exec_ext in '' $ac_executable_extensions; do
+            if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+              ac_cv_path_POTENTIAL_CXX="$as_dir/$ac_word$ac_exec_ext"
+              $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+              break 2
+            fi
+          done
+        done
+        IFS=$as_save_IFS
+        ;;
+        esac
+      fi
+      POTENTIAL_CXX=$ac_cv_path_POTENTIAL_CXX
+      if test -n "$POTENTIAL_CXX"; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $POTENTIAL_CXX" >&5
+        $as_echo "$POTENTIAL_CXX" >&6; }
+      else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        $as_echo "no" >&6; }
+      fi
+
+      test -n "$POTENTIAL_CXX" && break
+    done
+
+    if test "x$POTENTIAL_CXX" != x; then
+      CXX=$POTENTIAL_CXX
+    else
+      as_fn_error $? "User supplied compiler CXX=$CXX could not be found" "$LINENO" 5
+    fi
+  else
+    # Otherwise it might already be a complete path
+    if test ! -x "$CXX"; then
+      as_fn_error $? "User supplied compiler CXX=$CXX does not exist" "$LINENO" 5
+    fi
+  fi
+else
+  # No user supplied value. Locate compiler ourselves.
+
+  # If we are cross compiling, assume cross compilation tools follows the
+  # cross compilation standard where they are prefixed with the autoconf
+  # standard name for the target. For example the binary
+  # i686-sun-solaris2.10-gcc will cross compile for i686-sun-solaris2.10.
+  # If we are not cross compiling, then the default compiler name will be
+  # used.
+
+  CXX=
+  # If TOOLCHAIN_PATH is set, check for all compiler names in there first
+  # before checking the rest of the PATH.
+  # FIXME: Now that we prefix the TOOLS_DIR to the PATH in the PRE_DETECTION
+  # step, this should not be necessary.
+  if test -n "$TOOLCHAIN_PATH"; then
+    PATH_save="$PATH"
+    PATH="$TOOLCHAIN_PATH"
+    for ac_prog in $SEARCH_LIST; do
+      # Extract the first word of "$ac_prog", so it can be a program name with args.
+      set dummy $ac_prog; ac_word=$2
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+      $as_echo_n "checking for $ac_word... " >&6; }
+      if ${ac_cv_path_TOOLCHAIN_PATH_CXX+:} false; then :
+        $as_echo_n "(cached) " >&6
+      else
+        case $TOOLCHAIN_PATH_CXX in
+        [\\/]* | ?:[\\/]*)
+        ac_cv_path_TOOLCHAIN_PATH_CXX="$TOOLCHAIN_PATH_CXX" # Let the user override the test with a path.
+        ;;
+        *)
+        as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+        for as_dir in $PATH; do
+          IFS=$as_save_IFS
+          test -z "$as_dir" && as_dir=.
+          for ac_exec_ext in '' $ac_executable_extensions; do
+            if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+              ac_cv_path_TOOLCHAIN_PATH_CXX="$as_dir/$ac_word$ac_exec_ext"
+              $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+              break 2
+            fi
+          done
+        done
+        IFS=$as_save_IFS
+        ;;
+        esac
+      fi
+      TOOLCHAIN_PATH_CXX=$ac_cv_path_TOOLCHAIN_PATH_CXX
+      if test -n "$TOOLCHAIN_PATH_CXX"; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $TOOLCHAIN_PATH_CXX" >&5
+        $as_echo "$TOOLCHAIN_PATH_CXX" >&6; }
+      else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        $as_echo "no" >&6; }
+      fi
+
+      test -n "$TOOLCHAIN_PATH_CXX" && break
+    done
+
+    CXX=$TOOLCHAIN_PATH_CXX
+    PATH="$PATH_save"
+  fi
+
+  # AC_PATH_PROGS can't be run multiple times with the same variable,
+  # so create a new name for this run.
+  if test "x$CXX" = x; then
+    for ac_prog in $TOOLCHAIN_CXX_BINARY; do
+      # Extract the first word of "$ac_prog", so it can be a program name with args.
+      set dummy $ac_prog; ac_word=$2
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+      $as_echo_n "checking for $ac_word... " >&6; }
+      if ${ac_cv_path_POTENTIAL_CXX+:} false; then :
+        $as_echo_n "(cached) " >&6
+      else
+        case $POTENTIAL_CXX in
+        [\\/]* | ?:[\\/]*)
+        ac_cv_path_POTENTIAL_CXX="$POTENTIAL_CXX" # Let the user override the test with a path.
+        ;;
+        *)
+        as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+        for as_dir in $PATH; do
+          IFS=$as_save_IFS
+          test -z "$as_dir" && as_dir=.
+          for ac_exec_ext in '' $ac_executable_extensions; do
+            if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+              ac_cv_path_POTENTIAL_CXX="$as_dir/$ac_word$ac_exec_ext"
+              $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+              break 2
+            fi
+          done
+        done
+        IFS=$as_save_IFS
+        ;;
+        esac
+      fi
+      POTENTIAL_CXX=$ac_cv_path_POTENTIAL_CXX
+      if test -n "$POTENTIAL_CXX"; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $POTENTIAL_CXX" >&5
+        $as_echo "$POTENTIAL_CXX" >&6; }
+      else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        $as_echo "no" >&6; }
+      fi
+
+      test -n "$POTENTIAL_CXX" && break
+    done
+
+    CXX=$POTENTIAL_CXX
+  fi
+
+  if test "x$CXX" = x; then
+
+    # Print a helpful message on how to acquire the necessary build dependency.
+    # devkit is the help tag: freetype, cups, pulse, alsa etc
+    MISSING_DEPENDENCY=devkit
+
+    if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then
+      cygwin_help $MISSING_DEPENDENCY
+    elif test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.msys"; then
+      msys_help $MISSING_DEPENDENCY
+    else
+      PKGHANDLER_COMMAND=
+
+      case $PKGHANDLER in
+        apt-get)
+          apt_help     $MISSING_DEPENDENCY ;;
+        yum)
+          yum_help     $MISSING_DEPENDENCY ;;
+        port)
+          port_help    $MISSING_DEPENDENCY ;;
+        pkgutil)
+          pkgutil_help $MISSING_DEPENDENCY ;;
+        pkgadd)
+          pkgadd_help  $MISSING_DEPENDENCY ;;
+      esac
+
+      if test "x$PKGHANDLER_COMMAND" != x; then
+        HELP_MSG="You might be able to fix this by running '$PKGHANDLER_COMMAND'."
+      fi
+    fi
+
+    as_fn_error $? "Could not find a $COMPILER_NAME compiler. $HELP_MSG" "$LINENO" 5
+  fi
+fi
+
+# Now we have a compiler binary in CXX. Make sure it's okay.
+if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then :
+
+elif test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.msys"; then :
+
+else
+  # We're on a posix platform. Hooray! :)
+  # First separate the path from the arguments. This will split at the first
+  # space.
+  complete="$CXX"
+  path="${complete%% *}"
+  tmp="$complete EOL"
+  arguments="${tmp#* }"
+
+  # Cannot rely on the command "which" here since it doesn't always work.
+  is_absolute_path=`$ECHO "$path" | $GREP ^/`
+  if test -z "$is_absolute_path"; then
+    # Path to executable is not absolute. Find it.
+    IFS_save="$IFS"
+    IFS=:
+    for p in $PATH; do
+      if test -f "$p/$path" && test -x "$p/$path"; then
+        new_path="$p/$path"
+        break
+      fi
+    done
+    IFS="$IFS_save"
+  else
+    # This is an absolute path, we can use it without further modifications.
+    new_path="$path"
+  fi
+
+  if test "x$new_path" = x; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The path of CXX, which resolves as \"$complete\", is not found." >&5
+    $as_echo "$as_me: The path of CXX, which resolves as \"$complete\", is not found." >&6; }
+    has_space=`$ECHO "$complete" | $GREP " "`
+    if test "x$has_space" != x; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: This might be caused by spaces in the path, which is not allowed." >&5
+  $as_echo "$as_me: This might be caused by spaces in the path, which is not allowed." >&6; }
+    fi
+    as_fn_error $? "Cannot locate the the path of CXX" "$LINENO" 5
+  fi
+fi
+
+# Now join together the path and the arguments once again
+if test "x$arguments" != xEOL; then
+  new_complete="$new_path ${arguments% *}"
+else
+  new_complete="$new_path"
+fi
+
+if test "x$complete" != "x$new_complete"; then
+  CXX="$new_complete"
+  { $as_echo "$as_me:${as_lineno-$LINENO}: Rewriting CXX to \"$new_complete\"" >&5
+$as_echo "$as_me: Rewriting CXX to \"$new_complete\"" >&6; }
+fi
+
+TEST_COMPILER="$CXX"
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking resolved symbolic links for CXX" >&5
+$as_echo_n "checking resolved symbolic links for CXX... " >&6; }
+SYMLINK_ORIGINAL="$TEST_COMPILER"
+
+if test "x$OPENJDK_BUILD_OS" != xwindows; then
+  # Follow a chain of symbolic links. Use readlink
+  # where it exists, else fall back to horribly
+  # complicated shell code.
+  if test "x$READLINK_TESTED" != yes; then
+    # On MacOSX there is a readlink tool with a different
+    # purpose than the GNU readlink tool. Check the found readlink.
+    ISGNU=`$READLINK --version 2>&1 | $GREP GNU`
+    if test "x$ISGNU" = x; then
+      # A readlink that we do not know how to use.
+      # Are there other non-GNU readlinks out there?
+      READLINK_TESTED=yes
+      READLINK=
+    fi
+  fi
+
+  if test "x$READLINK" != x; then
+    SYMLINK_ORIGINAL=`$READLINK -f $SYMLINK_ORIGINAL`
+  else
+    # Save the current directory for restoring afterwards
+    STARTDIR=$PWD
+    COUNTER=0
+    sym_link_dir=`$DIRNAME $SYMLINK_ORIGINAL`
+    sym_link_file=`$BASENAME $SYMLINK_ORIGINAL`
+    cd $sym_link_dir
+    # Use -P flag to resolve symlinks in directories.
+    cd `$THEPWDCMD -P`
+    sym_link_dir=`$THEPWDCMD -P`
+    # Resolve file symlinks
+    while test $COUNTER -lt 20; do
+      ISLINK=`$LS -l $sym_link_dir/$sym_link_file | $GREP '\->' | $SED -e 's/.*-> \(.*\)/\1/'`
+      if test "x$ISLINK" == x; then
+        # This is not a symbolic link! We are done!
+        break
+      fi
+      # Again resolve directory symlinks since the target of the just found
+      # link could be in a different directory
+      cd `$DIRNAME $ISLINK`
+      sym_link_dir=`$THEPWDCMD -P`
+      sym_link_file=`$BASENAME $ISLINK`
+      let COUNTER=COUNTER+1
+    done
+    cd $STARTDIR
+    SYMLINK_ORIGINAL=$sym_link_dir/$sym_link_file
+  fi
+fi
+
+if test "x$TEST_COMPILER" = "x$SYMLINK_ORIGINAL"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no symlink" >&5
+  $as_echo "no symlink" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $SYMLINK_ORIGINAL" >&5
+  $as_echo "$SYMLINK_ORIGINAL" >&6; }
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking if CXX is disguised ccache" >&5
+  $as_echo_n "checking if CXX is disguised ccache... " >&6; }
+  COMPILER_BASENAME=`$BASENAME "$SYMLINK_ORIGINAL"`
+  if test "x$COMPILER_BASENAME" = "xccache"; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes, trying to find proper $COMPILER_NAME compiler" >&5
+    $as_echo "yes, trying to find proper $COMPILER_NAME compiler" >&6; }
+    # We /usr/lib/ccache in the path, so cc is a symlink to /usr/bin/ccache.
+    # We want to control ccache invocation ourselves, so ignore this cc and try
+    # searching again.
+
+    # Remove the path to the fake ccache cc from the PATH
+    RETRY_COMPILER_SAVED_PATH="$PATH"
+    COMPILER_DIRNAME=`$DIRNAME $CXX`
+    PATH="`$ECHO $PATH | $SED -e "s,$COMPILER_DIRNAME,,g" -e "s,::,:,g" -e "s,^:,,g"`"
+    # Try again looking for our compiler
+    if test -n "$ac_tool_prefix"; then
+      for ac_prog in $TOOLCHAIN_CXX_BINARY; do
+        # Extract the first word of "$ac_tool_prefix$ac_prog", so it can be a program name with args.
+        set dummy $ac_tool_prefix$ac_prog; ac_word=$2
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+        $as_echo_n "checking for $ac_word... " >&6; }
+        if ${ac_cv_prog_PROPER_COMPILER_CXX+:} false; then :
+          $as_echo_n "(cached) " >&6
+        else
+          if test -n "$PROPER_COMPILER_CXX"; then
+            ac_cv_prog_PROPER_COMPILER_CXX="$PROPER_COMPILER_CXX" # Let the user override the test.
+          else
+            as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+            for as_dir in $PATH; do
+              IFS=$as_save_IFS
+              test -z "$as_dir" && as_dir=.
+              for ac_exec_ext in '' $ac_executable_extensions; do
+                if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+                  ac_cv_prog_PROPER_COMPILER_CXX="$ac_tool_prefix$ac_prog"
+                  $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+                  break 2
+                fi
+              done
+            done
+            IFS=$as_save_IFS
+
+          fi
+        fi
+        PROPER_COMPILER_CXX=$ac_cv_prog_PROPER_COMPILER_CXX
+        if test -n "$PROPER_COMPILER_CXX"; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PROPER_COMPILER_CXX" >&5
+          $as_echo "$PROPER_COMPILER_CXX" >&6; }
+        else
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+          $as_echo "no" >&6; }
+        fi
+
+        test -n "$PROPER_COMPILER_CXX" && break
+      done
+    fi
+    if test -z "$PROPER_COMPILER_CXX"; then
+      ac_ct_PROPER_COMPILER_CXX=$PROPER_COMPILER_CXX
+      for ac_prog in $TOOLCHAIN_CXX_BINARY; do
+        # Extract the first word of "$ac_prog", so it can be a program name with args.
+        set dummy $ac_prog; ac_word=$2
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+        $as_echo_n "checking for $ac_word... " >&6; }
+        if ${ac_cv_prog_ac_ct_PROPER_COMPILER_CXX+:} false; then :
+          $as_echo_n "(cached) " >&6
+        else
+          if test -n "$ac_ct_PROPER_COMPILER_CXX"; then
+            ac_cv_prog_ac_ct_PROPER_COMPILER_CXX="$ac_ct_PROPER_COMPILER_CXX" # Let the user override the test.
+          else
+            as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+            for as_dir in $PATH; do
+              IFS=$as_save_IFS
+              test -z "$as_dir" && as_dir=.
+              for ac_exec_ext in '' $ac_executable_extensions; do
+                if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+                  ac_cv_prog_ac_ct_PROPER_COMPILER_CXX="$ac_prog"
+                  $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+                  break 2
+                fi
+              done
+            done
+            IFS=$as_save_IFS
+          fi
+        fi
+        ac_ct_PROPER_COMPILER_CXX=$ac_cv_prog_ac_ct_PROPER_COMPILER_CXX
+        if test -n "$ac_ct_PROPER_COMPILER_CXX"; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_PROPER_COMPILER_CXX" >&5
+          $as_echo "$ac_ct_PROPER_COMPILER_CXX" >&6; }
+        else
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+          $as_echo "no" >&6; }
+        fi
+
+        test -n "$ac_ct_PROPER_COMPILER_CXX" && break
+      done
+
+      if test "x$ac_ct_PROPER_COMPILER_CXX" = x; then
+        PROPER_COMPILER_CXX=""
+      else
+        case $cross_compiling:$ac_tool_warned in
+        yes:)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+        $as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+        ac_tool_warned=yes ;;
+        esac
+        PROPER_COMPILER_CXX=$ac_ct_PROPER_COMPILER_CXX
+      fi
+    fi
+
+    if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then :
+
+    elif test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.msys"; then :
+
+    else
+      # We're on a posix platform. Hooray! :)
+      # First separate the path from the arguments. This will split at the first
+      # space.
+      complete="$PROPER_COMPILER_CXX"
+      path="${complete%% *}"
+      tmp="$complete EOL"
+      arguments="${tmp#* }"
+
+      # Cannot rely on the command "which" here since it doesn't always work.
+      is_absolute_path=`$ECHO "$path" | $GREP ^/`
+      if test -z "$is_absolute_path"; then
+        # Path to executable is not absolute. Find it.
+        IFS_save="$IFS"
+        IFS=:
+        for p in $PATH; do
+          if test -f "$p/$path" && test -x "$p/$path"; then
+            new_path="$p/$path"
+            break
+          fi
+        done
+        IFS="$IFS_save"
+      else
+        # This is an absolute path, we can use it without further modifications.
+        new_path="$path"
+      fi
+
+      if test "x$new_path" = x; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: The path of PROPER_COMPILER_CXX, which resolves as \"$complete\", is not found." >&5
+        $as_echo "$as_me: The path of PROPER_COMPILER_CXX, which resolves as \"$complete\", is not found." >&6;}
+        has_space=`$ECHO "$complete" | $GREP " "`
+        if test "x$has_space" != x; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: This might be caused by spaces in the path, which is not allowed." >&5
+          $as_echo "$as_me: This might be caused by spaces in the path, which is not allowed." >&6;}
+        fi
+        as_fn_error $? "Cannot locate the the path of PROPER_COMPILER_CXX" "$LINENO" 5
+      fi
+    fi
+
+    # Now join together the path and the arguments once again
+    if test "x$arguments" != xEOL; then
+      new_complete="$new_path ${arguments% *}"
+    else
+      new_complete="$new_path"
+    fi
+
+    if test "x$complete" != "x$new_complete"; then
+      PROPER_COMPILER_CXX="$new_complete"
+      { $as_echo "$as_me:${as_lineno-$LINENO}: Rewriting PROPER_COMPILER_CXX to \"$new_complete\"" >&5
+      $as_echo "$as_me: Rewriting PROPER_COMPILER_CXX to \"$new_complete\"" >&6; }
+    fi
+
+    PATH="$RETRY_COMPILER_SAVED_PATH"
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for resolved symbolic links for CXX" >&5
+    $as_echo_n "checking for resolved symbolic links for CXX... " >&6; }
+
+    if test "x$OPENJDK_BUILD_OS" != xwindows; then
+      # Follow a chain of symbolic links. Use readlink
+      # where it exists, else fall back to horribly
+      # complicated shell code.
+      if test "x$READLINK_TESTED" != yes; then
+        # On MacOSX there is a readlink tool with a different
+        # purpose than the GNU readlink tool. Check the found readlink.
+        ISGNU=`$READLINK --version 2>&1 | $GREP GNU`
+        if test "x$ISGNU" = x; then
+          # A readlink that we do not know how to use.
+          # Are there other non-GNU readlinks out there?
+          READLINK_TESTED=yes
+          READLINK=
+        fi
+      fi
+
+      if test "x$READLINK" != x; then
+        PROPER_COMPILER_CXX=`$READLINK -f $PROPER_COMPILER_CXX`
+      else
+        # Save the current directory for restoring afterwards
+        STARTDIR=$PWD
+        COUNTER=0
+        sym_link_dir=`$DIRNAME $PROPER_COMPILER_CXX`
+        sym_link_file=`$BASENAME $PROPER_COMPILER_CXX`
+        cd $sym_link_dir
+        # Use -P flag to resolve symlinks in directories.
+        cd `$THEPWDCMD -P`
+        sym_link_dir=`$THEPWDCMD -P`
+        # Resolve file symlinks
+        while test $COUNTER -lt 20; do
+          ISLINK=`$LS -l $sym_link_dir/$sym_link_file | $GREP '\->' | $SED -e 's/.*-> \(.*\)/\1/'`
+          if test "x$ISLINK" == x; then
+            # This is not a symbolic link! We are done!
+            break
+          fi
+          # Again resolve directory symlinks since the target of the just found
+          # link could be in a different directory
+          cd `$DIRNAME $ISLINK`
+          sym_link_dir=`$THEPWDCMD -P`
+          sym_link_file=`$BASENAME $ISLINK`
+          let COUNTER=COUNTER+1
+        done
+        cd $STARTDIR
+        PROPER_COMPILER_CXX=$sym_link_dir/$sym_link_file
+      fi
+    fi
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PROPER_COMPILER_CXX" >&5
+    $as_echo "$PROPER_COMPILER_CXX" >&6; }
+    CXX="$PROPER_COMPILER_CXX"
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no, keeping CXX" >&5
+    $as_echo "no, keeping CXX" >&6; }
+  fi
+fi
+
+COMPILER=$CXX
+COMPILER_NAME=$COMPILER_NAME
+
+if test "x$TOOLCHAIN_TYPE" = xsolstudio; then
+  # cc -V output typically looks like
+  #     cc: Sun C 5.12 Linux_i386 2011/11/16
+  COMPILER_VERSION_OUTPUT=`$COMPILER -V 2>&1`
+  # Check that this is likely to be the Solaris Studio cc.
+  $ECHO "$COMPILER_VERSION_OUTPUT" | $GREP "^.*: Sun $COMPILER_NAME" > /dev/null
+  if test $? -ne 0; then
+    ALT_VERSION_OUTPUT=`$COMPILER --version 2>&1`
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&5
+    $as_echo "$as_me: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&6;}
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The result from running with -V was: \"$COMPILER_VERSION_OUTPUT\"" >&5
+    $as_echo "$as_me: The result from running with -V was: \"$COMPILER_VERSION_OUTPUT\"" >&6;}
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The result from running with --version was: \"$ALT_VERSION_OUTPUT\"" >&5
+    $as_echo "$as_me: The result from running with --version was: \"$ALT_VERSION_OUTPUT\"" >&6;}
+    as_fn_error $? "A $TOOLCHAIN_TYPE compiler is required. Try setting --with-tools-dir." "$LINENO" 5
+  fi
+  # Remove usage instructions (if present), and
+  # collapse compiler output into a single line
+  COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT | \
+          $SED -e 's/ *[Uu]sage:.*//'`
+  COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
+          $SED -e "s/^.*[ ,\t]$COMPILER_NAME[ ,\t]\([1-9]\.[0-9][0-9]*\).*/\1/"`
+elif test  "x$TOOLCHAIN_TYPE" = xxlc; then :
+  # xlc -qversion output typically looks like
+  #     IBM XL C/C++ for AIX, V11.1 (5724-X13)
+  #     Version: 11.01.0000.0015
+elif test  "x$TOOLCHAIN_TYPE" = xmicrosoft; then :
+  # There is no specific version flag, but all output starts with a version string.
+  # First line typically looks something like:
+  # Microsoft (R) 32-bit C/C++ Optimizing Compiler Version 16.00.40219.01 for 80x86
+elif test  "x$TOOLCHAIN_TYPE" = xgcc; then
+  # gcc --version output typically looks like
+  #     gcc (Ubuntu/Linaro 4.8.1-10ubuntu9) 4.8.1
+  #     Copyright (C) 2013 Free Software Foundation, Inc.
+  #     This is free software; see the source for copying conditions.  There is NO
+  #     warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  COMPILER_VERSION_OUTPUT=`$COMPILER --version 2>&1`
+  # Check that this is likely to be GCC.
+  $ECHO "$COMPILER_VERSION_OUTPUT" | $GREP "Free Software Foundation" > /dev/null
+  if test $? -ne 0; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&5
+    $as_echo "$as_me: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&6;}
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The result from running with --version was: \"$COMPILER_VERSION\"" >&5
+    $as_echo "$as_me: The result from running with --version was: \"$COMPILER_VERSION\"" >&6;}
+    as_fn_error $? "A $TOOLCHAIN_TYPE compiler is required. Try setting --with-tools-dir." "$LINENO" 5
+  fi
+  # Remove Copyright and legalese from version string, and
+  # collapse into a single line
+  COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT | \
+      $SED -e 's/ *Copyright .*//'`
+  COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
+      $SED -e 's/^.* \([1-9][0-9]*\.[0-9.]*\) .*$/\1/'`
+elif test  "x$TOOLCHAIN_TYPE" = xclang; then
+  # clang --version output typically looks like
+  #    Apple LLVM version 5.0 (clang-500.2.79) (based on LLVM 3.3svn)
+  #    clang version 3.3 (tags/RELEASE_33/final)
+  # or
+  #    Debian clang version 3.2-7ubuntu1 (tags/RELEASE_32/final) (based on LLVM 3.2)
+  #    Target: x86_64-pc-linux-gnu
+  #    Thread model: posix
+  COMPILER_VERSION_OUTPUT=`$COMPILER --version 2>&1`
+  # Check that this is likely to be clang
+  $ECHO "$COMPILER_VERSION_OUTPUT" | $GREP "clang" > /dev/null
+  if test $? -ne 0; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&5
+    $as_echo "$as_me: The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler." >&6;}
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The result from running with --version was: \"$COMPILER_VERSION_OUTPUT\"" >&5
+    $as_echo "$as_me: The result from running with --version was: \"$COMPILER_VERSION_OUTPUT\"" >&6;}
+    as_fn_error $? "A $TOOLCHAIN_TYPE compiler is required. Try setting --with-tools-dir." "$LINENO" 5
+  fi
+  # Collapse compiler output into a single line
+  COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT`
+  COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
+      $SED -e 's/^.*clang version \([1-9][0-9.]*\).*$/\1/'`
+else
+  as_fn_error $? "Unknown toolchain type $TOOLCHAIN_TYPE." "$LINENO" 5
+fi
+# This sets CC_VERSION_NUMBER or CXX_VERSION_NUMBER. (This comment is a grep marker)
+CXX_VERSION_NUMBER="$COMPILER_VERSION_NUMBER"
+# This sets CC_VERSION_STRING or CXX_VERSION_STRING. (This comment is a grep marker)
+CXX_VERSION_STRING="$COMPILER_VERSION_STRING"
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: Using $TOOLCHAIN_TYPE $COMPILER_NAME compiler version $COMPILER_VERSION_NUMBER [$COMPILER_VERSION_STRING]" >&5
+$as_echo "$as_me: Using $TOOLCHAIN_TYPE $COMPILER_NAME compiler version $COMPILER_VERSION_NUMBER [$COMPILER_VERSION_STRING]" >&6; }
+
+# Now that we have resolved CXX ourself, let autoconf have its go at it
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+if test -z "$CXX"; then
+  if test -n "$CCC"; then
+    CXX=$CCC
+  else
+    if test -n "$ac_tool_prefix"; then
+      for ac_prog in $CXX; do
+        # Extract the first word of "$ac_tool_prefix$ac_prog", so it can be a program name with args.
+        set dummy $ac_tool_prefix$ac_prog; ac_word=$2
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+        $as_echo_n "checking for $ac_word... " >&6; }
+        if ${ac_cv_prog_CXX+:} false; then :
+          $as_echo_n "(cached) " >&6
+        else
+          if test -n "$CXX"; then
+            ac_cv_prog_CXX="$CXX" # Let the user override the test.
+          else
+            as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+            for as_dir in $PATH; do
+              IFS=$as_save_IFS
+              test -z "$as_dir" && as_dir=.
+              for ac_exec_ext in '' $ac_executable_extensions; do
+                if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+                  ac_cv_prog_CXX="$ac_tool_prefix$ac_prog"
+                  $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+                  break 2
+                fi
+              done
+            done
+            IFS=$as_save_IFS
+
+          fi
+        fi
+        CXX=$ac_cv_prog_CXX
+        if test -n "$CXX"; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: $CXX" >&5
+          $as_echo "$CXX" >&6; }
+        else
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+          $as_echo "no" >&6; }
+        fi
+
+        test -n "$CXX" && break
+      done
+    fi
+    if test -z "$CXX"; then
+      ac_ct_CXX=$CXX
+      for ac_prog in $CXX; do
+        # Extract the first word of "$ac_prog", so it can be a program name with args.
+        set dummy $ac_prog; ac_word=$2
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+        $as_echo_n "checking for $ac_word... " >&6; }
+        if ${ac_cv_prog_ac_ct_CXX+:} false; then :
+          $as_echo_n "(cached) " >&6
+        else
+          if test -n "$ac_ct_CXX"; then
+            ac_cv_prog_ac_ct_CXX="$ac_ct_CXX" # Let the user override the test.
+          else
+            as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+            for as_dir in $PATH; do
+              IFS=$as_save_IFS
+              test -z "$as_dir" && as_dir=.
+              for ac_exec_ext in '' $ac_executable_extensions; do
+                if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+                  ac_cv_prog_ac_ct_CXX="$ac_prog"
+                  $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+                  break 2
+                fi
+              done
+            done
+            IFS=$as_save_IFS
+          fi
+        fi
+        ac_ct_CXX=$ac_cv_prog_ac_ct_CXX
+        if test -n "$ac_ct_CXX"; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_CXX" >&5
+          $as_echo "$ac_ct_CXX" >&6; }
+        else
+          { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+          $as_echo "no" >&6; }
+        fi
+
+        test -n "$ac_ct_CXX" && break
+      done
+
+      if test "x$ac_ct_CXX" = x; then
+        CXX="g++"
+      else
+        case $cross_compiling:$ac_tool_warned in
+        yes:)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+        $as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+        ac_tool_warned=yes ;;
+        esac
+        CXX=$ac_ct_CXX
+      fi
+    fi
+  fi
+fi
+# Provide some information about the compiler.
+$as_echo "$as_me:${as_lineno-$LINENO}: checking for C++ compiler version" >&5
+set X $ac_compile
+ac_compiler=$2
+for ac_option in --version -v -V -qversion; do
+  { { ac_try="$ac_compiler $ac_option >&5"
+  case "(($ac_try" in
+    *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+    *) ac_try_echo=$ac_try;;
+  esac
+  eval ac_try_echo="\"\$as_me:${as_lineno-$LINENO}: $ac_try_echo\""
+  $as_echo "$ac_try_echo"; } >&5
+  (eval "$ac_compiler $ac_option >&5") 2>conftest.err
+  ac_status=$?
+  if test -s conftest.err; then
+    sed '10a\
+... rest of stderr output deleted ...
+         10q' conftest.err >conftest.er1
+    cat conftest.er1 >&5
+  fi
+  rm -f conftest.er1 conftest.err
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }
+done
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether we are using the GNU C++ compiler" >&5
+$as_echo_n "checking whether we are using the GNU C++ compiler... " >&6; }
+if ${ac_cv_cxx_compiler_gnu+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+#ifndef __GNUC__
+       choke me
+#endif
+
+  ;
+  return 0;
+}
+_ACEOF
+  if ac_fn_cxx_try_compile "$LINENO"; then :
+    ac_compiler_gnu=yes
+  else
+    ac_compiler_gnu=no
+  fi
+  rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  ac_cv_cxx_compiler_gnu=$ac_compiler_gnu
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cxx_compiler_gnu" >&5
+$as_echo "$ac_cv_cxx_compiler_gnu" >&6; }
+if test $ac_compiler_gnu = yes; then
+  GXX=yes
+else
+  GXX=
+fi
+ac_test_CXXFLAGS=${CXXFLAGS+set}
+ac_save_CXXFLAGS=$CXXFLAGS
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $CXX accepts -g" >&5
+$as_echo_n "checking whether $CXX accepts -g... " >&6; }
+if ${ac_cv_prog_cxx_g+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_save_cxx_werror_flag=$ac_cxx_werror_flag
+  ac_cxx_werror_flag=yes
+  ac_cv_prog_cxx_g=no
+  CXXFLAGS="-g"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+  if ac_fn_cxx_try_compile "$LINENO"; then :
+    ac_cv_prog_cxx_g=yes
+  else
+    CXXFLAGS=""
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+    if ac_fn_cxx_try_compile "$LINENO"; then :
+
+    else
+      ac_cxx_werror_flag=$ac_save_cxx_werror_flag
+      CXXFLAGS="-g"
+	    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+      if ac_fn_cxx_try_compile "$LINENO"; then :
+        ac_cv_prog_cxx_g=yes
+      fi
+      rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    fi
+    rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  fi
+  rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  ac_cxx_werror_flag=$ac_save_cxx_werror_flag
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_prog_cxx_g" >&5
+$as_echo "$ac_cv_prog_cxx_g" >&6; }
+if test "$ac_test_CXXFLAGS" = set; then
+  CXXFLAGS=$ac_save_CXXFLAGS
+elif test $ac_cv_prog_cxx_g = yes; then
+  if test "$GXX" = yes; then
+    CXXFLAGS="-g -O2"
+  else
+    CXXFLAGS="-g"
+  fi
+else
+  if test "$GXX" = yes; then
+    CXXFLAGS="-O2"
+  else
+    CXXFLAGS=
+  fi
+fi
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+# This is the compiler version number on the form X.Y[.Z]
+
+if test "x$CC_VERSION_NUMBER" != "x$CXX_VERSION_NUMBER"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: C and C++ compiler has different version numbers, $CC_VERSION_NUMBER vs $CXX_VERSION_NUMBER." >&5
+  $as_echo "$as_me: WARNING: C and C++ compiler has different version numbers, $CC_VERSION_NUMBER vs $CXX_VERSION_NUMBER." >&2;}
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: This typically indicates a broken setup, and is not supported" >&5
+  $as_echo "$as_me: WARNING: This typically indicates a broken setup, and is not supported" >&2;}
+fi
+
+# We only check CC_VERSION_NUMBER since we assume CXX_VERSION_NUMBER is equal.
+if  [[ "$CC_VERSION_NUMBER" =~ (.*\.){3} ]] ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: C compiler version number has more than three parts (X.Y.Z): $CC_VERSION. Comparisons might be wrong." >&5
+  $as_echo "$as_me: WARNING: C compiler version number has more than three parts (X.Y.Z): $CC_VERSION. Comparisons might be wrong." >&2;}
+fi
+
+if  [[  "$CC_VERSION_NUMBER" =~ [0-9]{6} ]] ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: C compiler version number has a part larger than 99999: $CC_VERSION. Comparisons might be wrong." >&5
+  $as_echo "$as_me: WARNING: C compiler version number has a part larger than 99999: $CC_VERSION. Comparisons might be wrong." >&2;}
+fi
+
+COMPARABLE_ACTUAL_VERSION=`$AWK -F. '{ printf("%05d%05d%05d\n", $1, $2, $3) }' <<< "$CC_VERSION_NUMBER"`
+
+#
+# Setup the preprocessor (CPP and CXXCPP)
+#
+ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking how to run the C preprocessor" >&5
+$as_echo_n "checking how to run the C preprocessor... " >&6; }
+# On Suns, sometimes $CPP names a directory.
+if test -n "$CPP" && test -d "$CPP"; then
+  CPP=
+fi
+if test -z "$CPP"; then
+  if ${ac_cv_prog_CPP+:} false; then :
+    $as_echo_n "(cached) " >&6
+  else
+    # Double quotes because CPP needs to be expanded
+    for CPP in "$CC -E" "$CC -E -traditional-cpp" "/lib/cpp"; do
+      ac_preproc_ok=false
+      for ac_c_preproc_warn_flag in '' yes; do
+        # Use a header file that comes with gcc, so configuring glibc
+        # with a fresh cross-compiler works.
+        # Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
+        # <limits.h> exists even on freestanding compilers.
+        # On the NeXT, cc -E runs the code through the compiler's parser,
+        # not just through cpp. "Syntax error" is here to catch this case.
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#ifdef __STDC__
+# include <limits.h>
+#else
+# include <assert.h>
+#endif
+		     Syntax error
+_ACEOF
+        if ac_fn_c_try_cpp "$LINENO"; then :
+
+        else
+          # Broken: fails on valid input.
+          continue
+        fi
+        rm -f conftest.err conftest.i conftest.$ac_ext
+        # can be detected and how.
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <ac_nonexistent.h>
+_ACEOF
+        if ac_fn_c_try_cpp "$LINENO"; then :
+          # Broken: success on invalid input.
+          continue
+        else
+          # Passes both tests.
+          ac_preproc_ok=:
+          break
+        fi
+        rm -f conftest.err conftest.i conftest.$ac_ext
+
+      done
+      # Because of `break', _AC_PREPROC_IFELSE's cleaning code was skipped.
+      rm -f conftest.i conftest.err conftest.$ac_ext
+      if $ac_preproc_ok; then :
+        break
+      fi
+
+    done
+    ac_cv_prog_CPP=$CPP
+
+  fi
+  CPP=$ac_cv_prog_CPP
+else
+  ac_cv_prog_CPP=$CPP
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $CPP" >&5
+$as_echo "$CPP" >&6; }
+ac_preproc_ok=false
+for ac_c_preproc_warn_flag in '' yes; do
+  # Use a header file that comes with gcc, so configuring glibc
+  # with a fresh cross-compiler works.
+  # Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
+  # <limits.h> exists even on freestanding compilers.
+  # On the NeXT, cc -E runs the code through the compiler's parser,
+  # not just through cpp. "Syntax error" is here to catch this case.
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#ifdef __STDC__
+# include <limits.h>
+#else
+# include <assert.h>
+#endif
+		     Syntax error
+_ACEOF
+  if ac_fn_c_try_cpp "$LINENO"; then :
+
+  else
+    # Broken: fails on valid input.
+    continue
+  fi
+  rm -f conftest.err conftest.i conftest.$ac_ext
+
+  # OK, works on sane cases.  Now check whether nonexistent headers
+  # can be detected and how.
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <ac_nonexistent.h>
+_ACEOF
+  if ac_fn_c_try_cpp "$LINENO"; then :
+    # Broken: success on invalid input.
+    continue
+  else
+    # Passes both tests.
+    ac_preproc_ok=:
+    break
+  fi
+  rm -f conftest.err conftest.i conftest.$ac_ext
+
+done
+# Because of `break', _AC_PREPROC_IFELSE's cleaning code was skipped.
+rm -f conftest.i conftest.err conftest.$ac_ext
+if $ac_preproc_ok; then :
+
+else
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+  $as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+  as_fn_error $? "C preprocessor \"$CPP\" fails sanity check
+  See \`config.log' for more details" "$LINENO" 5; }
+fi
+
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then :
+
+elif test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.msys"; then :
+
+else
+  # We're on a posix platform. Hooray! :)
+  # First separate the path from the arguments. This will split at the first
+  # space.
+  complete="$CPP"
+  path="${complete%% *}"
+  tmp="$complete EOL"
+  arguments="${tmp#* }"
+
+  # Cannot rely on the command "which" here since it doesn't always work.
+  is_absolute_path=`$ECHO "$path" | $GREP ^/`
+  if test -z "$is_absolute_path"; then
+    # Path to executable is not absolute. Find it.
+    IFS_save="$IFS"
+    IFS=:
+    for p in $PATH; do
+      if test -f "$p/$path" && test -x "$p/$path"; then
+        new_path="$p/$path"
+        break
+      fi
+    done
+    IFS="$IFS_save"
+  else
+    # This is an absolute path, we can use it without further modifications.
+    new_path="$path"
+  fi
+  if test "x$new_path" = x; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The path of CPP, which resolves as \"$complete\", is not found." >&5
+    $as_echo "$as_me: The path of CPP, which resolves as \"$complete\", is not found." >&6;}
+    has_space=`$ECHO "$complete" | $GREP " "`
+    if test "x$has_space" != x; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: This might be caused by spaces in the path, which is not allowed." >&5
+      $as_echo "$as_me: This might be caused by spaces in the path, which is not allowed." >&6;}
+    fi
+    as_fn_error $? "Cannot locate the the path of CPP" "$LINENO" 5
+  fi
+fi
+
+# Now join together the path and the arguments once again
+if test "x$arguments" != xEOL; then
+  new_complete="$new_path ${arguments% *}"
+else
+  new_complete="$new_path"
+fi
+
+if test "x$complete" != "x$new_complete"; then
+  CPP="$new_complete"
+  { $as_echo "$as_me:${as_lineno-$LINENO}: Rewriting CPP to \"$new_complete\"" >&5
+  $as_echo "$as_me: Rewriting CPP to \"$new_complete\"" >&6;}
+fi
+
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking how to run the C++ preprocessor" >&5
+$as_echo_n "checking how to run the C++ preprocessor... " >&6; }
+if test -z "$CXXCPP"; then
+  if ${ac_cv_prog_CXXCPP+:} false; then :
+    $as_echo_n "(cached) " >&6
+  else
+    # Double quotes because CXXCPP needs to be expanded
+    for CXXCPP in "$CXX -E" "/lib/cpp"; do
+      ac_preproc_ok=false
+      for ac_cxx_preproc_warn_flag in '' yes; do
+        # Use a header file that comes with gcc, so configuring glibc
+        # with a fresh cross-compiler works.
+        # Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
+        # <limits.h> exists even on freestanding compilers.
+        # On the NeXT, cc -E runs the code through the compiler's parser,
+        # not just through cpp. "Syntax error" is here to catch this case.
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#ifdef __STDC__
+# include <limits.h>
+#else
+# include <assert.h>
+#endif
+         Syntax error
+_ACEOF
+        if ac_fn_cxx_try_cpp "$LINENO"; then :
+
+        else
+          # Broken: fails on valid input.
+          continue
+        fi
+        rm -f conftest.err conftest.i conftest.$ac_ext
+
+        # OK, works on sane cases.  Now check whether nonexistent headers
+        # can be detected and how.
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <ac_nonexistent.h>
+_ACEOF
+        if ac_fn_cxx_try_cpp "$LINENO"; then :
+          # Broken: success on invalid input.
+          continue
+        else
+          # Passes both tests.
+          ac_preproc_ok=:
+          break
+        fi
+        rm -f conftest.err conftest.i conftest.$ac_ext
+
+      done
+      # Because of `break', _AC_PREPROC_IFELSE's cleaning code was skipped.
+      rm -f conftest.i conftest.err conftest.$ac_ext
+      if $ac_preproc_ok; then :
+        break
+      fi
+    done
+    ac_cv_prog_CXXCPP=$CXXCPP
+
+  fi
+  CXXCPP=$ac_cv_prog_CXXCPP
+else
+  ac_cv_prog_CXXCPP=$CXXCPP
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $CXXCPP" >&5
+$as_echo "$CXXCPP" >&6; }
+ac_preproc_ok=false
+for ac_cxx_preproc_warn_flag in '' yes; do
+  # Use a header file that comes with gcc, so configuring glibc
+  # with a fresh cross-compiler works.
+  # Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
+  # <limits.h> exists even on freestanding compilers.
+  # On the NeXT, cc -E runs the code through the compiler's parser,
+  # not just through cpp. "Syntax error" is here to catch this case.
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#ifdef __STDC__
+# include <limits.h>
+#else
+# include <assert.h>
+#endif
+		     Syntax error
+_ACEOF
+  if ac_fn_cxx_try_cpp "$LINENO"; then :
+
+  else
+    # Broken: fails on valid input.
+    continue
+  fi
+  rm -f conftest.err conftest.i conftest.$ac_ext
+
+  # OK, works on sane cases.  Now check whether nonexistent headers
+  # can be detected and how.
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <ac_nonexistent.h>
+_ACEOF
+  if ac_fn_cxx_try_cpp "$LINENO"; then :
+    # Broken: success on invalid input.
+    continue
+  else
+    # Passes both tests.
+    ac_preproc_ok=:
+    break
+  fi
+  rm -f conftest.err conftest.i conftest.$ac_ext
+
+done
+# Because of `break', _AC_PREPROC_IFELSE's cleaning code was skipped.
+rm -f conftest.i conftest.err conftest.$ac_ext
+if $ac_preproc_ok; then :
+
+else
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+  $as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+  as_fn_error $? "C++ preprocessor \"$CXXCPP\" fails sanity check
+  See \`config.log' for more details" "$LINENO" 5; }
+fi
+
+ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then :
+
+elif test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.msys"; then :
+
+else
+  # We're on a posix platform. Hooray! :)
+  # First separate the path from the arguments. This will split at the first
+  # space.
+  complete="$CXXCPP"
+  path="${complete%% *}"
+  tmp="$complete EOL"
+  arguments="${tmp#* }"
+
+  # Cannot rely on the command "which" here since it doesn't always work.
+  is_absolute_path=`$ECHO "$path" | $GREP ^/`
+  if test -z "$is_absolute_path"; then
+    # Path to executable is not absolute. Find it.
+    IFS_save="$IFS"
+    IFS=:
+    for p in $PATH; do
+      if test -f "$p/$path" && test -x "$p/$path"; then
+        new_path="$p/$path"
+        break
+      fi
+    done
+    IFS="$IFS_save"
+  else
+    # This is an absolute path, we can use it without further modifications.
+    new_path="$path"
+  fi
+
+  if test "x$new_path" = x; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: The path of CXXCPP, which resolves as \"$complete\", is not found." >&5
+    $as_echo "$as_me: The path of CXXCPP, which resolves as \"$complete\", is not found." >&6;}
+    has_space=`$ECHO "$complete" | $GREP " "`
+    if test "x$has_space" != x; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: This might be caused by spaces in the path, which is not allowed." >&5
+      $as_echo "$as_me: This might be caused by spaces in the path, which is not allowed." >&6;}
+    fi
+    as_fn_error $? "Cannot locate the the path of CXXCPP" "$LINENO" 5
+  fi
+fi
+
+# Now join together the path and the arguments once again
+if test "x$arguments" != xEOL; then
+  new_complete="$new_path ${arguments% *}"
+else
+  new_complete="$new_path"
+fi
+
+if test "x$complete" != "x$new_complete"; then
+  CXXCPP="$new_complete"
+  { $as_echo "$as_me:${as_lineno-$LINENO}: Rewriting CXXCPP to \"$new_complete\"" >&5
+  $as_echo "$as_me: Rewriting CXXCPP to \"$new_complete\"" >&6;}
+fi
+
+#
+# Setup the linker (LD)
+#
+if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then :
+  # In the Microsoft toolchain we have a separate LD command "link".
+  # Make sure we reject /usr/bin/link (as determined in CYGWIN_LINK), which is
+  # a cygwin program for something completely different.
+  # Extract the first word of "link", so it can be a program name with args.
+else
+  # All other toolchains use the compiler to link.
+  LD="$CC"
+  LDCXX="$CXX"
 fi
 
   # The option used to specify the target .o,.a or .so file.
