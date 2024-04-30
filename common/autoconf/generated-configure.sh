@@ -22411,6 +22411,61 @@ else
   BUILD_LD="$LD"
 fi
 
+if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then :
+  # For hotspot, we need these in Windows mixed path,
+  # so rewrite them all. Need added .exe suffix.
+else
+  HOTSPOT_CXX="$CXX"
+  HOTSPOT_LD="$LD"
+fi
+
+if test  "x$TOOLCHAIN_TYPE" = xclang; then
+  USE_CLANG=true
+fi
+
+# LDEXE is the linker to use, when creating executables. Not really used.
+# FIXME: These should just be removed!
+LDEXE="$LD"
+LDEXECXX="$LDCXX"
+
+
+
+
+# The package path is used only on macosx?
+# FIXME: clean this up, and/or move it elsewhere.
+PACKAGE_PATH=/opt/local
+
+
+# Check for extra potential brokenness.
+if test  "x$TOOLCHAIN_TYPE" = xmicrosoft; then :
+  # On Windows, double-check that we got the right compiler.
+fi
+
+if test "x$TOOLCHAIN_TYPE" = xgcc; then
+  # If this is a --hash-style=gnu system, use --hash-style=both, why?
+  HAS_GNU_HASH=`$CC -dumpspecs 2>/dev/null | $GREP 'hash-style=gnu'`
+  # This is later checked when setting flags.
+fi
+
+# Check for broken SuSE 'ld' for which 'Only anonymous version tag is allowed
+# in executable.'
+USING_BROKEN_SUSE_LD=no
+if test "x$OPENJDK_TARGET_OS" = xlinux && test "x$TOOLCHAIN_TYPE" = xgcc; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for broken SuSE 'ld' which only understands anonymous version tags in executables" >&5
+  $as_echo_n "checking for broken SuSE 'ld' which only understands anonymous version tags in executables... " >&6; }
+  echo "SUNWprivate_1.1 { local: *; };" > version-script.map
+  echo "int main() { }" > main.c
+  if $CXX -Xlinker -version-script=version-script.map main.c 2>&5 >&5; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+    $as_echo "no" >&6; }
+    USING_BROKEN_SUSE_LD=no
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+    $as_echo "yes" >&6; }
+    USING_BROKEN_SUSE_LD=yes
+  fi
+  rm -rf version-script.map main.c
+fi
 
 # The option used to specify the target .o,.a or .so file.
   # When compiling, how to specify the to be created object file.
