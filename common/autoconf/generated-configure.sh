@@ -16700,6 +16700,17 @@ ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
 
+  # Store the CFLAGS etal passed to the configure script.
+  ORG_CFLAGS="$CFLAGS"
+  ORG_CXXFLAGS="$CXXFLAGS"
+  ORG_OBJCFLAGS="$OBJCFLAGS"
+
+  # autoconf magic only relies on PATH, so update it if tools dir is specified
+  OLD_PATH="$PATH"
+  if test "x$TOOLS_DIR" != x; then
+    PATH=$TOOLS_DIR:$PATH
+  fi
+
 # Before we locate the compilers, we need to sanitize the Xcode build environment
 if test "x$OPENJDK_TARGET_OS" = "xmacosx"; then
   # determine path to Xcode developer directory
@@ -25077,17 +25088,116 @@ $as_echo "$as_me: Downloading build dependency devkit from $with_builddeps_serve
 
   fi
 
+# Option used to tell the compiler whether to create 32- or 64-bit executables
+if test "x$TOOLCHAIN_TYPE" = xxlc; then
+  COMPILER_TARGET_BITS_FLAG="-q"
+else
+  COMPILER_TARGET_BITS_FLAG="-m"
+fi
 
-  # Store the CFLAGS etal passed to the configure script.
-  ORG_CFLAGS="$CFLAGS"
-  ORG_CXXFLAGS="$CXXFLAGS"
-  ORG_OBJCFLAGS="$OBJCFLAGS"
+# FIXME: figure out if we should select AR flags depending on OS or toolchain.
+if test "x$OPENJDK_TARGET_OS" = xmacosx; then
+  ARFLAGS="-r"
+elif test "x$OPENJDK_TARGET_OS" = xaix; then
+  ARFLAGS="-X64"
+elif test "x$OPENJDK_TARGET_OS" = xwindows; then
+  # lib.exe is used as AR to create static libraries.
+  ARFLAGS="-nologo -NODEFAULTLIB:MSVCRT"
+else
+  ARFLAGS=""
+fi
 
-  # autoconf magic only relies on PATH, so update it if tools dir is specified
-  OLD_PATH="$PATH"
-  if test "x$TOOLS_DIR" != x; then
-    PATH=$TOOLS_DIR:$PATH
+## Setup strip.
+# FIXME: should this really be per platform, or should it be per toolchain type?
+# strip is not provided by clang or solstudio; so guessing platform makes most sense.
+# FIXME: we should really only export STRIPFLAGS from here, not POST_STRIP_CMD.
+if test "x$OPENJDK_TARGET_OS" = xlinux; then
+  STRIPFLAGS="-g"
+elif test "x$OPENJDK_TARGET_OS" = xsolaris; then
+  STRIPFLAGS="-x"
+elif test "x$OPENJDK_TARGET_OS" = xmacosx; then
+  STRIPFLAGS="-S"
+elif test "x$OPENJDK_TARGET_OS" = xaix; then
+  STRIPFLAGS="-X32_64"
+fi
+
+if test "x$OPENJDK_TARGET_OS" = xsolaris; then
+  # FIXME: break out into MCSFLAGS
+  POST_MCS_CMD="$MCS -d -a \"JDK $FULL_VERSION\""
+fi
+
+if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
+  CC_OUT_OPTION=-Fo
+  EXE_OUT_OPTION=-out:
+  LD_OUT_OPTION=-out:
+  AR_OUT_OPTION=-out:
+else
+  # The option used to specify the target .o,.a or .so file.
+  # When compiling, how to specify the to be created object file.
+  CC_OUT_OPTION='-o$(SPACE)'
+  # When linking, how to specify the to be created executable.
+  EXE_OUT_OPTION='-o$(SPACE)'
+  # When linking, how to specify the to be created dynamically linkable library.
+  LD_OUT_OPTION='-o$(SPACE)'
+  # When archiving, how to specify the to be create static archive for object files.
+  AR_OUT_OPTION='rcs$(SPACE)'
+fi
+
+# On Windows, we need to set RC flags.
+if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
+  RC_FLAGS="-nologo -l 0x409 -r"
+  if test "x$VARIANT" = xOPT; then
+    RC_FLAGS="$RC_FLAGS -d NDEBUG"
   fi
+
+  # The version variables used to create RC_FLAGS may be overridden
+  # in a custom configure script, or possibly the command line.
+  # Let those variables be expanded at make time in spec.gmk.
+  # The \$ are escaped to the shell, and the $(...) variables
+  # are evaluated by make.
+  RC_FLAGS="$RC_FLAGS \
+      -d \"JDK_BUILD_ID=\$(FULL_VERSION)\" \
+      -d \"JDK_COMPANY=\$(COMPANY_NAME)\" \
+      -d \"JDK_COMPONENT=\$(PRODUCT_NAME) \$(JDK_RC_PLATFORM_NAME) binary\" \
+      -d \"JDK_VER=\$(JDK_MINOR_VERSION).\$(JDK_MICRO_VERSION).\$(COOKED_JDK_UPDATE_VERSION).\$(COOKED_BUILD_NUMBER)\" \
+      -d \"JDK_COPYRIGHT=Copyright \xA9 $COPYRIGHT_YEAR\" \
+      -d \"JDK_NAME=\$(PRODUCT_NAME) \$(JDK_RC_PLATFORM_NAME) \$(JDK_MINOR_VERSION) \$(JDK_UPDATE_META_TAG)\" \
+      -d \"JDK_FVER=\$(JDK_MINOR_VERSION),\$(JDK_MICRO_VERSION),\$(if \$(COOKED_JDK_UPDATE_VERSION),\$(COOKED_JDK_UPDATE_VERSION),0),\$(COOKED_BUILD_NUMBER)\""
+fi
+
+
+if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
+  # FIXME: likely bug, should be CCXXFLAGS_JDK? or one for C or CXX.
+  CCXXFLAGS="$CCXXFLAGS -nologo"
+fi
+
+if test "x$SYSROOT" != "x"; then
+  if test "x$TOOLCHAIN_TYPE" = xsolstudio; then
+    if test "x$OPENJDK_TARGET_OS" = xsolaris; then
+      # Solaris Studio does not have a concept of sysroot. Instead we must
+      # make sure the default include and lib dirs are appended to each
+      # compile and link command line.
+      SYSROOT_CFLAGS="-I$SYSROOT/usr/include"
+      SYSROOT_LDFLAGS="-L$SYSROOT/usr/lib$OPENJDK_TARGET_CPU_ISADIR \
+          -L$SYSROOT/lib$OPENJDK_TARGET_CPU_ISADIR \
+          -L$SYSROOT/usr/ccs/lib$OPENJDK_TARGET_CPU_ISADIR"
+    fi
+  elif test "x$TOOLCHAIN_TYPE" = xgcc; then
+    SYSROOT_CFLAGS="--sysroot=\"$SYSROOT\""
+    SYSROOT_LDFLAGS="--sysroot=\"$SYSROOT\""
+  elif test "x$TOOLCHAIN_TYPE" = xclang; then
+    SYSROOT_CFLAGS="-isysroot \"$SYSROOT\""
+    SYSROOT_LDFLAGS="-isysroot \"$SYSROOT\""
+  fi
+  # Propagate the sysroot args to hotspot
+  LEGACY_EXTRA_CFLAGS="$LEGACY_EXTRA_CFLAGS $SYSROOT_CFLAGS"
+  LEGACY_EXTRA_CXXFLAGS="$LEGACY_EXTRA_CXXFLAGS $SYSROOT_CFLAGS"
+  LEGACY_EXTRA_LDFLAGS="$LEGACY_EXTRA_LDFLAGS $SYSROOT_LDFLAGS"
+fi
+
+if test "x$OPENJDK_TARGET_OS" != xwindows; then
+  POST_STRIP_CMD="$STRIP $STRIPFLAGS"
+fi
 
 
   # Restore the flags to the user specified values.
