@@ -258,9 +258,10 @@ ifeq ($(USE_CLANG), true)
 #  WARNINGS_ARE_ERRORS += -Wno-tautological-constant-out-of-range-compare
   WARNINGS_ARE_ERRORS += -Wno-delete-non-virtual-dtor -Wno-deprecated -Wno-format -Wno-dynamic-class-memaccess
   WARNINGS_ARE_ERRORS += -Wno-empty-body
+  WARNINGS_ARE_ERRORS += -Wno-uninitialized -Wno-undefined-bool-conversion
 endif
 
-WARNING_FLAGS = -Wpointer-arith -Wsign-compare -Wundef
+WARNING_FLAGS = -Wpointer-arith -Wsign-compare -Wundef -Wunused-function -Wformat=2
 
 ifeq "$(shell expr \( $(CC_VER_MAJOR) \> 4 \) \| \( \( $(CC_VER_MAJOR) = 4 \) \& \( $(CC_VER_MINOR) \>= 3 \) \))" "0"
   # Since GCC 4.3, -Wconversion has changed its meanings to warn these implicit
