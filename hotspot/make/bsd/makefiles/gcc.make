@@ -436,6 +436,7 @@ else
   DEBUG_CFLAGS/amd64 = -g
   DEBUG_CFLAGS/arm   = -g
   DEBUG_CFLAGS/ppc   = -g
+  DEBUG_CFLAGS/aarch64 = -g
   DEBUG_CFLAGS += $(DEBUG_CFLAGS/$(BUILDARCH))
   ifeq ($(DEBUG_CFLAGS/$(BUILDARCH)),)
   DEBUG_CFLAGS += -gstabs
