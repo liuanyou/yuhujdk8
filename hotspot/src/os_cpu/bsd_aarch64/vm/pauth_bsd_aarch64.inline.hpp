@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, Arm Limited. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +22,31 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef OS_CPU_LINUX_AARCH64_PAUTH_BSD_AARCH64_INLINE_HPP
+#define OS_CPU_LINUX_AARCH64_PAUTH_BSD_AARCH64_INLINE_HPP
 
-#include "asm/assembler.hpp"
-
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
+#ifdef __APPLE__
+#include <ptrauth.h>
 #endif
 
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+// Only the PAC instructions in the NOP space can be used. This ensures the
+// binaries work on systems without PAC. Write these instructions using their
+// alternate "hint" instructions to ensure older compilers can still be used.
+// For Apple, use the provided interface as this may provide additional
+// optimization.
+
+#define XPACLRI "hint #0x7;"
+
+inline address pauth_strip_pointer(address ptr) {
+#ifdef __APPLE__
+  return ptrauth_strip(ptr, ptrauth_key_asib);
+#else
+  register address result __asm__("x30") = ptr;
+  asm (XPACLRI : "+r"(result));
+  return result;
+#endif
+}
+
+#undef XPACLRI
+
+#endif // OS_CPU_LINUX_AARCH64_PAUTH_BSD_AARCH64_INLINE_HPP

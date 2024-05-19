@@ -37,6 +37,10 @@
 # include "register_x86.hpp"
 # include "vm_version_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "register_aarch64.hpp"
+# include "vm_version_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "register_sparc.hpp"
 # include "vm_version_sparc.hpp"
@@ -438,6 +442,9 @@ class AbstractAssembler : public ResourceObj  {
 
 #ifdef TARGET_ARCH_x86
 # include "assembler_x86.hpp"
+#endif
+#ifdef TARGET_ARCH_aarch64
+# include "assembler_aarch64.hpp"
 #endif
 #ifdef TARGET_ARCH_sparc
 # include "assembler_sparc.hpp"

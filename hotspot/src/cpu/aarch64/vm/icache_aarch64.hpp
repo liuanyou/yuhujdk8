@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 1997, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,22 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef CPU_AARCH64_VM_ICACHE_AARCH64_HPP
+#define CPU_AARCH64_VM_ICACHE_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+// Interface for updating the instruction cache.  Whenever the VM
+// modifies code, part of the processor instruction cache potentially
+// has to be flushed.
 
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
-#endif
+class ICache : public AbstractICache {
+ public:
+  static void initialize();
+  static void invalidate_word(address addr) {
+    __clear_cache((char *)addr, (char *)(addr + 3));
+  }
+  static void invalidate_range(address start, int nbytes) {
+    __clear_cache((char *)start, (char *)(start + nbytes));
+  }
+};
 
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+#endif // CPU_AARCH64_VM_ICACHE_AARCH64_HPP

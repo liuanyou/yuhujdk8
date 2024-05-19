@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 1998, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,23 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef CPU_AARCH64_VM_REGISTERMAP_AARCH64_HPP
+#define CPU_AARCH64_VM_REGISTERMAP_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+// machine-dependent implemention for register maps
+  friend class frame;
 
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
-#endif
+ private:
+  // This is the hook for finding a register in an "well-known" location,
+  // such as a register block of a predetermined format.
+  // Since there is none, we just return NULL.
+  // See registerMap_sparc.hpp for an example of grabbing registers
+  // from register save areas of a standard layout.
+   address pd_location(VMReg reg) const {return NULL;}
 
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+  // no PD state to clear or copy:
+  void pd_clear() {}
+  void pd_initialize() {}
+  void pd_initialize_from(const RegisterMap* map) {}
+
+#endif // CPU_AARCH64_VM_REGISTERMAP_AARCH64_HPP

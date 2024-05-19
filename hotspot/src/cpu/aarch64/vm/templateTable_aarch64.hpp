@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 2003, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,20 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef CPU_AARCH64_VM_TEMPLATETABLE_AARCH64_64_HPP
+#define CPU_AARCH64_VM_TEMPLATETABLE_AARCH64_64_HPP
 
-#include "asm/assembler.hpp"
+static void prepare_invoke(int byte_no,
+                             Register method,         // linked method (or i-klass)
+                             Register index = noreg,  // itable index, MethodType, etc.
+                             Register recv  = noreg,  // if caller wants to see it
+                             Register flags = noreg   // if caller wants to test it
+                             );
+  static void invokevirtual_helper(Register index, Register recv,
+                                   Register flags);
 
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
-#endif
+  // Helpers
+  static void index_check(Register array, Register index);
+  static void index_check_without_pop(Register array, Register index);
 
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+#endif // CPU_AARCH64_VM_TEMPLATETABLE_AARCH64_64_HPP

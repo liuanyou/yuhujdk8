@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 1997, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,16 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef CPU_AARCH64_VM_RELOCINFO_AARCH64_HPP
+#define CPU_AARCH64_VM_RELOCINFO_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+  // machine-dependent parts of class relocInfo
+ private:
+  enum {
+    // Intel instructions are byte-aligned.
+    // FIXME for AARCH64
+    offset_unit        =  1,
+    format_width       =  2
+  };
 
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
-#endif
-
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+#endif // CPU_AARCH64_VM_RELOCINFO_AARCH64_HPP

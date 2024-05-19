@@ -31,6 +31,9 @@
 #ifdef TARGET_ARCH_x86
 # include "interp_masm_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_MODEL_aarch64
+# include "interp_masm_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_MODEL_sparc
 # include "interp_masm_sparc.hpp"
 #endif
@@ -360,6 +363,9 @@ class TemplateTable: AllStatic {
 #endif
 #ifdef TARGET_ARCH_MODEL_x86_64
 # include "templateTable_x86_64.hpp"
+#endif
+#ifdef TARGET_ARCH_MODEL_aarch64
+# include "templateTable_aarch64.hpp"
 #endif
 #ifdef TARGET_ARCH_MODEL_sparc
 # include "templateTable_sparc.hpp"

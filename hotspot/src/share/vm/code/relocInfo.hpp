@@ -364,7 +364,7 @@ class relocInfo VALUE_OBJ_CLASS_SPEC {
   // "immediate" in the prefix header word itself.  This optimization
   // is invisible outside this module.)
 
-  inline friend relocInfo prefix_relocInfo(int datalen = 0);
+  inline friend relocInfo prefix_relocInfo(int datalen);
 
  protected:
   // an immediate relocInfo optimizes a prefix with one 10-bit unsigned value
@@ -417,6 +417,9 @@ class relocInfo VALUE_OBJ_CLASS_SPEC {
 #ifdef TARGET_ARCH_x86
 # include "relocInfo_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "relocInfo_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "relocInfo_sparc.hpp"
 #endif
@@ -459,7 +462,7 @@ inline relocInfo filler_relocInfo() {
   return relocInfo(relocInfo::none, relocInfo::offset_limit() - relocInfo::offset_unit);
 }
 
-inline relocInfo prefix_relocInfo(int datalen) {
+inline relocInfo prefix_relocInfo(int datalen = 0) {
   assert(relocInfo::fits_into_immediate(datalen), "datalen in limits");
   return relocInfo(relocInfo::data_prefix_tag, relocInfo::RAW_BITS, relocInfo::datalen_tag | datalen);
 }

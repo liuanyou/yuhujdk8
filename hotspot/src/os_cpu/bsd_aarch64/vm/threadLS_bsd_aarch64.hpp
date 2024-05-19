@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +22,15 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_MACROASSEMBLER_HPP
-#define SHARE_VM_ASM_MACROASSEMBLER_HPP
+#ifndef OS_CPU_BSD_AARCH64_VM_THREADLS_BSD_AARCH64_HPP
+#define OS_CPU_BSD_AARCH64_VM_THREADLS_BSD_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+  // Processor dependent parts of ThreadLocalStorage
 
-#ifdef TARGET_ARCH_x86
-# include "macroAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "macroAssembler_aarch64.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "macroAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "macroAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "macroAssembler_ppc.hpp"
-#endif
+public:
 
-#endif // SHARE_VM_ASM_MACROASSEMBLER_HPP
+  static Thread* thread() {
+    return (Thread*) os::thread_local_storage_at(thread_index());
+  }
+
+#endif // OS_CPU_BSD_AARCH64_VM_THREADLS_BSD_AARCH64_HPP

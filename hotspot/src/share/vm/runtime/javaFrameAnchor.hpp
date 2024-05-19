@@ -53,6 +53,9 @@
 #ifdef TARGET_OS_ARCH_bsd_x86
 # include "orderAccess_bsd_x86.inline.hpp"
 #endif
+#ifdef TARGET_OS_ARCH_bsd_aarch64
+# include "orderAccess_bsd_aarch64.inline.hpp"
+#endif
 #ifdef TARGET_OS_ARCH_bsd_zero
 # include "orderAccess_bsd_zero.inline.hpp"
 #endif
@@ -108,6 +111,9 @@ friend class JavaCallWrapper;
 
 #ifdef TARGET_ARCH_x86
 # include "javaFrameAnchor_x86.hpp"
+#endif
+#ifdef TARGET_ARCH_aarch64
+# include "javaFrameAnchor_aarch64.hpp"
 #endif
 #ifdef TARGET_ARCH_sparc
 # include "javaFrameAnchor_sparc.hpp"

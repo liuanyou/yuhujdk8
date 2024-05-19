@@ -53,6 +53,9 @@ enum {
 #ifdef TARGET_ARCH_x86
 # include "c1_Defs_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "c1_Defs_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "c1_Defs_sparc.hpp"
 #endif
