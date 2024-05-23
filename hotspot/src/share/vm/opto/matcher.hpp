@@ -280,11 +280,14 @@ public:
   }
 
   // Vector ideal reg
-  static const int vector_ideal_reg(int len);
-  static const int vector_shift_count_ideal_reg(int len);
+  static const uint vector_ideal_reg(int len);
+  static const uint vector_shift_count_ideal_reg(int len);
 
   // CPU supports misaligned vectors store/load.
   static const bool misaligned_vectors_ok();
+
+  // Should original key array reference be passed to AES stubs
+  static const bool pass_original_key_for_aes();
 
   // Used to determine a "low complexity" 64-bit constant.  (Zero is simple.)
   // The standard of comparison is one (StoreL ConL) vs. two (StoreI ConI).
@@ -448,6 +451,10 @@ public:
   // calling i2c adapters as the Java calling convention forces doubles to be
   // aligned.
   static const bool misaligned_doubles_ok;
+
+  // Does the CPU require postalloc expand (see block.cpp for description of
+  // postalloc expand)?
+  static const bool require_postalloc_expand;
 
   // Perform a platform dependent implicit null fixup.  This is needed
   // on windows95 to take care of some unusual register constraints.

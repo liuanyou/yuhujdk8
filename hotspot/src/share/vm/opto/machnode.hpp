@@ -220,6 +220,12 @@ public:
 
   // Emit bytes into cbuf
   virtual void  emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const;
+  // Expand node after register allocation.
+  // Node is replaced by several nodes in the postalloc expand phase.
+  // Corresponding methods are generated for nodes if they specify
+  // postalloc_expand. See block.cpp for more documentation.
+  virtual bool requires_postalloc_expand() const { return false; }
+  virtual void postalloc_expand(GrowableArray <Node *> *nodes, PhaseRegAlloc *ra_);
   // Size of instruction in bytes
   virtual uint  size(PhaseRegAlloc *ra_) const;
   // Helper function that computes size by emitting code
@@ -355,6 +361,9 @@ public:
   virtual const class Type* bottom_type() const { return TypeRawPtr::NOTNULL; }
   virtual uint ideal_reg() const { return Op_RegP; }
   virtual uint oper_input_base() const { return 1; }
+
+  virtual bool requires_postalloc_expand() const;
+  virtual void postalloc_expand(GrowableArray <Node *> *nodes, PhaseRegAlloc *ra_);
 
   virtual void emit(CodeBuffer& cbuf, PhaseRegAlloc* ra_) const;
   virtual uint size(PhaseRegAlloc* ra_) const;

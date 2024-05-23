@@ -373,6 +373,9 @@ const uint64_t KlassEncodingMetaspaceMax = (uint64_t(max_juint) + 1) << LogKlass
 #ifdef TARGET_ARCH_x86
 # include "globalDefinitions_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "globalDefinitions_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "globalDefinitions_sparc.hpp"
 #endif
@@ -1276,6 +1279,11 @@ inline int extract_high_short_from_int(jint x) {
 
 inline int build_int_from_shorts( jushort low, jushort high ) {
   return ((int)((unsigned int)high << 16) | (unsigned int)low);
+}
+
+// Convert pointer to intptr_t, for use in printing pointers.
+inline intptr_t p2i(const void * p) {
+    return (intptr_t) p;
 }
 
 // Printf-style formatters for fixed- and variable-width types as pointers and
