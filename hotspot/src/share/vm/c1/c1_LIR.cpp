@@ -1567,7 +1567,12 @@ void LIR_OprDesc::print(outputStream* out) const {
   } else if (is_double_cpu()) {
     out->print(as_register_hi()->name());
     out->print(as_register_lo()->name());
-#if defined(X86)
+#if defined(AARCH64)
+  } else if (is_single_fpu()) {
+    out->print("fpu%d", fpu_regnr());
+  } else if (is_double_fpu()) {
+    out->print("fpu%d", fpu_regnrLo());
+#elif defined(X86)
   } else if (is_single_xmm()) {
     out->print(as_xmm_float_reg()->name());
   } else if (is_double_xmm()) {
