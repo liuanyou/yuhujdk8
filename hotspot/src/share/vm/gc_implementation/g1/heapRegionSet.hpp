@@ -35,7 +35,7 @@ typedef FormatBuffer<HRS_ERR_MSG_BUFSZ> hrs_err_msg;
 // HEAP_REGION_SET_FORCE_VERIFY to be 1, or in builds in which
 // asserts are compiled in.
 #ifndef HEAP_REGION_SET_FORCE_VERIFY
-#define HEAP_REGION_SET_FORCE_VERIFY defined(ASSERT)
+//#define HEAP_REGION_SET_FORCE_VERIFY defined(ASSERT)
 #endif // HEAP_REGION_SET_FORCE_VERIFY
 
 //////////////////// HeapRegionSetBase ////////////////////
@@ -172,7 +172,7 @@ public:
   void verify_next_region(HeapRegion* hr);
   void verify_end();
 
-#if HEAP_REGION_SET_FORCE_VERIFY
+#if defined(ASSERT)
   void verify_optional() {
     verify();
   }

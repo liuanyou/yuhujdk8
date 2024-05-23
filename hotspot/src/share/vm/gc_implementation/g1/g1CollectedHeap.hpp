@@ -1228,7 +1228,7 @@ public:
   // verify_region_sets_optional() is planted in the code for
   // list verification in non-product builds (and it can be enabled in
   // product builds by defining HEAP_REGION_SET_FORCE_VERIFY to be 1).
-#if HEAP_REGION_SET_FORCE_VERIFY
+#if defined(ASSERT)
   void verify_region_sets_optional() {
     verify_region_sets();
   }
