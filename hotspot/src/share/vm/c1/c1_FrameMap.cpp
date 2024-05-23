@@ -29,6 +29,9 @@
 #ifdef TARGET_ARCH_x86
 # include "vmreg_x86.inline.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "vmreg_aarch64.inline.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "vmreg_sparc.inline.hpp"
 #endif
@@ -133,7 +136,7 @@ CallingConvention* FrameMap::c_calling_convention(const BasicTypeArray* signatur
     }
   }
 
-  intptr_t out_preserve = SharedRuntime::c_calling_convention(sig_bt, regs, sizeargs);
+  intptr_t out_preserve = SharedRuntime::c_calling_convention(sig_bt, regs, NULL, sizeargs);
   LIR_OprList* args = new LIR_OprList(signature->length());
   for (i = 0; i < sizeargs;) {
     BasicType t = sig_bt[i];
