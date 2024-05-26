@@ -39,7 +39,10 @@ private:
   int _cur;
 
   void vappend(const char* format, va_list ap) {
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
     int res = vsnprintf(&_buffer[_cur], BUFFER_LEN - _cur, format, ap);
+    #pragma clang diagnostic pop
     if (res != -1) {
       _cur += res;
     } else {
