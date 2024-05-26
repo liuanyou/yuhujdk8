@@ -2525,7 +2525,7 @@ Node* GraphKit::gen_subtype_check(Node* subklass, Node* superklass) {
 
   // First load the super-klass's check-offset
   Node *p1 = basic_plus_adr( superklass, superklass, in_bytes(Klass::super_check_offset_offset()) );
-  Node *chk_off = _gvn.transform( new (C) LoadINode( NULL, memory(p1), p1, _gvn.type(p1)->is_ptr() ) );
+  Node *chk_off = _gvn.transform( new (C) LoadINode( NULL, memory(p1), p1, _gvn.type(p1)->is_ptr(), MemNode::unordered ) );
   int cacheoff_con = in_bytes(Klass::secondary_super_cache_offset());
   bool might_be_cache = (find_int_con(chk_off, cacheoff_con) == cacheoff_con);
 
