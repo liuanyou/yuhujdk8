@@ -172,6 +172,9 @@ class TreeChunk : public Chunk_t {
   void assert_is_mangled() const;
 };
 
+template <class Chunk_t, template <class> class FreeList_t>
+size_t TreeChunk<Chunk_t, FreeList_t>::_min_tree_chunk_size = sizeof(TreeChunk<Chunk_t,  FreeList_t>)/HeapWordSize;
+
 
 template <class Chunk_t, template <class> class FreeList_t>
 class BinaryTreeDictionary: public FreeBlockDictionary<Chunk_t> {

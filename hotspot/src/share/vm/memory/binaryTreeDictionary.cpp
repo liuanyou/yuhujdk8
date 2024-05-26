@@ -44,8 +44,6 @@
 // This is currently used in the Concurrent Mark&Sweep implementation.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <class Chunk_t, template <class> class FreeList_t>
-size_t TreeChunk<Chunk_t, FreeList_t>::_min_tree_chunk_size = sizeof(TreeChunk<Chunk_t,  FreeList_t>)/HeapWordSize;
 
 template <class Chunk_t, template <class> class FreeList_t>
 TreeChunk<Chunk_t, FreeList_t>* TreeChunk<Chunk_t, FreeList_t>::as_TreeChunk(Chunk_t* fc) {
