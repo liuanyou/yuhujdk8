@@ -102,7 +102,10 @@ void warning(const char* format, ...) {
     jio_fprintf(err, "%s warning: ", VM_Version::vm_name());
     va_list ap;
     va_start(ap, format);
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
     vfprintf(err, format, ap);
+    #pragma clang diagnostic pop
     va_end(ap);
     fputc('\n', err);
   }
