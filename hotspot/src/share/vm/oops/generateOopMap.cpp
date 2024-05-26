@@ -2133,7 +2133,10 @@ void GenerateOopMap::compute_map(TRAPS) {
 void GenerateOopMap::error_work(const char *format, va_list ap) {
   _got_error = true;
   char msg_buffer[512];
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wformat-nonliteral"
   vsnprintf(msg_buffer, sizeof(msg_buffer), format, ap);
+  #pragma clang diagnostic pop
   // Append method name
   char msg_buffer2[512];
   jio_snprintf(msg_buffer2, sizeof(msg_buffer2), "%s in method %s", msg_buffer, method()->name()->as_C_string());
