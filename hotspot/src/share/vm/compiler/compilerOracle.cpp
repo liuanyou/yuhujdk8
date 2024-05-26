@@ -422,7 +422,10 @@ static bool scan_line(const char * line,
   *bytes_read = 0;
   error_msg = NULL;
   for (uint i = 0; i < ARRAY_SIZE(patterns); i++) {
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
     if (2 == sscanf(line, patterns[i], class_name, method_name, bytes_read)) {
+    #pragma clang diagnostic pop
       *c_mode = check_mode(class_name, error_msg);
       *m_mode = check_mode(method_name, error_msg);
       return *c_mode != MethodMatcher::Unknown && *m_mode != MethodMatcher::Unknown;
