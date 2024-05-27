@@ -44,6 +44,9 @@
 #ifdef TARGET_ARCH_MODEL_x86_64
 # include "adfiles/ad_x86_64.hpp"
 #endif
+#ifdef TARGET_ARCH_MODEL_aarch64
+# include "adfiles/ad_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_MODEL_sparc
 # include "adfiles/ad_sparc.hpp"
 #endif
@@ -842,13 +845,13 @@ void Matcher::init_spill_mask( Node *ret ) {
 
   // Compute generic short-offset Loads
 #ifdef _LP64
-  MachNode *spillCP = match_tree(new (C) LoadNNode(NULL,mem,fp,atp,TypeInstPtr::BOTTOM));
+  MachNode *spillCP = match_tree(new (C) LoadNNode(NULL,mem,fp,atp,TypeInstPtr::BOTTOM, MemNode::unordered));
 #endif
-  MachNode *spillI  = match_tree(new (C) LoadINode(NULL,mem,fp,atp));
-  MachNode *spillL  = match_tree(new (C) LoadLNode(NULL,mem,fp,atp));
-  MachNode *spillF  = match_tree(new (C) LoadFNode(NULL,mem,fp,atp));
-  MachNode *spillD  = match_tree(new (C) LoadDNode(NULL,mem,fp,atp));
-  MachNode *spillP  = match_tree(new (C) LoadPNode(NULL,mem,fp,atp,TypeInstPtr::BOTTOM));
+  MachNode *spillI  = match_tree(new (C) LoadINode(NULL,mem,fp,atp, MemNode::unordered));
+  MachNode *spillL  = match_tree(new (C) LoadLNode(NULL,mem,fp,atp, MemNode::unordered));
+  MachNode *spillF  = match_tree(new (C) LoadFNode(NULL,mem,fp,atp, MemNode::unordered));
+  MachNode *spillD  = match_tree(new (C) LoadDNode(NULL,mem,fp,atp, MemNode::unordered));
+  MachNode *spillP  = match_tree(new (C) LoadPNode(NULL,mem,fp,atp,TypeInstPtr::BOTTOM, MemNode::unordered));
   assert(spillI != NULL && spillL != NULL && spillF != NULL &&
          spillD != NULL && spillP != NULL, "");
 
