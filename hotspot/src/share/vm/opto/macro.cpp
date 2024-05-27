@@ -1272,8 +1272,8 @@ void PhaseMacroExpand::expand_allocate_common(
     // Load(-locked) the heap top.
     // See note above concerning the control input when using a TLAB
     Node *old_eden_top = UseTLAB
-      ? new (C) LoadPNode      (ctrl, contended_phi_rawmem, eden_top_adr, TypeRawPtr::BOTTOM, TypeRawPtr::BOTTOM)
-      : new (C) LoadPLockedNode(contended_region, contended_phi_rawmem, eden_top_adr);
+      ? new (C) LoadPNode      (ctrl, contended_phi_rawmem, eden_top_adr, TypeRawPtr::BOTTOM, TypeRawPtr::BOTTOM, MemNode::unordered)
+      : new (C) LoadPLockedNode(contended_region, contended_phi_rawmem, eden_top_adr, MemNode::acquire);
 
     transform_later(old_eden_top);
     // Add to heap top to get a new heap top
@@ -1320,7 +1320,7 @@ void PhaseMacroExpand::expand_allocate_common(
     if (UseTLAB) {
       Node* store_eden_top =
         new (C) StorePNode(needgc_false, contended_phi_rawmem, eden_top_adr,
-                              TypeRawPtr::BOTTOM, new_eden_top);
+                              TypeRawPtr::BOTTOM, new_eden_top, MemNode::unordered);
       transform_later(store_eden_top);
       fast_oop_ctrl = needgc_false; // No contention, so this is the fast path
       fast_oop_rawmem = store_eden_top;
@@ -1702,7 +1702,7 @@ Node* PhaseMacroExpand::prefetch_allocation(Node* i_o, Node*& needgc_false,
 
       Node *old_pf_wm = new (C) LoadPNode( needgc_false,
                                    contended_phi_rawmem, eden_pf_adr,
-                                   TypeRawPtr::BOTTOM, TypeRawPtr::BOTTOM );
+                                   TypeRawPtr::BOTTOM, TypeRawPtr::BOTTOM, MemNode::unordered );
       transform_later(old_pf_wm);
 
       // check against new_eden_top
@@ -1728,7 +1728,7 @@ Node* PhaseMacroExpand::prefetch_allocation(Node* i_o, Node*& needgc_false,
 
       Node *store_new_wmt = new (C) StorePNode( need_pf_true,
                                        contended_phi_rawmem, eden_pf_adr,
-                                       TypeRawPtr::BOTTOM, new_pf_wmt );
+                                       TypeRawPtr::BOTTOM, new_pf_wmt, MemNode::unordered );
       transform_later(store_new_wmt);
 
       // adding prefetches
