@@ -106,6 +106,9 @@
 #ifdef TARGET_ARCH_x86
 # include "vmStructs_x86.hpp"
 #endif
+#ifdef TARGET_ARCH_aarch64
+# include "vmStructs_aarch64.hpp"
+#endif
 #ifdef TARGET_ARCH_sparc
 # include "vmStructs_sparc.hpp"
 #endif
@@ -144,6 +147,9 @@
 #endif
 #ifdef TARGET_OS_ARCH_bsd_x86
 # include "vmStructs_bsd_x86.hpp"
+#endif
+#ifdef TARGET_OS_ARCH_bsd_aarch64
+# include "vmStructs_bsd_aarch64.hpp"
 #endif
 #ifdef TARGET_OS_ARCH_bsd_zero
 # include "vmStructs_bsd_zero.hpp"
