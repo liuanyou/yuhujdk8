@@ -2731,7 +2731,10 @@ extern "C" {
 int jio_vsnprintf(char *str, size_t count, const char *fmt, va_list args) {
   // see bug 4399518, 4417214
   if ((intptr_t)count <= 0) return -1;
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wformat-nonliteral"
   return vsnprintf(str, count, fmt, args);
+  #pragma clang diagnostic pop
 }
 
 
@@ -2759,7 +2762,10 @@ int jio_vfprintf(FILE* f, const char *fmt, va_list args) {
   if (Arguments::vfprintf_hook() != NULL) {
      return Arguments::vfprintf_hook()(f, fmt, args);
   } else {
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
     return vfprintf(f, fmt, args);
+    #pragma clang diagnostic pop
   }
 }
 
