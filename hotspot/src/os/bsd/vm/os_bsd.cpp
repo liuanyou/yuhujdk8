@@ -219,6 +219,8 @@ static char cpu_arch[] = "i386";
 static char cpu_arch[] = "amd64";
 #elif defined(ARM)
 static char cpu_arch[] = "arm";
+#elif defined(AARCH64)
+static char cpu_arch[] = "aarch64";
 #elif defined(PPC)
 static char cpu_arch[] = "ppc";
 #elif defined(SPARC)
@@ -3901,7 +3903,10 @@ bool os::check_heap(bool force) {
 }
 
 int local_vsnprintf(char* buf, size_t count, const char* format, va_list args) {
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wformat-nonliteral"
   return ::vsnprintf(buf, count, format, args);
+  #pragma clang diagnostic pop
 }
 
 // Is a (classpath) directory empty?
