@@ -97,7 +97,10 @@ const char* outputStream::do_vsnprintf(char* buffer, size_t buflen,
     result = va_arg(ap, const char*);
     result_len = strlen(result);
     if (add_cr && result_len >= buflen)  result_len = buflen-1;  // truncate
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
   } else if (vsnprintf(buffer, buflen, format, ap) >= 0) {
+    #pragma clang diagnostic pop
     result = buffer;
     result_len = strlen(result);
   } else {
