@@ -485,7 +485,7 @@ Node *AndINode::Ideal(PhaseGVN *phase, bool can_reshape) {
       Node *ldus = new (phase->C) LoadUSNode(load->in(MemNode::Control),
                                              load->in(MemNode::Memory),
                                              load->in(MemNode::Address),
-                                             load->adr_type());
+                                             load->adr_type(), MemNode::unordered);
       ldus = phase->transform(ldus);
       return new (phase->C) AndINode(ldus, phase->intcon(mask & 0xFFFF));
     }
@@ -496,7 +496,7 @@ Node *AndINode::Ideal(PhaseGVN *phase, bool can_reshape) {
       Node* ldub = new (phase->C) LoadUBNode(load->in(MemNode::Control),
                                              load->in(MemNode::Memory),
                                              load->in(MemNode::Address),
-                                             load->adr_type());
+                                             load->adr_type(), MemNode::unordered);
       ldub = phase->transform(ldub);
       return new (phase->C) AndINode(ldub, phase->intcon(mask));
     }
@@ -933,7 +933,7 @@ Node *RShiftINode::Ideal(PhaseGVN *phase, bool can_reshape) {
       return new (phase->C) LoadSNode( ld->in(MemNode::Control),
                                 ld->in(MemNode::Memory),
                                 ld->in(MemNode::Address),
-                                ld->adr_type());
+                                ld->adr_type(), MemNode::unordered);
   }
 
   // Check for "(byte[i] <<24)>>24" which simply sign-extends
