@@ -93,7 +93,6 @@ template <MEMFLAGS F> bool BasicHashtable<F>::check_rehash_table(int count) {
   return false;
 }
 
-template <class T, MEMFLAGS F> jint Hashtable<T, F>::_seed = 0;
 
 // Create a new table and using alternate hash code, populate the new table
 // with the existing elements.   This can be used to change the hash code

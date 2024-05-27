@@ -299,6 +299,7 @@ public:
   static jint _seed;
 };
 
+template <class T, MEMFLAGS F> jint Hashtable<T, F>::_seed = 0;
 
 //  Verions of hashtable where two handles are used to compute the index.
 
