@@ -3717,8 +3717,8 @@ Node* LibraryCallKit::generate_array_guard_common(Node* kls, RegionNode* region,
   }
   // Now test the correct condition.
   jint  nval = (obj_array
-                ? ((jint)Klass::_lh_array_tag_type_value
-                   <<    Klass::_lh_array_tag_shift)
+                ? ((jint)(Klass::_lh_array_tag_type_value
+                   <<    Klass::_lh_array_tag_shift))
                 : Klass::_lh_neutral_value);
   Node* cmp = _gvn.transform(new(C) CmpINode(layout_val, intcon(nval)));
   BoolTest::mask btest = BoolTest::lt;  // correct for testing is_[obj]array
@@ -5596,7 +5596,7 @@ LibraryCallKit::generate_checkcast_arraycopy(const TypePtr* adr_type,
   // super_check_offset, for the desired klass.
   int sco_offset = in_bytes(Klass::super_check_offset_offset());
   Node* p3 = basic_plus_adr(dest_elem_klass, sco_offset);
-  Node* n3 = new(C) LoadINode(NULL, memory(p3), p3, _gvn.type(p3)->is_ptr());
+  Node* n3 = new(C) LoadINode(NULL, memory(p3), p3, _gvn.type(p3)->is_ptr(), MemNode::unordered);
   Node* check_offset = ConvI2X(_gvn.transform(n3));
   Node* check_value  = dest_elem_klass;
 
