@@ -64,7 +64,7 @@ ifeq ($(OS_VENDOR), FreeBSD)
 else
   ifeq ($(OS_VENDOR), Darwin)
     SASRCFILES = $(DARWIN_NON_STUB_SASRCFILES)
-    SALIBS = -g -framework Foundation -F/System/Library/Frameworks/JavaVM.framework/Frameworks -framework JavaNativeFoundation -framework Security -framework CoreFoundation
+    SALIBS = -g -framework Foundation -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation -framework Security -framework CoreFoundation
     #objc compiler blows up on -march=i586, perhaps it should not be included in the macosx intel 32-bit C++ compiles?
     SAARCH = $(subst -march=i586,,$(ARCHFLAG))
   else

@@ -71,6 +71,7 @@ $(AGENT_SRC_DIR)/sun/jvm/hotspot/debugger/windbg/x86/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/debugger/windows/x86/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/debugger/windows/amd64/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/debugger/x86/*.java \
+$(AGENT_SRC_DIR)/sun/jvm/hotspot/debugger/aarch64/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/gc_implementation/g1/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/gc_implementation/parallelScavenge/*.java \
 $(AGENT_SRC_DIR)/sun/jvm/hotspot/gc_implementation/shared/*.java \
