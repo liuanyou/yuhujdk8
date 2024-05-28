@@ -90,6 +90,24 @@
 # include "adfiles/ad_ppc.hpp"
 #endif
 
+// output.cpp uses extern method references, should be methods of HandlerImpl class, just wrap them for aarch64
+#ifdef TARGET_ARCH_MODEL_aarch64
+uint size_exception_handler() {
+    return HandlerImpl::size_exception_handler();
+}
+
+uint size_deopt_handler() {
+    return HandlerImpl::size_deopt_handler();
+}
+
+int emit_exception_handler(CodeBuffer &cbuf) {
+    return HandlerImpl::emit_exception_handler(cbuf);
+}
+
+int emit_deopt_handler(CodeBuffer &cbuf) {
+    return HandlerImpl::emit_deopt_handler(cbuf);
+}
+#endif
 
 // For debugging purposes:
 //  To force FullGCALot inside a runtime function, add the following two lines
