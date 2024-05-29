@@ -300,6 +300,7 @@ class AbstractAssembler : public ResourceObj  {
   // Define some:
   static bool is_simm5( intptr_t x) { return is_simm(x, 5 ); }
   static bool is_simm8( intptr_t x) { return is_simm(x, 8 ); }
+  static bool is_simm9( intptr_t x) { return is_simm(x, 9); }
   static bool is_simm10(intptr_t x) { return is_simm(x, 10); }
   static bool is_simm11(intptr_t x) { return is_simm(x, 11); }
   static bool is_simm12(intptr_t x) { return is_simm(x, 12); }
@@ -307,6 +308,15 @@ class AbstractAssembler : public ResourceObj  {
   static bool is_simm16(intptr_t x) { return is_simm(x, 16); }
   static bool is_simm26(intptr_t x) { return is_simm(x, 26); }
   static bool is_simm32(intptr_t x) { return is_simm(x, 32); }
+
+  // Test if x is within unsigned immediate range for width.
+  static bool is_uimm(uint64_t x, uint w) {
+    precond(0 < w && w < 64);
+    uint64_t limes = UINT64_C(1) << w;
+    return x < limes;
+  }
+
+  static bool is_uimm12(uint64_t x) { return is_uimm(x, 12); }
 
   // Accessors
   CodeSection*  code_section() const   { return _code_section; }

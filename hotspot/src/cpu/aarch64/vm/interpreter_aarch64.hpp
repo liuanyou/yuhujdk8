@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 1997, 2011, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,21 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
-#define SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
+#ifndef CPU_AARCH64_VM_INTERPRETER_AARCH64_HPP
+#define CPU_AARCH64_VM_INTERPRETER_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+ public:
 
-#ifdef TARGET_ARCH_x86
-# include "assembler_x86.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "assembler_aarch64.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "assembler_sparc.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "assembler_arm.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "assembler_ppc.inline.hpp"
-#endif
+  // Offset from rsp (which points to the last stack element)
+  static int expr_offset_in_bytes(int i) { return stackElementSize * i; }
 
-#endif // SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
+  // Stack index relative to tos (which points at value)
+  static int expr_index_at(int i)        { return stackElementWords * i; }
+
+  // Already negated by c++ interpreter
+  static int local_index_at(int i) {
+    assert(i <= 0, "local direction already negated");
+    return stackElementWords * i;
+  }
+
+#endif // CPU_AARCH64_VM_INTERPRETER_AARCH64_HPP

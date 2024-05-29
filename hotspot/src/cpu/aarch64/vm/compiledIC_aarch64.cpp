@@ -70,7 +70,7 @@ address CompiledStaticCall::emit_to_interp_stub(CodeBuffer &cbuf, address mark) 
   // static stub relocation stores the instruction address of the call
   __ relocate(static_stub_Relocation::spec(mark));
   // static stub relocation also tags the Method* in the code-stream.
-  __ mov_metadata(rmethod, (Metadata*)NULL);
+//  __ mov_metadata(rmethod, (Metadata*)NULL);
   __ movptr(rscratch1, 0);
   __ br(rscratch1);
 

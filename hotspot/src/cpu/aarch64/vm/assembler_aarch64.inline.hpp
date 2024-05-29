@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Red Hat Inc.
+ * Copyright (c) 1997, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,28 +24,23 @@
  *
  */
 
-#ifndef SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
-#define SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
+#ifndef CPU_AARCH64_VM_ASSEMBLER_AARCH64_INLINE_HPP
+#define CPU_AARCH64_VM_ASSEMBLER_AARCH64_INLINE_HPP
 
-#include "asm/assembler.hpp"
+#include "asm/assembler.inline.hpp"
+#include "asm/codeBuffer.hpp"
+#include "code/codeCache.hpp"
 
-#ifdef TARGET_ARCH_x86
-# include "assembler_x86.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "assembler_aarch64.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "assembler_sparc.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "assembler_zero.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "assembler_arm.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "assembler_ppc.inline.hpp"
-#endif
 
-#endif // SHARE_VM_ASM_ASSEMBLER_INLINE_HPP
+inline bool Address::offset_ok_for_immed(int64_t offset, uint shift) {
+  uint mask = (1 << shift) - 1;
+  if (offset < 0 || (offset & mask) != 0) {
+    // Unscaled signed offset, encoded in a signed imm9 field.
+    return Assembler::is_simm9(offset);
+  } else {
+    // Scaled unsigned offset, encoded in an unsigned imm12:_ field.
+    return Assembler::is_uimm12(offset >> shift);
+  }
+}
+
+#endif // CPU_AARCH64_VM_ASSEMBLER_AARCH64_INLINE_HPP
