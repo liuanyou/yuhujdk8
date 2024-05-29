@@ -156,6 +156,8 @@ class CompiledIC: public ResourceObj {
 
   static bool is_icholder_entry(address entry);
 
+  void initialize_from_iter(RelocIterator* iter);
+
   // low-level inline-cache manipulation. Cannot be accessed directly, since it might not be MT-safe
   // to change an inline-cache. These changes the underlying inline-cache directly. They *newer* make
   // changes to a transition stub.
