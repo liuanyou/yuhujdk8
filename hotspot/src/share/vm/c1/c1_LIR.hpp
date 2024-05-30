@@ -451,7 +451,7 @@ class LIR_OprDesc: public CompilationResourceObj {
   // for compatibility with RInfo
   int fpu () const                                  { return lo_reg_half(); }
 #endif // X86
-#if defined(SPARC) || defined(ARM) || defined(PPC)
+#if defined(SPARC) || defined(ARM) || defined(PPC) || defined(AARCH64)
   FloatRegister as_float_reg   () const;
   FloatRegister as_double_reg  () const;
 #endif
