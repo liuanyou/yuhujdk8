@@ -456,6 +456,7 @@ public:
   virtual bool singleton(void) const;    // TRUE if type is a singleton
   virtual bool empty(void) const;        // TRUE if type is vacuous
 public:
+  typedef jint NativeType;
   const jint _lo, _hi;          // Lower bound, upper bound
   const short _widen;           // Limit on times we widen this sucker
 
@@ -495,6 +496,9 @@ public:
   static const TypeInt *POS1;
   static const TypeInt *INT;
   static const TypeInt *SYMINT; // symmetric range [-max_jint..max_jint]
+  static const TypeInt *TYPE_DOMAIN; // alias for TypeInt::INT
+
+  static const TypeInt *as_self(const Type *t) { return t->is_int(); }
 #ifndef PRODUCT
   virtual void dump2( Dict &d, uint depth, outputStream *st ) const;
 #endif
@@ -512,6 +516,7 @@ public:
   virtual bool singleton(void) const;    // TRUE if type is a singleton
   virtual bool empty(void) const;        // TRUE if type is vacuous
 public:
+  typedef jlong NativeType;
   const jlong _lo, _hi;         // Lower bound, upper bound
   const short _widen;           // Limit on times we widen this sucker
 
@@ -540,6 +545,10 @@ public:
   static const TypeLong *LONG;
   static const TypeLong *INT;    // 32-bit subrange [min_jint..max_jint]
   static const TypeLong *UINT;   // 32-bit unsigned [0..max_juint]
+  static const TypeLong *TYPE_DOMAIN; // alias for TypeLong::LONG
+
+  // static convenience methods.
+  static const TypeLong *as_self(const Type *t) { return t->is_long(); }
 #ifndef PRODUCT
   virtual void dump2( Dict &d, uint, outputStream *st  ) const;// Specialized per-Type dumping
 #endif
