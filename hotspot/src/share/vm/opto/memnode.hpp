@@ -986,8 +986,10 @@ public:
   bool trailing_store() const { return _kind == TrailingStore; }
   bool leading_store() const { return _kind == LeadingStore; }
   bool trailing_load_store() const { return _kind == TrailingLoadStore; }
+  bool leading_load_store() const { return _kind == LeadingLoadStore; }
   bool trailing() const { return _kind == TrailingLoad || _kind == TrailingStore || _kind == TrailingLoadStore; }
   bool leading() const { return _kind == LeadingStore || _kind == LeadingLoadStore; }
+  bool standalone() const { return _kind == Standalone; }
 };
 
 // "Acquire" - no following ref can move before (but earlier refs can
