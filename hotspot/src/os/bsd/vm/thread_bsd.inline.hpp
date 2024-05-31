@@ -38,6 +38,11 @@
 # include "orderAccess_bsd_x86.inline.hpp"
 # include "prefetch_bsd_x86.inline.hpp"
 #endif
+#ifdef TARGET_OS_ARCH_bsd_aarch64
+# include "atomic_bsd_aarch64.inline.hpp"
+# include "orderAccess_bsd_aarch64.inline.hpp"
+# include "prefetch_bsd_aarch64.inline.hpp"
+#endif
 #ifdef TARGET_OS_ARCH_bsd_zero
 # include "atomic_bsd_zero.inline.hpp"
 # include "orderAccess_bsd_zero.inline.hpp"
