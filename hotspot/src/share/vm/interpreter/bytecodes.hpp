@@ -256,6 +256,7 @@ class Bytecodes: AllStatic {
 
     _fast_aputfield       ,
     _fast_bputfield       ,
+    _fast_zputfield       ,
     _fast_cputfield       ,
     _fast_dputfield       ,
     _fast_fputfield       ,
@@ -290,6 +291,9 @@ class Bytecodes: AllStatic {
     // Platform specific JVM bytecodes
 #ifdef TARGET_ARCH_x86
 # include "bytecodes_x86.hpp"
+#endif
+#ifdef TARGET_ARCH_aarch64
+# include "bytecodes_aarch64.hpp"
 #endif
 #ifdef TARGET_ARCH_sparc
 # include "bytecodes_sparc.hpp"

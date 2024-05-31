@@ -723,6 +723,7 @@ class JavaValue {
 
 enum TosState {         // describes the tos cache contents
   btos = 0,             // byte, bool tos cached
+  ztos = 9,
   ctos = 1,             // char tos cached
   stos = 2,             // short tos cached
   itos = 3,             // int tos cached
