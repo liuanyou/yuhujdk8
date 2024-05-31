@@ -1218,7 +1218,6 @@ int Runtime1::move_mirror_patching(JavaThread* thread) {
 
   return caller_is_deopted();
 }
-#endif
 
 int Runtime1::move_appendix_patching(JavaThread* thread) {
 //
@@ -1238,6 +1237,7 @@ int Runtime1::move_appendix_patching(JavaThread* thread) {
 
   return caller_is_deopted();
 }
+#endif
 //
 // Entry point for compiled code. We want to patch a nmethod.
 // We don't do a normal VM transition here because we want to
