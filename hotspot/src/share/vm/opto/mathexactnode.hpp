@@ -68,7 +68,9 @@ class MathExactINode : public MathExactNode {
   MathExactINode(Node* ctrl, Node* in1) : MathExactNode(ctrl, in1) {}
   MathExactINode(Node* ctrl, Node* in1, Node* in2) : MathExactNode(ctrl, in1, in2) {}
   virtual int Opcode() const;
+#if !defined(AARCH64)
   virtual Node* match(const ProjNode* proj, const Matcher* m);
+#endif
   virtual const Type* bottom_type() const { return TypeTuple::INT_CC_PAIR; }
 };
 
@@ -77,7 +79,9 @@ public:
   MathExactLNode(Node* ctrl, Node* in1) : MathExactNode(ctrl, in1) {}
   MathExactLNode(Node* ctrl, Node* in1, Node* in2) : MathExactNode(ctrl, in1, in2) {}
   virtual int Opcode() const;
+#if !defined(AARCH64)
   virtual Node* match(const ProjNode* proj, const Matcher* m);
+#endif
   virtual const Type* bottom_type() const { return TypeTuple::LONG_CC_PAIR; }
 };
 

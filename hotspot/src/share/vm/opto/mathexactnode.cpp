@@ -104,6 +104,7 @@ Node* MathExactNode::no_overflow(PhaseGVN* phase, Node* new_result) {
   return new_result;
 }
 
+#if !defined(AARCH64)
 Node* MathExactINode::match(const ProjNode* proj, const Matcher* m) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
@@ -116,7 +117,9 @@ Node* MathExactINode::match(const ProjNode* proj, const Matcher* m) {
   }
   return new (m->C) MachProjNode(this, proj->_con, rm, ideal_reg);
 }
+#endif
 
+#if !defined(AARCH64)
 Node* MathExactLNode::match(const ProjNode* proj, const Matcher* m) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
@@ -129,6 +132,7 @@ Node* MathExactLNode::match(const ProjNode* proj, const Matcher* m) {
   }
   return new (m->C) MachProjNode(this, proj->_con, rm, ideal_reg);
 }
+#endif
 
 Node* AddExactINode::Ideal(PhaseGVN* phase, bool can_reshape) {
   Node* arg1 = in(1);
