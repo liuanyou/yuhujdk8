@@ -1199,6 +1199,7 @@ int Runtime1::move_klass_patching(JavaThread* thread) {
   return caller_is_deopted();
 }
 
+#ifndef TARGET_ARCH_aarch64
 int Runtime1::move_mirror_patching(JavaThread* thread) {
 //
 // NOTE: we are still in Java
@@ -1217,6 +1218,7 @@ int Runtime1::move_mirror_patching(JavaThread* thread) {
 
   return caller_is_deopted();
 }
+#endif
 
 int Runtime1::move_appendix_patching(JavaThread* thread) {
 //
