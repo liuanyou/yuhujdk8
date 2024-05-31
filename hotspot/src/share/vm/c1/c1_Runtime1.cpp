@@ -1237,7 +1237,7 @@ int Runtime1::move_appendix_patching(JavaThread* thread) {
 
   return caller_is_deopted();
 }
-#endif
+
 //
 // Entry point for compiled code. We want to patch a nmethod.
 // We don't do a normal VM transition here because we want to
@@ -1266,6 +1266,7 @@ int Runtime1::access_field_patching(JavaThread* thread) {
 
   return caller_is_deopted();
 JRT_END
+#endif
 
 
 JRT_LEAF(void, Runtime1::trace_block_entry(jint block_id))
