@@ -8014,7 +8014,7 @@ $as_echo "$with_jvm_variants" >&6; }
 
 
   if test "x$OPENJDK_TARGET_OS" = "xmacosx"; then
-    MACOSX_UNIVERSAL="true"
+    MACOSX_UNIVERSAL="false"
   fi
 
 
