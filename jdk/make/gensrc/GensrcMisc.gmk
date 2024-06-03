@@ -90,6 +90,7 @@ GENSRC_SOR_BIN := $(JDK_OUTPUTDIR)/gensrc/genSocketOptionRegistry
 SOR_COPYRIGHT_YEARS = $(shell $(CAT) $(GENSRC_SOR_SRC)/$(GENSRC_SOR_SRC_FILE) | \
     $(NAWK) '/^.*Copyright.*Oracle/ { printf "%s %s",$$4,$$5 }')
 
+ifneq ($(OPENJDK_TARGET_OS), macosx)
 $(eval $(call SetupNativeCompilation,BUILD_GENSRC_SOR_EXE, \
     SRC := $(GENSRC_SOR_SRC), \
     INCLUDE_FILES := $(GENSRC_SOR_SRC_FILE), \
@@ -99,6 +100,7 @@ $(eval $(call SetupNativeCompilation,BUILD_GENSRC_SOR_EXE, \
     OBJECT_DIR := $(GENSRC_SOR_BIN), \
     OUTPUT_DIR := $(GENSRC_SOR_BIN), \
     PROGRAM := genSocketOptionRegistry))
+endif
 
 ifneq ($(wildcard $(JDK_TOPDIR)/src/closed/solaris/classes/sun/nio/ch/SocketOptionRegistry-$(OPENJDK_TARGET_OS)-$(OPENJDK_TARGET_CPU_ARCH).java), )
   HAS_SOCKET_OPTION_REGISTRY := true
@@ -129,6 +131,7 @@ ifneq ($(OPENJDK_TARGET_OS), windows)
   UC_COPYRIGHT_YEARS = $(shell $(CAT) $(GENSRC_UC_SRC)/$(GENSRC_UC_SRC_FILE) | \
       $(NAWK) '/^.*Copyright.*Oracle/ { printf "%s %s",$$4,$$5 }')
 
+ifneq ($(OPENJDK_TARGET_OS), macosx)
   $(eval $(call SetupNativeCompilation,BUILD_GENSRC_UC_EXE, \
       SRC := $(GENSRC_UC_SRC), \
       INCLUDE_FILES := $(GENSRC_UC_SRC_FILE), \
@@ -139,6 +142,7 @@ ifneq ($(OPENJDK_TARGET_OS), windows)
       OBJECT_DIR := $(GENSRC_UC_BIN), \
       OUTPUT_DIR := $(GENSRC_UC_BIN), \
       PROGRAM := genUnixConstants))
+endif
 
   ifneq ($(wildcard $(JDK_TOPDIR)/src/closed/solaris/classes/sun/nio/fs/UnixConstants-$(OPENJDK_TARGET_OS)-$(OPENJDK_TARGET_CPU_ARCH).java), )
     HAS_UNIX_CONSTANTS := true
