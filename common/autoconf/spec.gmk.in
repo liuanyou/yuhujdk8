@@ -291,6 +291,9 @@ OPENWIN_HOME:=@OPENWIN_HOME@
 # The lowest required version of macosx to enforce compatiblity for
 MACOSX_VERSION_MIN=@MACOSX_VERSION_MIN@
 
+# Toolchain type: gcc, clang, solstudio, lxc, microsoft...
+TOOLCHAIN_TYPE:=@TOOLCHAIN_TYPE@
+
 # There are two types: CC or CL
 # CC is gcc and others behaving reasonably similar.
 # CL is cl.exe only.
