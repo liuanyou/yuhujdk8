@@ -34,7 +34,7 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
       CFLAGS := $(CFLAGS_JDKLIB) \
           -I$(JDK_TOPDIR)/src/macosx/native/apple/applescript \
           -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
-          -F/System/Library/Frameworks/ApplicationServices.framework/Frameworks, \
+          , \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN), \
       LDFLAGS_SUFFIX := -framework Cocoa \
