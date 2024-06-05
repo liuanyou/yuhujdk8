@@ -109,15 +109,15 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
       CFLAGS := $(CFLAGS_JDKLIB) \
           $(foreach dir, $(LIBOSX_DIRS), -I$(dir)) \
           -I$(JDK_TOPDIR)/src/macosx/native/sun/osxapp \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
-          -F/System/Library/Frameworks/ApplicationServices.framework/Frameworks, \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation \
+          , \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN), \
       LDFLAGS_SUFFIX_macosx := \
           -losxapp \
           -framework Cocoa \
           -framework ApplicationServices \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks \
           -framework JavaNativeFoundation \
           -framework JavaRuntimeSupport \
           -framework Security \
