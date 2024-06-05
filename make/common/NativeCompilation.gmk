@@ -86,7 +86,7 @@ define add_native_source
       # Include previously generated dependency information. (if it exists)
       -include $$($1_$2_DEP)
 
-      ifneq ($(TOOLCHAIN_TYPE), microsoft)
+      ifeq ($(TOOLCHAIN_TYPE), microsoft)
         $1_$2_DEBUG_OUT_FLAGS:=-Fd$$(patsubst %$(OBJ_SUFFIX),%.pdb,$$($1_$2_OBJ)) \
             -Fm$$(patsubst %$(OBJ_SUFFIX),%.map,$$($1_$2_OBJ))
       endif
