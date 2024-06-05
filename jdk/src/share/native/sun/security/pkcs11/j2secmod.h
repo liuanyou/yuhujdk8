@@ -31,7 +31,8 @@
 
 #include "j2secmod_md.h"
 
-#include "p11_md.h"
+//#include "p11_md.h"
+#include "wrapper/pkcs11wrapper.h"
 
 
 void *findFunction(JNIEnv *env, jlong jHandle, const char *functionName);
