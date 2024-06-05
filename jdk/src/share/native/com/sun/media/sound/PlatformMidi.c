@@ -29,6 +29,8 @@
 
 #include "PlatformMidi.h"
 
+#include <stdlib.h>
+
 char* GetInternalErrorStr(INT32 err) {
     switch (err) {
     case MIDI_SUCCESS:          return "";
