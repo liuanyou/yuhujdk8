@@ -30,6 +30,9 @@
  * characters in the value of the Premain-Class attribute.
  */
 #include <ctype.h>
+#else
+// For opinionated compilers.
+extern int isspace(int c);
 #endif /* _WIN32 */
 #include <string.h>
 #include <stdlib.h>
