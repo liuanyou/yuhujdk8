@@ -35,7 +35,7 @@
 #include <sys/param.h>
 #include <sys/utsname.h>
 
-#include "awt_Plugin.h"
+//#include "awt_Plugin.h"
 
 #ifdef DEBUG
 #define VERBOSE_AWT_DEBUG
@@ -221,7 +221,7 @@ Java_sun_awt_motif_XsessionWMcommand_New(JNIEnv *env, jobjectArray jargv)
     (*XsessionWMcommand)(env, jargv);
 }
 
-
+#if !defined(MACOSX)
 #define REFLECT_VOID_FUNCTION(name, arglist, paramlist)                 \
 typedef name##_type arglist;                                            \
 void name arglist                                                       \
@@ -272,3 +272,4 @@ REFLECT_VOID_FUNCTION(getAwtData,
                        awt_num_colors, pReserved))
 
 REFLECT_FUNCTION(Display *, getAwtDisplay, (void), ())
+#endif
