@@ -311,7 +311,7 @@ endif
 
 ifeq ($(OPENJDK_TARGET_OS), macosx)
   LIBAWT_FILES += awt_LoadLibrary.c img_colors.c
-  LIBAWT_CFLAGS += -F/System/Library/Frameworks/JavaVM.framework/Frameworks
+  LIBAWT_CFLAGS += -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation
 endif
 
 ifeq ($(OPENJDK_TARGET_OS)-$(OPENJDK_TARGET_CPU_ARCH), solaris-sparc)
@@ -476,7 +476,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBAWT, \
     LDFLAGS_SUFFIX_macosx := -lmlib_image -ljvm $(LIBM) \
         -framework Cocoa \
         -framework OpenGL \
-        -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+        -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks \
         -framework JavaNativeFoundation \
         -framework JavaRuntimeSupport \
         -framework ApplicationServices \
@@ -1111,8 +1111,7 @@ ifeq ($(BUILD_HEADLESS), true)
 
     ifeq ($(OPENJDK_TARGET_OS), macosx)
       LIBAWT_HEADLESS_CFLAGS += \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
-          -F/System/Library/Frameworks/ApplicationServices.framework/Frameworks
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation
     endif
 
     LIBAWT_HEADLESS_FILES := \
@@ -1206,7 +1205,7 @@ ifndef BUILD_HEADLESS_ONLY
   ifeq ($(OPENJDK_TARGET_OS), macosx)
     LIBSPLASHSCREEN_CFLAGS := -I$(JDK_TOPDIR)/src/macosx/native/sun/awt/splashscreen \
         $(LIBSPLASHSCREEN_CFLAGS) \
-        -F/System/Library/Frameworks/JavaVM.framework/Frameworks
+        -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation
     LIBSPLASHSCREEN_CFLAGS += -DWITH_MACOSX
     LIBSPLASHSCREEN_CFLAGS += -I$(JDK_TOPDIR)/src/macosx/native/sun/osxapp
 
@@ -1238,7 +1237,7 @@ ifndef BUILD_HEADLESS_ONLY
         -framework ApplicationServices \
         -framework Foundation \
         -framework Cocoa \
-        -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+        -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks \
         -framework JavaNativeFoundation
   else ifeq ($(OPENJDK_TARGET_OS), windows)
     LIBSPLASHSCREEN_LDFLAGS_SUFFIX += kernel32.lib user32.lib gdi32.lib delayimp.lib -DELAYLOAD:user32.dll
@@ -1424,8 +1423,8 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
           -I$(JDK_TOPDIR)/src/share/native/sun/java2d/loops \
           -I$(JDK_TOPDIR)/src/share/native/sun/java2d/pipe \
           -I$(JDK_TOPDIR)/src/share/native/sun/awt/debug \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
-          -F/System/Library/Frameworks/ApplicationServices.framework/Frameworks, \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation \
+          , \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN), \
       LDFLAGS_SUFFIX_macosx := -lawt -lmlib_image -losxapp -ljvm $(LIBM) \
@@ -1436,7 +1435,7 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
           -framework Cocoa \
           -framework Security \
           -framework ExceptionHandling \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks \
           -framework JavaNativeFoundation \
           -framework JavaRuntimeSupport \
           -framework OpenGL \
@@ -1470,7 +1469,7 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
           -I$(JDK_TOPDIR)/src/macosx/native/com/apple/laf \
           -I$(JDK_TOPDIR)/src/macosx/native/sun/osxapp \
           -I$(JDK_TOPDIR)/src/macosx/native/sun/awt \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks, \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation, \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN) \
           -Xlinker -rpath -Xlinker @loader_path, \
@@ -1478,7 +1477,7 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
           -framework Cocoa \
           -framework Carbon \
           -framework ApplicationServices \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation \
           -framework JavaNativeFoundation \
           -framework JavaRuntimeSupport \
           -ljava -ljvm, \
