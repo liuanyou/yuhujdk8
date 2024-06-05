@@ -36,7 +36,7 @@
 #import "JavaComponentAccessibility.h"
 #import "JavaTextAccessibility.h"
 #import "GeomUtilities.h"
-#import "OSVersion.h"
+//#import "OSVersion.h"
 #import "CGLLayer.h"
 
 @interface AWTView()
@@ -51,7 +51,7 @@
 static BOOL shouldUsePressAndHold() {
     static int shouldUsePressAndHold = -1;
     if (shouldUsePressAndHold != -1) return shouldUsePressAndHold;
-    shouldUsePressAndHold = !isSnowLeopardOrLower();
+//    shouldUsePressAndHold = !isSnowLeopardOrLower();
     return shouldUsePressAndHold;
 }
 
