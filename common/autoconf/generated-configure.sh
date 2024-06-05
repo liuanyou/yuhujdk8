@@ -26204,6 +26204,8 @@ fi
       # command line.
       CCXXFLAGS_JDK="$CCXXFLAGS_JDK -DMAC_OS_X_VERSION_MIN_REQUIRED=\$(subst .,,\$(MACOSX_VERSION_MIN)) -DMAC_OS_X_VERSION_MAX_ALLOWED=\$(subst .,,\$(MACOSX_VERSION_MIN)) -mmacosx-version-min=\$(MACOSX_VERSION_MIN)"
       LDFLAGS_JDK="$LDFLAGS_JDK -mmacosx-version-min=\$(MACOSX_VERSION_MIN)"
+      CFLAGS_DEBUG_SYMBOLS="-g"
+      CXXFLAGS_DEBUG_SYMBOLS="-g"
     fi
   fi
   if test "x$OPENJDK_TARGET_OS" = xbsd; then
