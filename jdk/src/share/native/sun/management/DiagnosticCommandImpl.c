@@ -23,6 +23,7 @@
  * questions.
  */
 
+#include <stdlib.h>
 #include <jni.h>
 #include "management.h"
 #include "sun_management_DiagnosticCommandImpl.h"
