@@ -33,13 +33,13 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
       OPTIMIZATION := LOW, \
       CFLAGS := $(CFLAGS_JDKLIB) \
           -I$(JDK_TOPDIR)/src/macosx/native/apple/applescript \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks -framework JavaNativeFoundation \
           , \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN), \
       LDFLAGS_SUFFIX := -framework Cocoa \
           -framework Carbon \
-          -F/System/Library/Frameworks/JavaVM.framework/Frameworks \
+          -F/Users/liuanyou/CLionProjects/JavaNativeFoundation/buildNative/Frameworks \
           -framework JavaNativeFoundation \
           $(LDFLAGS_JDKLIB_SUFFIX), \
       OBJECT_DIR := $(JDK_OUTPUTDIR)/objs/libAppleScriptEngine, \
