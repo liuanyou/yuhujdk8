@@ -28,13 +28,13 @@
 #include "awt.h"
 #include "colordata.h"
 
-#ifndef HEADLESS
+#if !defined(HEADLESS) && !defined(MACOSX)
 typedef struct {
     unsigned int Depth;
     XPixmapFormatValues wsImageFormat;
     ImgColorData clrdata;
     ImgConvertFcn *convert[NUM_IMGCV];
 } awtImageData;
-#endif /* !HEADLESS */
+#endif /* !HEADLESS && !MACOSX */
 
 #endif           /* _COLOR_H_ */
