@@ -179,7 +179,6 @@ FULL_JRE_LIB_FILES := \
     cmm/sRGB.pf \
     ext/cldrdata.jar \
     ext/dnsns.jar \
-    ext/nashorn.jar \
     ext/zipfs.jar \
     flavormap.properties \
     fontconfig.RedHat.5.bfc \
@@ -250,6 +249,5 @@ FULL_JRE_JAR_FILES := \
     charsets.jar \
     ext/cldrdata.jar \
     ext/dnsns.jar \
-    ext/nashorn.jar \
     ext/zipfs.jar \
     jfr.jar

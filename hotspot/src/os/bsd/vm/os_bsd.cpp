@@ -2154,10 +2154,14 @@ static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
 //       problem.
 bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
   int prot = exec ? PROT_READ|PROT_WRITE|PROT_EXEC : PROT_READ|PROT_WRITE;
-#ifdef __OpenBSD__
+#if defined(__OpenBSD__)
   // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
   if (::mprotect(addr, size, prot) == 0) {
     return true;
+  }
+#elif defined(__APPLE__)
+  if (::mprotect(addr, size, prot) == 0) {
+      return true;
   }
 #else
   uintptr_t res = (uintptr_t) ::mmap(addr, size, prot,
@@ -2271,6 +2275,12 @@ static char* anon_mmap(char* requested_addr, size_t bytes, bool fixed) {
   int flags;
 
   flags = MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS;
+#ifdef __APPLE__
+  if (!fixed) {
+      guarantee(!fixed, "MAP_JIT (for execute) is incompatible with MAP_FIXED");
+      flags |= MAP_JIT;
+  }
+#endif
   if (fixed) {
     assert((uintptr_t)requested_addr % os::Bsd::page_size() == 0, "unaligned address");
     flags |= MAP_FIXED;

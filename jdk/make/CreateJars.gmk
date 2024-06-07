@@ -764,9 +764,7 @@ $(IMAGES_OUTPUTDIR)/lib/%: $(JDK_OUTPUTDIR)/lib/%
 
 ##########################################################################################
 
-# Import nashorn.jar from nashorn dist dir.
-$(IMAGES_OUTPUTDIR)/lib/ext/nashorn.jar: $(NASHORN_DIST)/nashorn.jar
-	$(install-file)
+
 
 ##########################################################################################
 
