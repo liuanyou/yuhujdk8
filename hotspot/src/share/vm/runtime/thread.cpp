@@ -3317,6 +3317,8 @@ jint Threads::create_vm(JavaVMInitArgs* args, bool* canTryAgain) {
   // Initialize the os module before using TLS
   os::init();
 
+  os::current_thread_enable_wx(WXWrite);
+
   // Initialize system properties.
   Arguments::init_system_properties();
 

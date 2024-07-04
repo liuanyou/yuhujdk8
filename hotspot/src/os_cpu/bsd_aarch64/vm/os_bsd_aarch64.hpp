@@ -41,10 +41,10 @@
 
 private:
 
-  static void current_thread_enable_wx_impl() {
+  static void current_thread_enable_wx_impl(WXMode mode) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
-    pthread_jit_write_protect_np(false);
+    pthread_jit_write_protect_np(mode == WXExec ? true : false);
 #pragma clang diagnostic pop
   }
 

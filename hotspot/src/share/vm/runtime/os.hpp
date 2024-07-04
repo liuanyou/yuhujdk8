@@ -83,6 +83,11 @@ enum ThreadPriority {        // JLS 20.20.1-3
   CriticalPriority = 11      // Critical thread priority
 };
 
+enum WXMode {
+    WXWrite,
+    WXExec
+};
+
 // Executable parameter flag for os::commit_memory() and
 // os::commit_memory_or_exit().
 const bool ExecMem = true;
@@ -864,6 +869,12 @@ class os: AllStatic {
     Thread* _thread;
     bool _done;
   };
+
+// If the JVM is running in W^X mode, enable write or execute access to
+// writeable and executable pages. No-op otherwise.
+static inline void current_thread_enable_wx(WXMode mode) {
+    current_thread_enable_wx_impl(mode);
+}
 
 #ifndef TARGET_OS_FAMILY_windows
   // Suspend/resume support
