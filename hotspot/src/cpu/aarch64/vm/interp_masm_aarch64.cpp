@@ -115,7 +115,7 @@ void InterpreterMacroAssembler::load_earlyret_value(TosState state) {
                verify_oop(r0, state);               break;
     case ltos: ldr(r0, val_addr);                   break;
     case btos:                                   // fall through
-    case ztos:                                   // fall through
+//    case ztos:                                   // fall through
     case ctos:                                   // fall through
     case stos:                                   // fall through
     case itos: ldrw(r0, val_addr);                  break;
@@ -349,7 +349,7 @@ void InterpreterMacroAssembler::pop(TosState state) {
   switch (state) {
   case atos: pop_ptr();                 break;
   case btos:
-  case ztos:
+//  case ztos:
   case ctos:
   case stos:
   case itos: pop_i();                   break;
@@ -367,7 +367,7 @@ void InterpreterMacroAssembler::push(TosState state) {
   switch (state) {
   case atos: push_ptr();                break;
   case btos:
-  case ztos:
+//  case ztos:
   case ctos:
   case stos:
   case itos: push_i();                  break;
