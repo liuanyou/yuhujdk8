@@ -217,6 +217,8 @@ void StubRoutines::initialize2() {
 
 #ifdef ASSERT
 
+  os::current_thread_enable_wx(WXExec);
+
 #define TEST_ARRAYCOPY(type)                                                    \
   test_arraycopy_func(          type##_arraycopy(),          sizeof(type));     \
   test_arraycopy_func(          type##_disjoint_arraycopy(), sizeof(type));     \
