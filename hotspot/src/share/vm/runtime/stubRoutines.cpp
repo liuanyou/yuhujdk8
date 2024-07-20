@@ -291,7 +291,7 @@ void StubRoutines::initialize2() {
   // Aligned to BytesPerLong
   test_arraycopy_func(CAST_FROM_FN_PTR(address, Copy::aligned_conjoint_words), sizeof(jlong));
   test_arraycopy_func(CAST_FROM_FN_PTR(address, Copy::aligned_disjoint_words), sizeof(jlong));
-
+  os::current_thread_enable_wx(WXWrite);
 #endif
 }
 
