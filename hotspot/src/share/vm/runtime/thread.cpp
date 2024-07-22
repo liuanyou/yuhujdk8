@@ -251,8 +251,10 @@ Thread::Thread() {
   omInUseList = NULL ;
   omInUseCount = 0 ;
 
-#ifdef ASSERT
-  _visited_for_critical_count = false;
+#if defined(ASSERT) && defined(__APPLE__) && defined(AARCH64)
+
+    _visited_for_critical_count = false;
+    _wx_init = false;
 #endif
 
   _SR_lock = new Monitor(Mutex::suspend_resume, "SR_lock", true);
@@ -3403,6 +3405,7 @@ jint Threads::create_vm(JavaVMInitArgs* args, bool* canTryAgain) {
   main_thread->initialize_thread_local_storage();
 
   main_thread->set_active_handles(JNIHandleBlock::allocate_block());
+  main_thread->init_wx();
 
   if (!main_thread->set_as_starting_thread()) {
     vm_shutdown_during_initialization(

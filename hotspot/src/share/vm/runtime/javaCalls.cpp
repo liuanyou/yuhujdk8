@@ -105,6 +105,8 @@ JavaCallWrapper::JavaCallWrapper(methodHandle callee_method, Handle receiver, Ja
   if (_anchor.last_Java_sp() == NULL) {
     _thread->record_base_of_stack_pointer();
   }
+
+  Thread::enable_wx_from_write(WXExec);
 }
 
 
