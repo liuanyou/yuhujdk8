@@ -454,6 +454,7 @@ class RuntimeHistogramElement : public HistogramElement {
 
 #define IRT_ENTRY(result_type, header)                               \
   result_type header {                                               \
+    Thread::WXWriteFromExecSetter __wx_write;                        \
     ThreadInVMfromJava __tiv(thread);                                \
     VM_ENTRY_BASE(result_type, header, thread)                       \
     debug_only(VMEntryWrapper __vew;)
