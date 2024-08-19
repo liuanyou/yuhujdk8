@@ -2450,8 +2450,8 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static)
   }
   __ b(Done);
 
-  /*__ bind(notByte);
-  __ cmp(flags, ztos);
+  __ bind(notByte);
+  /*__ cmp(flags, ztos);
   __ br(Assembler::NE, notBool);
 
   // ztos (same code as btos)
@@ -2462,9 +2462,9 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static)
     // use btos rewriting, no truncating to t/f bit is needed for getfield.
     patch_bytecode(Bytecodes::_fast_bgetfield, bc, r1);
   }
-  __ b(Done);*/
+  __ b(Done);
 
-  __ bind(notBool);
+  __ bind(notBool);*/
   __ cmp(flags, atos);
   __ br(Assembler::NE, notObj);
   // atos
@@ -2679,8 +2679,8 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static) {
     __ b(Done);
   }
 
-  /*__ bind(notByte);
-  __ cmp(flags, ztos);
+  __ bind(notByte);
+  /*__ cmp(flags, ztos);
   __ br(Assembler::NE, notBool);
 
   // ztos
@@ -2693,9 +2693,9 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static) {
       patch_bytecode(Bytecodes::_fast_zputfield, bc, r1, true, byte_no);
     }
     __ b(Done);
-  }*/
+  }
 
-  __ bind(notBool);
+  __ bind(notBool);*/
   __ cmp(flags, atos);
   __ br(Assembler::NE, notObj);
 
