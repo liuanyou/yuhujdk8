@@ -1649,6 +1649,8 @@ void JavaThread::run() {
   // Initialize thread local storage; set before calling MutexLocker
   this->initialize_thread_local_storage();
 
+  this->init_wx();
+
   this->create_stack_guard_pages();
 
   this->cache_global_variables();
