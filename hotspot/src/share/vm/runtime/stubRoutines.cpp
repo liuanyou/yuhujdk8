@@ -29,6 +29,7 @@
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
+#include "runtime/stubRoutines.inline.hpp"
 #include "runtime/timer.hpp"
 #include "utilities/copy.hpp"
 #ifdef COMPILER2
