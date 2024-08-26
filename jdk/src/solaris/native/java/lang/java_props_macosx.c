@@ -56,21 +56,61 @@ char *getPosixLocale(int cat) {
 
 #define LOCALEIDLENGTH  128
 char *getMacOSXLocale(int cat) {
+    const char* retVal = NULL;
+    char languageString[LOCALEIDLENGTH];
+    char localeString[LOCALEIDLENGTH];
     switch (cat) {
     case LC_MESSAGES:
+//        {
+//            void *jrsFwk = getJRSFramework();
+//            if (jrsFwk == NULL) return NULL;
+//
+//            char *(*JRSCopyPrimaryLanguage)() = dlsym(jrsFwk, "JRSCopyPrimaryLanguage");
+//            char *primaryLanguage = JRSCopyPrimaryLanguage ? JRSCopyPrimaryLanguage() : NULL;
+//            if (primaryLanguage == NULL) return NULL;
+//
+//            char *(*JRSCopyCanonicalLanguageForPrimaryLanguage)(char *) = dlsym(jrsFwk, "JRSCopyCanonicalLanguageForPrimaryLanguage");
+//            char *canonicalLanguage = JRSCopyCanonicalLanguageForPrimaryLanguage ?  JRSCopyCanonicalLanguageForPrimaryLanguage(primaryLanguage) : NULL;
+//            free (primaryLanguage);
+//
+//            return canonicalLanguage;
+//        }
         {
-            void *jrsFwk = getJRSFramework();
-            if (jrsFwk == NULL) return NULL;
+            // get preferred language code
+            CFArrayRef languages = CFLocaleCopyPreferredLanguages();
+            if (languages == NULL) {
+                return NULL;
+            }
+            if (CFArrayGetCount(languages) <= 0) {
+                CFRelease(languages);
+                return NULL;
+            }
 
-            char *(*JRSCopyPrimaryLanguage)() = dlsym(jrsFwk, "JRSCopyPrimaryLanguage");
-            char *primaryLanguage = JRSCopyPrimaryLanguage ? JRSCopyPrimaryLanguage() : NULL;
-            if (primaryLanguage == NULL) return NULL;
+            CFStringRef primaryLanguage = (CFStringRef)CFArrayGetValueAtIndex(languages, 0);
+            if (primaryLanguage == NULL) {
+                CFRelease(languages);
+                return NULL;
+            }
+            if (CFStringGetCString(primaryLanguage, languageString,
+                                   LOCALEIDLENGTH, CFStringGetSystemEncoding()) == false) {
+                CFRelease(languages);
+                return NULL;
+            }
+            CFRelease(languages);
 
-            char *(*JRSCopyCanonicalLanguageForPrimaryLanguage)(char *) = dlsym(jrsFwk, "JRSCopyCanonicalLanguageForPrimaryLanguage");
-            char *canonicalLanguage = JRSCopyCanonicalLanguageForPrimaryLanguage ?  JRSCopyCanonicalLanguageForPrimaryLanguage(primaryLanguage) : NULL;
-            free (primaryLanguage);
+            retVal = languageString;
 
-            return canonicalLanguage;
+            // Special case for Portuguese in Brazil:
+            // The language code needs the "_BR" region code (to distinguish it
+            // from Portuguese in Portugal), but this is missing when using the
+            // "Portuguese (Brazil)" language.
+            // If language is "pt" and the current locale is pt_BR, return pt_BR.
+            if (strcmp(retVal, "pt") == 0 &&
+                CFStringGetCString(CFLocaleGetIdentifier(CFLocaleCopyCurrent()),
+                                   localeString, LOCALEIDLENGTH, CFStringGetSystemEncoding()) &&
+                strcmp(localeString, "pt_BR") == 0) {
+                retVal = localeString;
+            }
         }
         break;
     default:
@@ -83,7 +123,44 @@ char *getMacOSXLocale(int cat) {
         }
         break;
     }
+    if (retVal != NULL) {
+        // Language IDs use the language designators and (optional) region
+        // and script designators of BCP 47.  So possible formats are:
+        //
+        // "en"         (language designator only)
+        // "haw"        (3-letter lanuage designator)
+        // "en-GB"      (language with alpha-2 region designator)
+        // "es-419"     (language with 3-digit UN M.49 area code)
+        // "zh-Hans"    (language with ISO 15924 script designator)
+        // "zh-Hans-US"  (language with ISO 15924 script designator and region)
+        // "zh-Hans-419" (language with ISO 15924 script designator and UN M.49)
+        //
+        // In the case of region designators (alpha-2 and/or UN M.49), we convert
+        // to our locale string format by changing '-' to '_'.  That is, if
+        // the '-' is followed by fewer than 4 chars.
+        char* scriptOrRegion = strchr(retVal, '-');
+        if (scriptOrRegion != NULL) {
+            int length = strlen(scriptOrRegion);
+            if (length > 5) {
+                // Region and script both exist. Honor the script for now
+                scriptOrRegion[5] = '\0';
+            } else if (length < 5) {
+                *scriptOrRegion = '_';
 
+                assert((length == 3 &&
+                        // '-' followed by a 2 character region designator
+                        isalpha(scriptOrRegion[1]) &&
+                        isalpha(scriptOrRegion[2])) ||
+                       (length == 4 &&
+                        // '-' followed by a 3-digit UN M.49 area code
+                        isdigit(scriptOrRegion[1]) &&
+                        isdigit(scriptOrRegion[2]) &&
+                        isdigit(scriptOrRegion[3])));
+            }
+        }
+
+        return strdup(retVal);
+    }
     return NULL;
 }
 
