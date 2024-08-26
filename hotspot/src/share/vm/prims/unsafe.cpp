@@ -1696,6 +1696,7 @@ JVM_ENTRY(void, JVM_RegisterUnsafeMethods(JNIEnv *env, jclass unsafecls))
   UnsafeWrapper("JVM_RegisterUnsafeMethods");
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
 
     // Unsafe methods
     {
