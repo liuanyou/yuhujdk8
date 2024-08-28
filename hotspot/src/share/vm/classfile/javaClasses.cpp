@@ -242,6 +242,7 @@ Handle java_lang_String::create_from_platform_dependent_str(const char* str, TRA
     assert(thread->is_Java_thread(), "must be java thread");
     HandleMark hm(thread);
     ThreadToNativeFromVM ttn(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     js = (_to_java_string_fn)(thread->jni_environment(), str);
   }
   return Handle(THREAD, JNIHandles::resolve(js));
