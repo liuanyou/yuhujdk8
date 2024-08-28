@@ -256,7 +256,7 @@ void ConstantPoolCacheEntry::set_itable_call(Bytecodes::Code invoke_code, method
   assert(interf->is_interface(), "must be an interface");
   assert(!method->is_final_method(), "interfaces do not have final methods; cannot link to one here");
   set_f1(interf);
-  set_f2(index);
+  set_f2((intx)method());
   set_method_flags(as_TosState(method->result_type()),
                    0,  // no option bits
                    method()->size_of_parameters());
