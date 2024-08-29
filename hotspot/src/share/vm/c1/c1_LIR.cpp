@@ -154,7 +154,11 @@ void LIR_Address::verify() const {
 #endif
 #ifdef _LP64
   assert(base()->is_cpu_register(), "wrong base operand");
+#ifndef AARCH64
   assert(index()->is_illegal() || index()->is_double_cpu(), "wrong index operand");
+#else
+  assert(index()->is_illegal() || index()->is_double_cpu() || index()->is_single_cpu(), "wrong index operand");
+#endif
   assert(base()->type() == T_OBJECT || base()->type() == T_LONG || base()->type() == T_METADATA,
          "wrong type for addresses");
 #else
