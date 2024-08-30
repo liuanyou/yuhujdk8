@@ -5482,6 +5482,7 @@ jint JNICALL jni_DetachCurrentThread(JavaVM *vm)  {
   // Safepoint support. Have to do call-back to safepoint code, if in the
   // middel of a safepoint operation
   ThreadStateTransition::transition_from_native(thread, _thread_in_vm);
+  Thread::enable_wx_from_exec(WXWrite);
 
   // XXX: Note that JavaThread::exit() call below removes the guards on the
   // stack pages set up via enable_stack_{red,yellow}_zone() calls
