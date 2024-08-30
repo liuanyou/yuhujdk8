@@ -5200,6 +5200,7 @@ _JNI_IMPORT_OR_EXPORT_ jint JNICALL JNI_CreateJavaVM(JavaVM **vm, void **penv, v
 #endif
 
     // Since this is not a JVM_ENTRY we have to set the thread state manually before leaving.
+    Thread::enable_wx_from_write(WXExec);
     ThreadStateTransition::transition_and_fence(thread, _thread_in_vm, _thread_in_native);
   } else {
     if (can_try_again) {
