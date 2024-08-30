@@ -5331,6 +5331,8 @@ static jint attach_current_thread(JavaVM *vm, void **penv, void *_args, bool dae
 
   thread->initialize_thread_local_storage();
 
+  thread->init_wx();
+
   if (!os::create_attached_thread(thread)) {
     delete thread;
     return JNI_ERR;
