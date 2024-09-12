@@ -2408,9 +2408,10 @@ methodHandle ClassFileParser::parse_method(bool is_interface,
   m->set_constants(_cp);
   m->set_name_index(name_index);
   m->set_signature_index(signature_index);
+  ResultTypeFinder rtf(_cp->symbol_at(signature_index));
+  m->constMethod()->set_result_type(rtf.type());
 #ifdef CC_INTERP
   // hmm is there a gc issue here??
-  ResultTypeFinder rtf(_cp->symbol_at(signature_index));
   m->set_result_index(rtf.type());
 #endif
 

@@ -46,7 +46,7 @@ void InterpreterMacroAssembler::narrow(Register result) {
   // Get method->_constMethod->_result_type
   ldr(rscratch1, Address(rfp, frame::interpreter_frame_method_offset * wordSize));
   ldr(rscratch1, Address(rscratch1, Method::const_offset()));
-//  ldrb(rscratch1, Address(rscratch1, ConstMethod::result_type_offset()));
+  ldrb(rscratch1, Address(rscratch1, ConstMethod::result_type_offset()));
 
   Label done, notBool, notByte, notChar;
 
