@@ -492,6 +492,7 @@ class RuntimeHistogramElement : public HistogramElement {
 
 #define JRT_ENTRY_NO_ASYNC(result_type, header)                      \
   result_type header {                                               \
+    Thread::WXWriteFromExecSetter __wx_write;                        \
     ThreadInVMfromJavaNoAsyncException __tiv(thread);                \
     VM_ENTRY_BASE(result_type, header, thread)                       \
     debug_only(VMEntryWrapper __vew;)
