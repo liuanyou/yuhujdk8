@@ -315,6 +315,7 @@ JVM_ENTRY(void, JVM_RegisterPerfMethods(JNIEnv *env, jclass perfclass))
   PerfWrapper("JVM_RegisterPerfMethods");
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     int ok = env->RegisterNatives(perfclass, perfmethods, sizeof(perfmethods)/sizeof(JNINativeMethod));
     guarantee(ok == 0, "register perf natives");
   }
