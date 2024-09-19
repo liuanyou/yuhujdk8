@@ -54,6 +54,8 @@ static char* jstr_to_utf(JNIEnv *env, jstring str, TRAPS) {
     //throw_new(env,"NullPointerException");
   }
 
+  Thread::WXExecFromWriteSetter wx_exec;
+
   int len = env->GetStringUTFLength(str);
   int unicode_len = env->GetStringLength(str);
 
