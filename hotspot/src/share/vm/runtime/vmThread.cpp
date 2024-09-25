@@ -249,6 +249,7 @@ void VMThread::destroy() {
 void VMThread::run() {
   assert(this == vm_thread(), "check");
 
+  this->init_wx();
   this->initialize_thread_local_storage();
   this->record_stack_base_and_size();
   // Notify_lock wait checks on active_handles() to rewait in
