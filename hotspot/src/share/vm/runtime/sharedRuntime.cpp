@@ -1697,6 +1697,8 @@ void SharedRuntime::check_member_name_argument_is_last_argument(methodHandle met
 IRT_LEAF(void, SharedRuntime::fixup_callers_callsite(Method* method, address caller_pc))
   Method* moop(method);
 
+  Thread::WXWriteFromExecSetter wx_write;
+
   address entry_point = moop->from_compiled_entry();
 
   // It's possible that deoptimization can occur at a call site which hasn't
