@@ -503,6 +503,7 @@ class RuntimeHistogramElement : public HistogramElement {
 #define JRT_BLOCK_ENTRY(result_type, header)                         \
   result_type header {                                               \
     TRACE_CALL(result_type, header)                                  \
+    Thread::WXWriteFromExecSetter __wx_write;                        \
     HandleMarkCleaner __hm(thread);
 
 #define JRT_BLOCK                                                    \
