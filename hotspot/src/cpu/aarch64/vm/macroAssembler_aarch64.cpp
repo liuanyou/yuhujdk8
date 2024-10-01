@@ -710,7 +710,8 @@ address MacroAssembler::trampoline_call(Address entry, CodeBuffer *cbuf) {
   if (!far_branches()) {
     bl(entry.target());
   } else {
-    bl(pc());
+    bl(entry.target());
+//    bl(pc());
   }
 #else
     bl(entry.target());
