@@ -975,7 +975,19 @@ void GraphBuilder::store_indexed(BasicType type) {
       (array->as_NewArray() && array->as_NewArray()->length() && array->as_NewArray()->length()->type()->is_constant())) {
     length = append(new ArrayLength(array, state_before));
   }
-  StoreIndexed* result = new StoreIndexed(array, index, length, type, value, state_before);
+    ciType* array_type = array->declared_type();
+    bool check_boolean = false;
+    if (array_type != NULL) {
+        if (array_type->is_loaded() &&
+            array_type->as_array_klass()->element_type()->basic_type() == T_BOOLEAN) {
+            assert(type == T_BYTE, "boolean store uses bastore");
+            Value mask = append(new Constant(new IntConstant(1)));
+            value = append(new LogicOp(Bytecodes::_iand, value, mask));
+        }
+    } else if (type == T_BYTE) {
+        check_boolean = true;
+    }
+  StoreIndexed* result = new StoreIndexed(array, index, length, type, value, state_before, check_boolean);
   append(result);
   _memory->store_value(value);
 
