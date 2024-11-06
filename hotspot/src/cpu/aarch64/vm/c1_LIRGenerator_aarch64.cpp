@@ -386,8 +386,8 @@ void LIRGenerator::do_StoreIndexed(StoreIndexed* x) {
     // Seems to be a precise
     post_barrier(LIR_OprFact::address(array_addr), value.result());
   } else {
-//    LIR_Opr result = maybe_mask_boolean(x, array.result(), value.result(), null_check_info);
-//    __ move(result, array_addr, null_check_info);
+    LIR_Opr result = maybe_mask_boolean(x, array.result(), value.result(), null_check_info);
+    __ move(result, array_addr, null_check_info);
   }
 }
 
