@@ -75,39 +75,39 @@ void NativeCall::set_destination_mt_safe(address dest, bool assert_lock) {
   assert(NativeCall::is_call_at(addr_call), "unexpected code at call site");
 
   // Patch the constant in the call's trampoline stub.
-//  address trampoline_stub_addr = get_trampoline();
-//  if (trampoline_stub_addr != NULL) {
-//    assert (! is_NativeCallTrampolineStub_at(dest), "chained trampolines");
-//    nativeCallTrampolineStub_at(trampoline_stub_addr)->set_destination(dest);
-//  }
+  address trampoline_stub_addr = get_trampoline();
+  if (trampoline_stub_addr != NULL) {
+    assert (! is_NativeCallTrampolineStub_at(dest), "chained trampolines");
+    nativeCallTrampolineStub_at(trampoline_stub_addr)->set_destination(dest);
+  }
 
   // Patch the call.
   if (Assembler::reachable_from_branch_at(addr_call, dest)) {
     set_destination(dest);
   } else {
-//    assert (trampoline_stub_addr != NULL, "we need a trampoline");
-//    set_destination(trampoline_stub_addr);
+    assert (trampoline_stub_addr != NULL, "we need a trampoline");
+    set_destination(trampoline_stub_addr);
   }
 
   ICache::invalidate_range(addr_call, instruction_size);
 }
 
-//address NativeCall::get_trampoline() {
-//  address call_addr = addr_at(0);
-//
-//  CodeBlob *code = CodeCache::find_blob(call_addr);
-//  assert(code != NULL, "Could not find the containing code blob");
-//
-//  address bl_destination
-//    = MacroAssembler::pd_call_destination(call_addr);
-//  if (code->content_contains(bl_destination) &&
-//      is_NativeCallTrampolineStub_at(bl_destination))
-//    return bl_destination;
-//
-//  // If the codeBlob is not a nmethod, this is because we get here from the
-//  // CodeBlob constructor, which is called within the nmethod constructor.
-//  return trampoline_stub_Relocation::get_trampoline_for(call_addr, (nmethod*)code);
-//}
+address NativeCall::get_trampoline() {
+  address call_addr = addr_at(0);
+
+  CodeBlob *code = CodeCache::find_blob(call_addr);
+  assert(code != NULL, "Could not find the containing code blob");
+
+  address bl_destination
+    = MacroAssembler::pd_call_destination(call_addr);
+  if (code->content_contains(bl_destination) &&
+      is_NativeCallTrampolineStub_at(bl_destination))
+    return bl_destination;
+
+  // If the codeBlob is not a nmethod, this is because we get here from the
+  // CodeBlob constructor, which is called within the nmethod constructor.
+  return trampoline_stub_Relocation::get_trampoline_for(call_addr, (nmethod*)code);
+}
 
 // Inserts a native call instruction at a given pc
 void NativeCall::insert(address code_pos, address entry) { Unimplemented(); }

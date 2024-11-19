@@ -181,7 +181,7 @@ class NativeCall: public NativeInstruction {
   // The parameter assert_lock disables the assertion during code generation.
   void set_destination_mt_safe(address dest, bool assert_lock = true);
 
-//  address get_trampoline();
+  address get_trampoline();
 };
 
 inline NativeCall* nativeCall_at(address address) {

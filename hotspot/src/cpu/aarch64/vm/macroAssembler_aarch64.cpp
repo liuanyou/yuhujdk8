@@ -710,8 +710,8 @@ address MacroAssembler::trampoline_call(Address entry, CodeBuffer *cbuf) {
   if (!far_branches()) {
     bl(entry.target());
   } else {
-    bl(entry.target());
-//    bl(pc());
+//    bl(entry.target());
+    bl(pc());
   }
 #else
     bl(entry.target());
@@ -744,8 +744,8 @@ address MacroAssembler::emit_trampoline_stub(int insts_call_instruction_offset,
   // with the call instruction at insts_call_instruction_offset in the
   // instructions code-section.
   align(wordSize);
-//  relocate(trampoline_stub_Relocation::spec(code()->insts()->start()
-//                                            + insts_call_instruction_offset));
+  relocate(trampoline_stub_Relocation::spec(code()->insts()->start()
+                                            + insts_call_instruction_offset));
   const int stub_start_offset = offset();
 
   // Now, create the trampoline stub's code:
