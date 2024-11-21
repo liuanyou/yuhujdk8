@@ -937,6 +937,7 @@ UNSAFE_ENTRY(jclass, Unsafe_DefineClass(JNIEnv *env, jobject unsafe, jstring nam
   UnsafeWrapper("Unsafe_DefineClass");
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     return Unsafe_DefineClass_impl(env, name, data, offset, length, loader, pd);
   }
 UNSAFE_END
