@@ -427,15 +427,22 @@ int vframeArrayElement::on_stack_size(int caller_actual_parameters,
   assert(method()->max_locals() == locals()->size(), "just checking");
   int locks = monitors() == NULL ? 0 : monitors()->number_of_monitors();
   int temps = expressions()->size();
-  return Interpreter::size_activation(method(),
-                                      temps + callee_parameters,
-                                      popframe_extra_stack_expression_els,
-                                      locks,
-                                      caller_actual_parameters,
-                                      callee_parameters,
-                                      callee_locals,
-                                      is_top_frame,
-                                      is_bottom_frame);
+//  return Interpreter::size_activation(method(),
+//                                      temps + callee_parameters,
+//                                      popframe_extra_stack_expression_els,
+//                                      locks,
+//                                      caller_actual_parameters,
+//                                      callee_parameters,
+//                                      callee_locals,
+//                                      is_top_frame,
+//                                      is_bottom_frame);
+    return Interpreter::size_activation(method()->max_stack(),
+                                        temps + callee_parameters,
+                                        popframe_extra_stack_expression_els,
+                                        locks,
+                                        callee_parameters,
+                                        callee_locals,
+                                        is_top_frame);
 }
 
 

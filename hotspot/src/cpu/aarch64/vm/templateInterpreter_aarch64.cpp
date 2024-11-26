@@ -1465,6 +1465,41 @@ address InterpreterGenerator::generate_normal_entry(bool synchronized) {
   // jvmti support
   __ notify_method_entry();
 
+    address begin = __ pc();
+
+    const Register t = r17;
+    Label not_I_STRING_GETBYTES_P_STRING_R_BYTES;
+    Label not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES;
+    Label not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES;
+    Label not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT;
+
+    __ ldr(t, Address(rmethod, Method::const_offset()));
+    __ ldrb(t, Address(r17, ConstMethod::debug_id_offset()));
+
+    __ cmpw(t, I_STRING_GETBYTES_P_STRING_R_BYTES);
+    __ br(Assembler::NE, not_I_STRING_GETBYTES_P_STRING_R_BYTES);
+    __ ldr(t, Address(rmethod, Method::const_offset()));
+
+    __ bind(not_I_STRING_GETBYTES_P_STRING_R_BYTES);
+    __ cmpw(t, I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
+    __ br(Assembler::NE, not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
+    __ ldr(t, Address(rmethod, Method::const_offset()));
+
+    __ bind(not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
+    __ cmpw(t, I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
+    __ br(Assembler::NE, not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
+    __ ldr(t, Address(rmethod, Method::const_offset()));
+
+    __ bind(not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
+    __ cmpw(t, I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
+    __ br(Assembler::NE, not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
+    __ ldr(t, Address(rmethod, Method::const_offset()));
+
+    __ bind(not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
+
+    address end = __ pc();
+//    Disassembler::decode(begin, end);
+
   __ dispatch_next(vtos);
 
   // invocation counter overflow
@@ -1616,40 +1651,40 @@ int AbstractInterpreter::size_top_interpreter_activation(Method* method) {
 }
 
 // asm based interpreter deoptimization helpers
-//int AbstractInterpreter::size_activation(int max_stack,
-//                                         int temps,
-//                                         int extra_args,
-//                                         int monitors,
-//                                         int callee_params,
-//                                         int callee_locals,
-//                                         bool is_top_frame) {
-//  // Note: This calculation must exactly parallel the frame setup
-//  // in AbstractInterpreterGenerator::generate_method_entry.
-//
-//  // fixed size of an interpreter frame:
-//  int overhead = frame::sender_sp_offset -
-//                 frame::interpreter_frame_initial_sp_offset;
-//  // Our locals were accounted for by the caller (or last_frame_adjust
-//  // on the transistion) Since the callee parameters already account
-//  // for the callee's params we only need to account for the extra
-//  // locals.
-//  int size = overhead +
-//         (callee_locals - callee_params) +
-//         monitors * frame::interpreter_frame_monitor_size() +
-//         // On the top frame, at all times SP <= ESP, and SP is
-//         // 16-aligned.  We ensure this by adjusting SP on method
-//         // entry and re-entry to allow room for the maximum size of
-//         // the expression stack.  When we call another method we bump
-//         // SP so that no stack space is wasted.  So, only on the top
-//         // frame do we need to allow max_stack words.
-//         (is_top_frame ? max_stack : temps + extra_args);
-//
-//  // On AArch64 we always keep the stack pointer 16-aligned, so we
-//  // must round up here.
-//  size = round_to(size, 2);
-//
-//  return size;
-//}
+int AbstractInterpreter::size_activation(int max_stack,
+                                         int temps,
+                                         int extra_args,
+                                         int monitors,
+                                         int callee_params,
+                                         int callee_locals,
+                                         bool is_top_frame) {
+  // Note: This calculation must exactly parallel the frame setup
+  // in AbstractInterpreterGenerator::generate_method_entry.
+
+  // fixed size of an interpreter frame:
+  int overhead = frame::sender_sp_offset -
+                 frame::interpreter_frame_initial_sp_offset;
+  // Our locals were accounted for by the caller (or last_frame_adjust
+  // on the transistion) Since the callee parameters already account
+  // for the callee's params we only need to account for the extra
+  // locals.
+  int size = overhead +
+         (callee_locals - callee_params) +
+         monitors * frame::interpreter_frame_monitor_size() +
+         // On the top frame, at all times SP <= ESP, and SP is
+         // 16-aligned.  We ensure this by adjusting SP on method
+         // entry and re-entry to allow room for the maximum size of
+         // the expression stack.  When we call another method we bump
+         // SP so that no stack space is wasted.  So, only on the top
+         // frame do we need to allow max_stack words.
+         (is_top_frame ? max_stack : temps + extra_args);
+
+  // On AArch64 we always keep the stack pointer 16-aligned, so we
+  // must round up here.
+  size = round_to(size, 2);
+
+  return size;
+}
 
 int AbstractInterpreter::layout_activation(Method* method,
                                             int tempcount,

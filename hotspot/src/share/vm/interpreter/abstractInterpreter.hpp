@@ -181,8 +181,17 @@ class AbstractInterpreter: AllStatic {
   // Deoptimization should reexecute this bytecode
   static bool    bytecode_should_reexecute(Bytecodes::Code code);
 
+    // deoptimization support
+    static int        size_activation(int max_stack,
+                                      int temps,
+                                      int extra_args,
+                                      int monitors,
+                                      int callee_params,
+                                      int callee_locals,
+                                      bool is_top_frame);
+
   // share implementation of size_activation and layout_activation:
-  static int        size_activation(Method* method,
+  /*static int        size_activation(Method* method,
                                     int temps,
                                     int popframe_args,
                                     int monitors,
@@ -202,7 +211,7 @@ class AbstractInterpreter: AllStatic {
                              (frame*)NULL,
                              is_top_frame,
                              is_bottom_frame);
-  }
+  }*/
 
   static int       layout_activation(Method* method,
                                      int temps,
