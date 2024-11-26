@@ -576,6 +576,7 @@ UNSAFE_ENTRY(jobject, Unsafe_AllocateInstance(JNIEnv *env, jobject unsafe, jclas
   UnsafeWrapper("Unsafe_AllocateInstance");
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     return env->AllocObject(cls);
   }
 UNSAFE_END
