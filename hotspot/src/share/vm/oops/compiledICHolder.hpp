@@ -44,14 +44,15 @@ class CompiledICHolder : public CHeapObj<mtCompiler> {
   static volatile int _live_not_claimed_count; // allocated but not yet in use so not
                                                // reachable by iterating over nmethods
 
-  Method* _holder_method;
+  Metadata* _holder_metadata;
   Klass*    _holder_klass;    // to avoid name conflict with oopDesc::_klass
   CompiledICHolder* _next;
+  bool _is_metadata_method;
 
  public:
   // Constructor
-  CompiledICHolder(Method* method, Klass* klass)
-      : _holder_method(method), _holder_klass(klass) {
+  CompiledICHolder(Metadata* metadata, Klass* klass, bool is_method = true)
+      : _holder_metadata(metadata), _holder_klass(klass), _is_metadata_method(is_method) {
 #ifdef ASSERT
     Atomic::inc(&_live_count);
     Atomic::inc(&_live_not_claimed_count);
@@ -69,14 +70,15 @@ class CompiledICHolder : public CHeapObj<mtCompiler> {
   static int live_not_claimed_count() { return _live_not_claimed_count; }
 
   // accessors
-  Method* holder_method() const     { return _holder_method; }
+  Metadata* holder_metadata() const     { return _holder_metadata; }
   Klass*    holder_klass()  const     { return _holder_klass; }
+  bool is_method() const { return _is_metadata_method; }
 
-  void set_holder_method(Method* m) { _holder_method = m; }
+  void set_holder_metadata(Method* m) { _holder_metadata = m; }
   void set_holder_klass(Klass* k)   { _holder_klass = k; }
 
   // interpreter support (offsets in bytes)
-  static int holder_method_offset()   { return offset_of(CompiledICHolder, _holder_method); }
+  static int holder_metadata_offset()   { return offset_of(CompiledICHolder, _holder_metadata); }
   static int holder_klass_offset()    { return offset_of(CompiledICHolder, _holder_klass); }
 
   CompiledICHolder* next()     { return _next; }

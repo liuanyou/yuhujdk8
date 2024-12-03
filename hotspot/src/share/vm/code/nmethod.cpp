@@ -1658,7 +1658,9 @@ void nmethod::do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred)
           // The only exception is compiledICHolder oops which may
           // yet be marked below. (We check this further below).
           CompiledICHolder* cichk_oop = ic->cached_icholder();
-          if (cichk_oop->holder_method()->method_holder()->is_loader_alive(is_alive) &&
+          if ((cichk_oop->is_method() ?
+                ((Method*)(cichk_oop->holder_metadata()))->method_holder()->is_loader_alive(is_alive) :
+                ((Klass*)(cichk_oop->holder_metadata()))->is_loader_alive(is_alive)) &&
               cichk_oop->holder_klass()->is_loader_alive(is_alive)) {
             continue;
           }
@@ -1817,7 +1819,7 @@ void nmethod::metadata_do(void f(Metadata*)) {
         CompiledIC *ic = CompiledIC_at(iter.reloc());
         if (ic->is_icholder_call()) {
           CompiledICHolder* cichk = ic->cached_icholder();
-          f(cichk->holder_method());
+          f(cichk->holder_metadata());
           f(cichk->holder_klass());
         } else {
           Metadata* ic_oop = ic->cached_metadata();

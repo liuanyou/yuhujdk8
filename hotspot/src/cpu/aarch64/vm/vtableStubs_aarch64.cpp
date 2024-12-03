@@ -161,7 +161,7 @@ VtableStub* VtableStubs::create_itable_stub(int itable_index) {
   const Register icholder_reg       = rscratch2;
 
   __ ldr(resolved_klass_reg, Address(icholder_reg, CompiledICHolder::holder_klass_offset()));
-//  __ ldr(holder_klass_reg,   Address(icholder_reg, CompiledICHolder::holder_metadata_offset()));
+  __ ldr(holder_klass_reg,   Address(icholder_reg, CompiledICHolder::holder_metadata_offset()));
 
   Label L_no_such_interface;
 
