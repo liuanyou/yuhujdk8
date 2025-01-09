@@ -160,8 +160,10 @@ VtableStub* VtableStubs::create_itable_stub(int itable_index) {
   const Register temp_reg           = r11;
   const Register icholder_reg       = rscratch2;
 
-  __ ldr(resolved_klass_reg, Address(icholder_reg, CompiledICHolder::holder_klass_offset()));
-  __ ldr(holder_klass_reg,   Address(icholder_reg, CompiledICHolder::holder_metadata_offset()));
+//  __ ldr(resolved_klass_reg, Address(icholder_reg, CompiledICHolder::holder_klass_offset()));
+//  __ ldr(holder_klass_reg,   Address(icholder_reg, CompiledICHolder::holder_metadata_offset()));
+    __ mov(resolved_klass_reg, icholder_reg);
+    __ mov(holder_klass_reg,   icholder_reg);
 
   Label L_no_such_interface;
 

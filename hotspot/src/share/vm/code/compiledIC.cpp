@@ -179,10 +179,7 @@ bool CompiledIC::set_to_megamorphic(CallInfo* call_info, Bytecodes::Code bytecod
 #endif //ASSERT
     InstanceKlass* k = call_info->resolved_method()->method_holder();
     assert(k->verify_itable_index(itable_index), "sanity check");
-      CompiledICHolder* holder = new CompiledICHolder(call_info->resolved_method()->method_holder(),
-                                                      call_info->resolved_klass()(), false);
-      holder->claim();
-    InlineCacheBuffer::create_transition_stub(this, holder, entry);
+    InlineCacheBuffer::create_transition_stub(this, k, entry);
   } else {
     assert(call_info->call_kind() == CallInfo::vtable_call, "either itable or vtable");
     // Can be different than selected_method->vtable_index(), due to package-private etc.
