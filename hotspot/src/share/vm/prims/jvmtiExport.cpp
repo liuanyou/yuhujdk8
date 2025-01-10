@@ -76,12 +76,14 @@ class JvmtiJavaThreadEventTransition : StackObj {
 private:
   ResourceMark _rm;
   ThreadToNativeFromVM _transition;
+  Thread::WXExecFromWriteSetter _wx_exec;
   HandleMark _hm;
 
 public:
   JvmtiJavaThreadEventTransition(JavaThread *thread) :
     _rm(),
     _transition(thread),
+    _wx_exec(),
     _hm(thread)  {};
 };
 
