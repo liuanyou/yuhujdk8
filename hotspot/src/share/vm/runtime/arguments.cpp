@@ -3162,12 +3162,14 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args,
         return JNI_ERR;
 #endif // INCLUDE_MANAGEMENT
     } else if (match_option(option, "-XX:", &tail)) { // -XX:xxxx
-      // Skip -XX:Flags= since that case has already been handled
-      if (strncmp(tail, "Flags=", strlen("Flags=")) != 0) {
-        if (!process_argument(tail, args->ignoreUnrecognized, origin)) {
-          return JNI_EINVAL;
+        // Skip -XX:Flags= since that case has already been handled
+        if (strncmp(tail, "Flags=", strlen("Flags=")) != 0) {
+            if (!process_argument(tail, args->ignoreUnrecognized, origin)) {
+                return JNI_EINVAL;
+            }
         }
-      }
+    } else if (match_option(option, "-XUseYuhuInt", &tail)) {
+        FLAG_SET_CMDLINE(bool, UseYuhuInt, true);
     // Unknown option
     } else if (is_bad_option(option, args->ignoreUnrecognized)) {
       return JNI_ERR;

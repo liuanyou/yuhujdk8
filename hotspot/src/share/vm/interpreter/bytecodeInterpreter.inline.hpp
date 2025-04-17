@@ -27,6 +27,7 @@
 
 #include "interpreter/bytecodeInterpreter.hpp"
 #include "runtime/stubRoutines.hpp"
+#include "runtime/yuhu/yuhu_stubRoutines.hpp"
 
 // This file holds platform-independent bodies of inline functions for the C++ based interpreter
 

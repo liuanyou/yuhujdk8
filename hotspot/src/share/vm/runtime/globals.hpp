@@ -3833,6 +3833,9 @@ class CommandLineFlags {
   product(bool, EnableTracing, false,                                       \
           "Enable event-based tracing")                                     \
                                                                             \
+  product(bool, UseYuhuInt, false,                                          \
+          "Use yuhu interpreter instead")                                   \
+                                                                            \
   product(bool, UseLockedTracing, false,                                    \
           "Use locked-tracing when doing event-based tracing")
 

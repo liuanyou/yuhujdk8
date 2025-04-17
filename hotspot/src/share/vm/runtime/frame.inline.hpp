@@ -79,7 +79,7 @@ inline bool frame::is_bci(intptr_t bcx) {
 }
 
 inline bool frame::is_entry_frame() const {
-  return StubRoutines::returns_to_call_stub(pc());
+  return !UseYuhuInt ? StubRoutines::returns_to_call_stub(pc()) : YuhuStubRoutines::returns_to_call_stub(pc());
 }
 
 inline bool frame::is_stub_frame() const {
