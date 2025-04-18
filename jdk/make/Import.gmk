@@ -115,7 +115,7 @@ endef
 # Import hotspot
 #
 HOTSPOT_IMPORT_FILES := $(addprefix $(LIBRARY_PREFIX), jvm.* saproc.* jsig.* sawindbg.* jvm_db.* jvm_dtrace.*) \
-    Xusage.txt sa-jdi.jar
+    Xusage.txt sa-jdi.jar hsdis-$(OPENJDK_TARGET_CPU_ARCH).*
 $(eval $(call CopyDir,HOTSPOT0, $(HOTSPOT_LIB_DIR), $(INSTALL_LIBRARIES_HERE), $(HOTSPOT_IMPORT_FILES)))
 $(eval $(call CopyDir,HOTSPOT1, $(HOTSPOT_DIST)/lib, $(JDK_OUTPUTDIR)/lib, $(HOTSPOT_IMPORT_FILES)))
 

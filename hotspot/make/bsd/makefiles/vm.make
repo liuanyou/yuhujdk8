@@ -387,16 +387,31 @@ include $(MAKEFILES_DIR)/jsig.make
 # Serviceability agent
 include $(MAKEFILES_DIR)/saproc.make
 
+# hsdis library
+hsdis=hsdis-${LIBARCH}.dylib
+LIBHSDIS=$(GAMMADIR)/src/share/tools/hsdis/lib/hsdis-${LIBARCH}.dylib
+DEST_HSDIS=$(JDK_LIBDIR)/hsdis-${LIBARCH}.dylib
+
+${hsdis}:
+	@echo "Copy ${LIBHSDIS} to ${hsdis} EXPORT_JRE_LIB_ARCH_DIR ${EXPORT_JRE_LIB_ARCH_DIR}"
+	$(QUIETLY) test -f $(LIBHSDIS) && \
+	    cp -f $(LIBHSDIS) $@ && echo "Done"
+
+install_hsdis:
+	@echo "Copying $(hsdis) to $(DEST_HSDIS)"
+	$(QUIETLY) test -f $(hsdis) && \
+	    cp -f $(hsdis) $(DEST_HSDIS) && echo "Done"
+
 #----------------------------------------------------------------------
 
 ifeq ($(OS_VENDOR), Darwin)
 # no libjvm_db for macosx
-build: $(LIBJVM) $(LAUNCHER) $(LIBJSIG) $(BUILDLIBSAPROC) dtraceCheck
+build: $(LIBJVM) $(LAUNCHER) $(LIBJSIG) $(BUILDLIBSAPROC) dtraceCheck ${hsdis}
 	echo "Doing vm.make build:"
 else
 build: $(LIBJVM) $(LAUNCHER) $(LIBJSIG) $(LIBJVM_DB) $(BUILDLIBSAPROC)
 endif
 
-install: install_jvm install_jsig install_saproc
+install: install_jvm install_jsig install_saproc install_hsdis
 
 .PHONY: default build install install_jvm
