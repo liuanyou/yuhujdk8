@@ -275,6 +275,9 @@ else
     LFLAGS_VM += -Xlinker -rpath -Xlinker @loader_path/.
     LFLAGS_VM += -Xlinker -rpath -Xlinker @loader_path/..
     LFLAGS_VM += -Xlinker -install_name -Xlinker @rpath/$(@F)
+    ifneq ($(strip $(KEYSTONE_LIB_PATH)),)
+      LFLAGS_VM += $(KEYSTONE_LIB_PATH:%=-L%) -lkeystone
+    endif
   endif
 
   # JVM is statically linked with libgcc[_s] and libstdc++; this is needed to

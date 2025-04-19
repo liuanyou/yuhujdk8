@@ -18,8 +18,11 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/top.hpp"
+#include <keystone/keystone.h>
 
 class YuhuStubGenerator : public StubCodeGenerator {
+private:
+    ks_engine *ks;
 private:
     // Helper method to write 4 bytes to the code buffer
     // return the address after writing 4 bytes
@@ -42,6 +45,22 @@ private:
         }
         return current_end;
     }
+private:
+    uint32_t machine_code(const char* assembly) {
+        unsigned char *encode;
+        size_t size;
+        size_t count;
+        int ks_result = ks_asm(ks, assembly, 0, &encode, &size, &count);
+        assert(ks_result == KS_ERR_OK, "Failed to assemble!");
+        uint32_t machine_code;
+        memcpy(&machine_code, encode, sizeof(uint32_t));
+        ks_free(encode);
+        return machine_code;
+    }
+
+    address write_inst(CodeSection* insts, const char* assembly) {
+        return write_inst(insts, machine_code(assembly));
+    }
 
     address generate_call_stub(address& return_address) {
         CodeSection* insts = _masm->code_section();
@@ -59,190 +78,127 @@ private:
         // x6 -> parameter size (int)
 
         /* open new stack frame */
-        // stp x29, x30, [sp, #-0x10]!
-        write_inst(insts, 0xa9bf7bfd);
-        // mov x29, sp
-        write_inst(insts, 0x910003fd);
-        // sub sp, x29, #0xd0
-        write_inst(insts, 0xd10343bf);
+        write_inst(insts, "stp x29, x30, [sp, #-0x10]!");
+        write_inst(insts, "mov x29, sp");
+        write_inst(insts, "sub sp, x29, #0xd0");
         /* save method parameters */
-        // stur x7, [x29, #-0x08]
-        write_inst(insts, 0xf81f83a7);
-        // stur x6, [x29, #-0x10]
-        write_inst(insts, 0xf81f03a6);
-        // stp x4, x5, [x29, #-0x20]
-        write_inst(insts, 0xa93e17a4);
-        // stp x2, x3, [x29, #-0x30]
-        write_inst(insts, 0xa93d0fa2);
-        // stp x0, x1, [x29, #-0x40]
-        write_inst(insts, 0xa93c07a0);
+        write_inst(insts, "stur x7, [x29, #-0x08]");
+        write_inst(insts, "stur x6, [x29, #-0x10]");
+        write_inst(insts, "stp x4, x5, [x29, #-0x20]");
+        write_inst(insts, "stp x2, x3, [x29, #-0x30]");
+        write_inst(insts, "stp x0, x1, [x29, #-0x40]");
         /* save callee-saved registers */
-        // stp x20, x19, [x29, #-0x50]
-        write_inst(insts, 0xa93b4fb4);
-        // stp x22, x21, [x29, #-0x60]
-        write_inst(insts, 0xa93a57b6);
-        // stp x24, x23, [x29, #-0x70]
-        write_inst(insts, 0xa9395fb8);
-        // stp x26, x25, [x29, #-0x80]
-        write_inst(insts, 0xa93867ba);
-        // stp x28, x27, [x29, #-0x90]
-        write_inst(insts, 0xa9376fbc);
+        write_inst(insts, "stp x20, x19, [x29, #-0x50]");
+        write_inst(insts, "stp x22, x21, [x29, #-0x60]");
+        write_inst(insts, "stp x24, x23, [x29, #-0x70]");
+        write_inst(insts, "stp x26, x25, [x29, #-0x80]");
+        write_inst(insts, "stp x28, x27, [x29, #-0x90]");
         /* save floating registers */
-        // stp d9, d8, [x29, #-0xa0]
-        write_inst(insts, 0x6d3623a9);
-        // stp d11, d10, [x29, #-0xb0]
-        write_inst(insts, 0x6d352bab);
-        // stp d13, d12, [x29, #-0xc0]
-        write_inst(insts, 0x6d3433ad);
-        // stp d15, d14, [x29, #-0xd0]
-        write_inst(insts, 0x6d333baf);
+        write_inst(insts, "stp d9, d8, [x29, #-0xa0]");
+        write_inst(insts, "stp d11, d10, [x29, #-0xb0]");
+        write_inst(insts, "stp d13, d12, [x29, #-0xc0]");
+        write_inst(insts, "stp d15, d14, [x29, #-0xd0]");
         // x7 holds thread, save it into global register x28
-        // mov x28, x7
-        write_inst(insts, 0xaa0703fc);
+        write_inst(insts, "mov x28, x7");
         // x3 holds method, save it into global register x12
-        // mov x12, x3
-        write_inst(insts, 0xaa0303ec);
+        write_inst(insts, "mov x12, x3");
         /* just disable compressed oops for now (-XX:-UseCompressedOops), handle it later */
         /* setup java stack frame for parameters */
         // save sp into x20
-        // mov x20, sp
-        write_inst(insts, 0x910003f4);
+        write_inst(insts, "mov x20, sp");
         // use this way a.
         // SUB X8, SP, W6, UXTW #3 // X8 = SP - N*8
         // AND SP, X8, #0xFFFFFFFFFFFFFFF0 // 16 bytes alignment
         // or another way b.
         // ADD W8, W6, #1 // W8 = N + 1
-        write_inst(insts, 0x110004c8);
+        write_inst(insts, "add w8, w6, #1");
         // AND W8, W8, #0xFFFFFFFE // W8 &= ~1 // to even number
-        write_inst(insts, 0x121f7908);
+        write_inst(insts, "and w8, w8, #0xfffffffe");
         // SUB SP, SP, W8, UXTW #3 // SP -= W8 * 8
-        write_inst(insts, 0xcb284fff);
+        write_inst(insts, "sub sp, sp, w8, uxtw #3");
         // way a. saves bytes than b., but may be less efficient than b.
         /* push parameters into stack */
-        // cbz w6, #20
         // jump to label parameters_done
-        write_inst(insts, 0x340000a6);
+        write_inst(insts, "cbz w6, #20");
         // -- label loop_start
         // load parameter and move pointer forward + 8 bytes
-        // ldr x8, [x5], #8
-        write_inst(insts, 0xf84084a8);
-        // subs w6, w6, #0x1
+        write_inst(insts, "ldr x8, [x5], #8");
         // this updates NZCV flags
-        write_inst(insts, 0x710004c6);
-        // str x8, [x20, #-8]!
-        // has the same effective as stur x8, [x20, #-8]! when using !
-        write_inst(insts, 0xf81f8e88);
-        // b.gt loop_start / b.gt #-12
+        write_inst(insts, "subs w6, w6, #0x1");
+        // str x8, [x20, #-8]! has the same effective as stur x8, [x20, #-8]! when using !
+        write_inst(insts, "str x8, [x20, #-8]!");
+        // b.gt loop_start
         // jump to label loop_start
-        write_inst(insts, 0x54ffffac);
+        write_inst(insts, "b.gt #-12");
         // -- label parameters_done
         /* call java method */
-        // mov x13, sp
         // save sp in x13 (sender sp)
-        write_inst(insts, 0x910003ed);
-        // blr x4
-        return_address = write_inst(insts, 0xd63f0080);
+        write_inst(insts, "mov x13, sp");
+        return_address = write_inst(insts, "blr x4");
         /* store result depending on type */
-        // ldur x3, [x29, #-56]
         // load result address into x3
-        write_inst(insts, 0xf85c83a3);
-        // ldur x2, [x29, #-48]
+        write_inst(insts, "ldur x3, [x29, #-56]");
         // load result type into x2
-        write_inst(insts, 0xf85d03a2);
-        // cmp x2, #0xc
+        write_inst(insts, "ldur x2, [x29, #-48]");
         // this updates NZCV flags
         // check result type is T_OBJECT
-        write_inst(insts, 0xf100305f);
-        // b.ne #12
+        write_inst(insts, "cmp x2, #0xc");
         // jump to check T_LONG
-        write_inst(insts, 0x54000061);
+        write_inst(insts, "b.ne #12");
         // handle T_OBJECT
-        // str x0, [x3]
-        write_inst(insts, 0xf9000060);
-        // b.al #56
+        write_inst(insts, "str x0, [x3]");
         // jump to label exit
-        write_inst(insts, 0x540001ce);
-        // cmp x2, #0xb
+        write_inst(insts, "b.al #56");
         // check result type is T_LONG
-        write_inst(insts, 0xf1002c5f);
-        // b.ne #12
+        write_inst(insts, "cmp x2, #0xb");
         // jump to check T_FLOAT
-        write_inst(insts, 0x54000061);
+        write_inst(insts, "b.ne #12");
         // handle T_LONG
-        // str x0, [x3]
-        write_inst(insts, 0xf9000060);
-        // b.al #40
+        write_inst(insts, "str x0, [x3]");
         // jump to label exit
-        write_inst(insts, 0x5400014e);
-        // cmp x2, #0x6
+        write_inst(insts, "b.al #40");
         // check result type is T_FLOAT
-        write_inst(insts, 0xf100185f);
-        // b.ne #12
+        write_inst(insts, "cmp x2, #0x6");
         // jump to check T_DOUBLE
-        write_inst(insts, 0x54000061);
+        write_inst(insts, "b.ne #12");
         // handle T_FLOAT
-        // str s0, [x3]
-        write_inst(insts, 0xbd000060);
-        // b.al #24
+        write_inst(insts, "str s0, [x3]");
         // jump to label exit
-        write_inst(insts, 0x540000ce);
-        // cmp x2, #0x7
+        write_inst(insts, "b.al #24");
         // check result type is T_DOUBLE
-        write_inst(insts, 0xf1001c5f);
-        // b.ne #12
+        write_inst(insts, "cmp x2, #0x7");
         // jump to handle result is T_INT
-        write_inst(insts, 0x54000061);
+        write_inst(insts, "b.ne #12");
         // handle T_DOUBLE
-        // str d0, [x3]
-        write_inst(insts, 0xfd000060);
-        // b.al #8
+        write_inst(insts, "str d0, [x3]");
         // jump to label exit
-        write_inst(insts, 0x5400004e);
+        write_inst(insts, "b.al #8");
         // the result is T_INT for the rest of scenarios, and use 32-bytes register
-        // str w0, [x3]
         // x3 holds result address
-        write_inst(insts, 0xb9000060);
+        write_inst(insts, "str w0, [x3]");
         // -- label exit
         /* pop parameters */
-        // sub x20, x29, #0xd0
         // reassign x20 to pop java parameters
-        write_inst(insts, 0xd10343b4);
+        write_inst(insts, "sub x20, x29, #0xd0");
         /* restore callee-saved registers */
-        // ldp d15, d14, [x29, #-208]
-        write_inst(insts, 0x6d733baf);
-        // ldp d13, d12, [x29, #-192]
-        write_inst(insts, 0x6d7433ad);
-        // ldp d11, d10, [x29, #-176]
-        write_inst(insts, 0x6d752bab);
-        // ldp d9, d8, [x29, #-160]
-        write_inst(insts, 0x6d7623a9);
-        // ldp x28, x27, [x29, #-144]
-        write_inst(insts, 0xa9776fbc);
-        // ldp x26, x25, [x29, #-128]
-        write_inst(insts, 0xa97867ba);
-        // ldp x24, x23, [x29, #-112]
-        write_inst(insts, 0xa9795fb8);
-        // ldp x22, x21, [x29, #-96]
-        write_inst(insts, 0xa97a57b6);
-        // ldp x20, x19, [x29, #-80]
-        write_inst(insts, 0xa97b4fb4);
-        // ldp x0, x1, [x29, #-64]
-        write_inst(insts, 0xa97c07a0);
-        // ldur w2, [x29, #-48]
-        write_inst(insts, 0xb85d03a2);
-        // ldur x3, [x29, #-40]
-        write_inst(insts, 0xf85d83a3);
-        // ldp x4, x5, [x29, #-32]
-        write_inst(insts, 0xa97e17a4);
-        // ldp x6, x7, [x29, #-16]
-        write_inst(insts, 0xa97f1fa6);
+        write_inst(insts, "ldp d15, d14, [x29, #-208]");
+        write_inst(insts, "ldp d13, d12, [x29, #-192]");
+        write_inst(insts, "ldp d11, d10, [x29, #-176]");
+        write_inst(insts, "ldp d9, d8, [x29, #-160]");
+        write_inst(insts, "ldp x28, x27, [x29, #-144]");
+        write_inst(insts, "ldp x26, x25, [x29, #-128]");
+        write_inst(insts, "ldp x24, x23, [x29, #-112]");
+        write_inst(insts, "ldp x22, x21, [x29, #-96]");
+        write_inst(insts, "ldp x20, x19, [x29, #-80]");
+        write_inst(insts, "ldp x0, x1, [x29, #-64]");
+        write_inst(insts, "ldur w2, [x29, #-48]");
+        write_inst(insts, "ldur x3, [x29, #-40]");
+        write_inst(insts, "ldp x4, x5, [x29, #-32]");
+        write_inst(insts, "ldp x6, x7, [x29, #-16]");
         /* leave frame and return to caller */
-        // mov sp, x29
-        write_inst(insts, 0x910003bf);
-        // ldp x29, x30, [sp], #16
-        write_inst(insts, 0xa8c17bfd);
-        // ret
-        write_inst(insts, 0xd65f03c0);
+        write_inst(insts, "mov sp, x29");
+        write_inst(insts, "ldp x29, x30, [sp], #16");
+        write_inst(insts, "ret");
 
         // 使用 Disassembler 反汇编
         tty->print_cr("Disassembly:");
@@ -259,10 +215,18 @@ private:
 
 public:
     YuhuStubGenerator(CodeBuffer* code, bool all) : StubCodeGenerator(code) {
+        ks_err err = ks_open(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN, &ks);
+        assert(err == KS_ERR_OK, "Failed to initialize Keystone!");
         if (all) {
 //            generate_all();
         } else {
             generate_initial();
+        }
+    }
+    ~YuhuStubGenerator() {
+        if (ks != nullptr) {
+            ks_close(ks);
+            ks = nullptr;
         }
     }
 };

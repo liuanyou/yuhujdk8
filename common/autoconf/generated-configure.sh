@@ -739,6 +739,8 @@ LDEXECXX
 LDCXX
 LDEXE
 USE_CLANG
+KEYSTONE_INCLUDE_PATH
+KEYSTONE_LIB_PATH
 TOOLCHAIN_TYPE
 LD
 ac_ct_OBJC
@@ -1066,6 +1068,9 @@ enable_sjavac
 enable_precompiled_headers
 enable_ccache
 with_ccache_dir
+with_keystone
+with_keystone_include
+with_keystone_lib
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1818,6 +1823,9 @@ Optional Packages:
                           headers under PATH/include)
   --with-freetype-include specify directory for the freetype include files
   --with-freetype-lib     specify directory for the freetype library
+  --with-keystone         specify prefix directory for keystone
+  --with-keystone-include specify directory for keystone include files
+  --with-keystone-lib     specify directory for keystone library
   --with-alsa             specify prefix directory for the alsa package
                           (expecting the libraries under PATH/lib and the
                           headers under PATH/include)
@@ -27802,7 +27810,21 @@ $as_echo "$CUPS_FOUND" >&6; }
   fi
 
 
-
+# Check whether --with-keystone or --with-keystone-include or --with-keystone-lib was given
+if test "x$with_keystone" != x || test "x$with_keystone_include" != x || test "x$with_keystone_lib" != x; then
+  # User has specified settings
+  if test "x$with_keystone" != x; then
+    KEYSTONE_INCLUDE_PATH="$with_keystone/include"
+    KEYSTONE_LIB_PATH="$with_keystone/lib"
+  fi
+  # Allow --with-keystone-lib and --with-keystone-include to override
+  if test "x$with_keystone_include" != x; then
+    KEYSTONE_INCLUDE_PATH="$with_keystone_include"
+  fi
+  if test "x$with_keystone_lib" != x; then
+    KEYSTONE_LIB_PATH="$with_keystone_lib"
+  fi
+fi
 
 
 

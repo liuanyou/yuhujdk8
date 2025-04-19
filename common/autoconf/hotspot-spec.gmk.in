@@ -98,6 +98,8 @@ HOTSPOT_BUILD_JOBS:=$(JOBS)
 TEST_IN_BUILD=@TEST_IN_BUILD@
 
 USE_CLANG := @USE_CLANG@
+KEYSTONE_INCLUDE_PATH := @KEYSTONE_INCLUDE_PATH@
+KEYSTONE_LIB_PATH := @KEYSTONE_LIB_PATH@
 
 # For hotspot, override compiler/tools definition to not include FIXPATH prefix.
 # Hotspot has its own handling on the Windows path situation.
