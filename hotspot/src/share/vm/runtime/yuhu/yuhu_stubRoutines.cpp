@@ -12,6 +12,7 @@
 
 address YuhuStubRoutines::_call_stub_entry = NULL;
 address YuhuStubRoutines::_call_stub_return_address = NULL;
+address YuhuStubRoutines::_catch_exception_entry = NULL;
 BufferBlob* YuhuStubRoutines::_code1 = NULL;
 
 extern void YuhuStubGenerator_generate(CodeBuffer* code, bool all);

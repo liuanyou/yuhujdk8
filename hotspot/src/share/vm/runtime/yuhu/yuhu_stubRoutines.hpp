@@ -22,6 +22,8 @@ public:
     static address _call_stub_entry;
     static address _call_stub_return_address;
 
+    static address _catch_exception_entry;
+
     static BufferBlob* _code1;
 public:
     // Initialization/Testing
@@ -41,6 +43,8 @@ public:
     );
 
     static CallStub call_stub()                              { return CAST_TO_FN_PTR(CallStub, _call_stub_entry); }
+
+    static address catch_exception_entry()                   { return _catch_exception_entry; }
 
 #ifdef TARGET_ARCH_aarch64
 #include "yuhu_stubRoutines_aarch64.hpp"

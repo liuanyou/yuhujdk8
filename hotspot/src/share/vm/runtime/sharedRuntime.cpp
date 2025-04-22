@@ -501,8 +501,14 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
   }
 
   // Entry code
-  if (StubRoutines::returns_to_call_stub(return_address)) {
-    return StubRoutines::catch_exception_entry();
+  if (!UseYuhuInt) {
+      if (StubRoutines::returns_to_call_stub(return_address)) {
+          return StubRoutines::catch_exception_entry();
+      }
+  } else {
+      if (YuhuStubRoutines::returns_to_call_stub(return_address)) {
+          return YuhuStubRoutines::catch_exception_entry();
+      }
   }
   // Interpreted code
   if (Interpreter::contains(return_address)) {

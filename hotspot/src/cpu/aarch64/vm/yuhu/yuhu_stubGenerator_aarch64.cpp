@@ -45,6 +45,10 @@ private:
         }
         return current_end;
     }
+
+    static address current_pc(CodeSection* insts) {
+        return insts->end();
+    }
 private:
     uint32_t machine_code(const char* assembly) {
         unsigned char *encode;
@@ -62,9 +66,27 @@ private:
         return write_inst(insts, machine_code(assembly));
     }
 
+    address write_inst(CodeSection* insts, const char* head, unsigned int tail) {
+        char buffer[50];
+        snprintf(buffer, sizeof(buffer), "%s%d", head, tail);
+        return write_inst(insts, machine_code(buffer));
+    }
+
+    address write_inst_b(CodeSection* insts, long offset) {
+        char buffer[50];
+        snprintf(buffer, sizeof(buffer), "b #%d", offset);
+        return write_inst(insts, machine_code(buffer));
+    }
+
+    address write_inst(CodeSection* insts, const char* head, unsigned int mid, const char* tail) {
+        char buffer[50];
+        snprintf(buffer, sizeof(buffer), "%s%d%s", head, mid, tail);
+        return write_inst(insts, machine_code(buffer));
+    }
+
     address generate_call_stub(address& return_address) {
         CodeSection* insts = _masm->code_section();
-        address start = insts->start();
+        address start = current_pc(insts);
         CodeSection* consts = _masm->code()->consts();
         address current_end = insts->end();
         address limit = insts->limit();
@@ -134,7 +156,8 @@ private:
         /* call java method */
         // save sp in x13 (sender sp)
         write_inst(insts, "mov x13, sp");
-        return_address = write_inst(insts, "blr x4");
+        write_inst(insts, "blr x4");
+        return_address = current_pc(insts);
         /* store result depending on type */
         // load result address into x3
         write_inst(insts, "ldur x3, [x29, #-56]");
@@ -202,8 +225,41 @@ private:
 
         // 使用 Disassembler 反汇编
         tty->print_cr("Disassembly:");
-        Disassembler::decode(start, start + 4);
+        _masm->code()->decode_all();
 
+        return start;
+    }
+
+    address generate_catch_exception() {
+        CodeSection* insts = _masm->code_section();
+        address start = current_pc(insts);
+
+        // x28 holds current thread
+        /* save exception */
+        write_inst(insts, "str x0, [x28, #0x8]");
+        /* save file */
+        address imm64 = (address) __FILE__;
+        // get low 16 bits
+        write_inst(insts, "movz x8, #", ((uint64_t) imm64) & 0xffff);
+        // get 16-32 bits
+        write_inst(insts, "movk x8, #", (((uint64_t) imm64) >> 16) & 0xffff, ", lsl #16");
+        // get 32-48 bits
+        write_inst(insts, "movk x8, #", (((uint64_t) imm64) >> 32) & 0xffff, ", lsl #32");
+        // get high 16 bits
+        write_inst(insts, "movk x8, #", (((uint64_t) imm64) >> 48) & 0xffff, ", lsl #48");
+        write_inst(insts, "str x8, [x28, #0x10]");
+        /* save line */
+        int imm32 = (int) __LINE__;
+        // get low 16 bits
+        write_inst(insts, "movz w8, #", ((uint32_t) imm32) & 0xffff);
+        // get high 16 bits
+        write_inst(insts, "movk w8, #", (((uint32_t) imm32) >> 16) & 0xffff, ", lsl #16");
+        write_inst(insts, "str w8, [x28, #0x18]");
+        /* return to VM */
+        write_inst_b(insts, YuhuStubRoutines::_call_stub_return_address - insts->end());
+
+        // 使用 Disassembler 反汇编
+        tty->print_cr("Disassembly:");
         _masm->code()->decode_all();
 
         return start;
@@ -211,6 +267,7 @@ private:
 
     void generate_initial() {
         YuhuStubRoutines::_call_stub_entry = generate_call_stub(YuhuStubRoutines::_call_stub_return_address);
+        YuhuStubRoutines::_catch_exception_entry = generate_catch_exception();
     }
 
 public:
