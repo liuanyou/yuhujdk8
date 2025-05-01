@@ -208,6 +208,7 @@
 # include "runtime/stackValueCollection.hpp"
 # include "runtime/stubCodeGenerator.hpp"
 # include "runtime/stubRoutines.hpp"
+# include "runtime/yuhu/yuhu_stubCodeGenerator.hpp"
 # include "runtime/yuhu/yuhu_stubRoutines.hpp"
 # include "runtime/synchronizer.hpp"
 # include "runtime/thread.hpp"
