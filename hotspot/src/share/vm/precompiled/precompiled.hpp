@@ -110,6 +110,7 @@
 # include "interpreter/linkResolver.hpp"
 # include "interpreter/templateInterpreter.hpp"
 # include "interpreter/templateTable.hpp"
+# include "interpreter/yuhu/yuhu_interpreter.hpp"
 # include "jvmtifiles/jvmti.h"
 # include "memory/allocation.hpp"
 # include "memory/allocation.inline.hpp"

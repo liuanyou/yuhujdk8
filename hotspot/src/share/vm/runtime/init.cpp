@@ -54,6 +54,7 @@ void stubRoutines_init1();
 void yuhuStubRoutines_init1();
 jint universe_init();          // depends on codeCache_init and stubRoutines_init
 void interpreter_init();       // before any methods loaded
+void yuhuInterpreter_init();
 void invocationCounter_init(); // before any methods loaded
 void marksweep_init();
 void accessFlags_init();
@@ -109,6 +110,9 @@ jint init_globals() {
     return status;
 
   interpreter_init();  // before any methods loaded
+  if (UseYuhuInt) {
+      yuhuInterpreter_init();
+  }
   invocationCounter_init();  // before any methods loaded
   marksweep_init();
   accessFlags_init();

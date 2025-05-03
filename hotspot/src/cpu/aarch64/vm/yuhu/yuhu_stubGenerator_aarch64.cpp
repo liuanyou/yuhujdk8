@@ -21,6 +21,10 @@
 
 #undef __
 #define __ _masm->
+#undef x8
+#define x8 YuhuMacroAssembler::x8
+#undef w8
+#define w8 YuhuMacroAssembler::w8
 
 class YuhuStubGenerator : public YuhuStubCodeGenerator {
 private:
@@ -174,21 +178,11 @@ private:
         __ write_inst( "str x0, [x28, #0x8]");
         /* save file */
         address imm64 = (address) __FILE__;
-        // get low 16 bits
-        __ write_inst( "movz x8, #", ((uint64_t) imm64) & 0xffff);
-        // get 16-32 bits
-        __ write_inst( "movk x8, #", (((uint64_t) imm64) >> 16) & 0xffff, ", lsl #16");
-        // get 32-48 bits
-        __ write_inst( "movk x8, #", (((uint64_t) imm64) >> 32) & 0xffff, ", lsl #32");
-        // get high 16 bits
-        __ write_inst( "movk x8, #", (((uint64_t) imm64) >> 48) & 0xffff, ", lsl #48");
+        __ write_insts_mov_imm64(x8, (uint64_t)imm64);
         __ write_inst( "str x8, [x28, #0x10]");
         /* save line */
         int imm32 = (int) __LINE__;
-        // get low 16 bits
-        __ write_inst( "movz w8, #", ((uint32_t) imm32) & 0xffff);
-        // get high 16 bits
-        __ write_inst( "movk w8, #", (((uint32_t) imm32) >> 16) & 0xffff, ", lsl #16");
+        __ write_insts_mov_imm32(w8, (uint32_t)imm32);
         __ write_inst( "str w8, [x28, #0x18]");
         /* return to VM */
         __ write_inst_b( YuhuStubRoutines::_call_stub_return_address - __ current_pc());
