@@ -126,3 +126,28 @@ address YuhuMacroAssembler::write_insts_mov_imm32(YuhuRegister reg, uint32_t imm
     write_inst( "movk %s, #%d, lsl #16", reg, (imm32 >> 16) & 0xffff);
     return current_pc();
 }
+
+address YuhuMacroAssembler::write_insts_dispatch_base(TosState state, address* table, bool verifyoop) {
+//    if (VerifyActivationFrameSize) {
+//        Unimplemented();
+//    }
+//    if (verifyoop) {
+//        verify_oop(r0, state);
+//    }
+    if (table == YuhuInterpreter::dispatch_table(state)) {
+        write_inst("add w9, %s, #%d", w8, YuhuInterpreter::distance_from_dispatch_table(state));
+        write_inst("ldr x9, [x21, w9, uxtw #3]");
+    } else {
+        mov(rscratch2, (address)table);
+        ldr(rscratch2, Address(rscratch2, rscratch1, Address::uxtw(3)));
+    }
+    write_inst("br x9");
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_dispatch_next(TosState state, int step) {
+    // load next bytecode
+    write_inst("ldrb %s, [x22, #%d]!", w8, step);
+    write_insts_dispatch_base(state, YuhuInterpreter::dispatch_table(state));
+    return current_pc();
+}

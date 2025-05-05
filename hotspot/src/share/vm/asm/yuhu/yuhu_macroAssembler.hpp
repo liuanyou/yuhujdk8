@@ -102,6 +102,10 @@ public:
     address write_insts_mov_imm64(YuhuRegister reg, uint64_t imm64);
 
     address write_insts_mov_imm32(YuhuRegister reg, uint32_t imm32);
+
+    address write_insts_dispatch_next(TosState state, int step = 0);
+
+    address write_insts_dispatch_base(TosState state, address* table, bool verifyoop = true);
 };
 
 #endif //JDK8_YUHU_MACROASSEMBLER_HPP

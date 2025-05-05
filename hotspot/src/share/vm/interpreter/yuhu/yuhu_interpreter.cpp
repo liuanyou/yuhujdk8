@@ -6,6 +6,87 @@
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 
 StubQueue* YuhuInterpreter::_code = NULL;
+YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_states];
+YuhuDispatchTable YuhuInterpreter::_active_table;
+YuhuDispatchTable YuhuInterpreter::_normal_table;
+address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
+
+YuhuEntryPoint::YuhuEntryPoint() {
+    assert(number_of_states == 9, "check the code below");
+    _entry[btos] = NULL;
+    _entry[ctos] = NULL;
+    _entry[stos] = NULL;
+    _entry[atos] = NULL;
+    _entry[itos] = NULL;
+    _entry[ltos] = NULL;
+    _entry[ftos] = NULL;
+    _entry[dtos] = NULL;
+    _entry[vtos] = NULL;
+}
+
+YuhuEntryPoint::YuhuEntryPoint(address bentry, address centry, address sentry, address aentry, address ientry, address lentry, address fentry, address dentry, address ventry) {
+    assert(number_of_states == 9, "check the code below");
+    _entry[btos] = bentry;
+    _entry[ctos] = centry;
+    _entry[stos] = sentry;
+    _entry[atos] = aentry;
+    _entry[itos] = ientry;
+    _entry[ltos] = lentry;
+    _entry[ftos] = fentry;
+    _entry[dtos] = dentry;
+    _entry[vtos] = ventry;
+}
+
+void YuhuEntryPoint::set_entry(TosState state, address entry) {
+    assert(0 <= state && state < number_of_states, "state out of bounds");
+    _entry[state] = entry;
+}
+
+
+address YuhuEntryPoint::entry(TosState state) const {
+    assert(0 <= state && state < number_of_states, "state out of bounds");
+    return _entry[state];
+}
+
+
+void YuhuEntryPoint::print() {
+    tty->print("[");
+    for (int i = 0; i < number_of_states; i++) {
+        if (i > 0) tty->print(", ");
+        tty->print(INTPTR_FORMAT, _entry[i]);
+    }
+    tty->print("]");
+}
+
+YuhuEntryPoint YuhuDispatchTable::entry(int i) const {
+    assert(0 <= i && i < length, "index out of bounds");
+    return
+            YuhuEntryPoint(
+                    _table[btos][i],
+                    _table[ctos][i],
+                    _table[stos][i],
+                    _table[atos][i],
+                    _table[itos][i],
+                    _table[ltos][i],
+                    _table[ftos][i],
+                    _table[dtos][i],
+                    _table[vtos][i]
+            );
+}
+
+void YuhuDispatchTable::set_entry(int i, YuhuEntryPoint& entry) {
+    assert(0 <= i && i < length, "index out of bounds");
+    assert(number_of_states == 9, "check the code below");
+    _table[btos][i] = entry.entry(btos);
+    _table[ctos][i] = entry.entry(ctos);
+    _table[stos][i] = entry.entry(stos);
+    _table[atos][i] = entry.entry(atos);
+    _table[itos][i] = entry.entry(itos);
+    _table[ltos][i] = entry.entry(ltos);
+    _table[ftos][i] = entry.entry(ftos);
+    _table[dtos][i] = entry.entry(dtos);
+    _table[vtos][i] = entry.entry(vtos);
+}
 
 void YuhuInterpreterCodelet::verify() {
 }
@@ -33,5 +114,8 @@ void YuhuInterpreter::initialize() {
                               "yuhInterpreter");
         YuhuInterpreterGenerator g;
     }
+
+    // initialize dispatch table
+    _active_table = _normal_table;
 }
 

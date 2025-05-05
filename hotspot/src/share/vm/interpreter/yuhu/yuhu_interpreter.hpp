@@ -12,12 +12,57 @@
 #include "utilities/top.hpp"
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 
+class YuhuEntryPoint VALUE_OBJ_CLASS_SPEC {
+private:
+    address _entry[number_of_states];
+
+public:
+    // Construction
+    YuhuEntryPoint();
+    YuhuEntryPoint(address bentry, address centry, address sentry, address aentry, address ientry, address lentry, address fentry, address dentry, address ventry);
+
+    // Attributes
+    address entry(TosState state) const;                // return target address for a given tosca state
+    void    set_entry(TosState state, address entry);   // set    target address for a given tosca state
+    void    print();
+
+    // Comparison
+//    bool operator == (const EntryPoint& y);             // for debugging only
+};
+
+class YuhuDispatchTable VALUE_OBJ_CLASS_SPEC {
+public:
+    enum { length = 1 << BitsPerByte };                 // an entry point for each byte value (also for undefined bytecodes)
+
+private:
+    address _table[number_of_states][length];           // dispatch tables, indexed by tosca and bytecode
+
+public:
+    // Attributes
+    YuhuEntryPoint entry(int i) const;                      // return entry point for a given bytecode i
+    void       set_entry(int i, YuhuEntryPoint& entry);     // set    entry point for a given bytecode i
+    address*   table_for(TosState state)          { return _table[state]; }
+    address*   table_for()                        { return table_for((TosState)0); }
+    int        distance_from(address *table)      { return table - table_for(); }
+    int        distance_from(TosState state)      { return distance_from(table_for(state)); }
+
+    // Comparison
+//    bool operator == (DispatchTable& y);                // for debugging only
+};
+
 class YuhuInterpreter : AllStatic {
+friend class YuhuInterpreterGenerator;
 protected:
     static StubQueue* _code;
+    static YuhuEntryPoint _return_entry[number_of_states];
+    static YuhuDispatchTable _active_table;                           // the active    dispatch table (used by the interpreter for dispatch)
+    static YuhuDispatchTable _normal_table;                           // the normal    dispatch table (used to set the active table in normal mode)
+    static address       _wentry_point[YuhuDispatchTable::length];    // wide instructions only (vtos tosca always)
 public:
     static StubQueue* code() { return _code; }
     static void initialize();
+    static address*   dispatch_table(TosState state)              { return _active_table.table_for(state); }
+    static int        distance_from_dispatch_table(TosState state){ return _active_table.distance_from(state); }
 
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"

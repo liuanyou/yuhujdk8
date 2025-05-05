@@ -19,6 +19,15 @@ protected:
     address _illegal_bytecode_sequence;
     void generate_all();
     address generate_error_exit(const char* msg);
+    address generate_return_entry_for(TosState state, int step, size_t index_size);
+
+    void generate_and_dispatch (YuhuTemplate* t, TosState tos_out = ilgl);
+    void set_vtos_entry_points (YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);
+    void set_short_entry_points(YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);
+    void set_wide_entry_point  (YuhuTemplate* t, address& wep);
+    void set_entry_points(Bytecodes::Code code);
+    void set_unimplemented(int i);
+    void set_entry_points_for_all_bytes();
 public:
     YuhuInterpreterGenerator();
 };
