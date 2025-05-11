@@ -18,6 +18,29 @@
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/thread.inline.hpp"
 
+address YuhuMacroAssembler::target(YuhuLabel& L, address branch_pc) {
+    if (L.is_bound()) {
+        int loc = L.loc();
+        if (code_section()->index() == CodeBuffer::locator_sect(loc)) {
+            return code_section()->start() + CodeBuffer::locator_pos(loc);
+        } else {
+            return code_section()->outer()->locator_address(loc);
+        }
+    } else {
+        assert(code_section()->allocates2(branch_pc), "sanity");
+        address base = code_section()->start();
+        int patch_loc = CodeBuffer::locator(branch_pc - base, code_section()->index());
+        L.add_patch_at(code_section()->outer(), patch_loc);
+
+        // Need to return a pc, doesn't matter what it is since it will be
+        // replaced during resolution later.
+        // Don't return NULL or badAddress, since branches shouldn't overflow.
+        // Don't return base either because that could overflow displacements
+        // for shorter branches.  It will get checked when bound.
+        return branch_pc;
+    }
+}
+
 address YuhuMacroAssembler::write_inst(uint32_t value) {
     CodeSection* insts = code_section();
     address current_end = insts->end();
@@ -48,19 +71,118 @@ address YuhuMacroAssembler::write_inst(const char* assembly) {
     return write_inst(machine_code(assembly));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, unsigned int imm16) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, unsigned int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
-    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), imm16);
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), imm32);
     #pragma clang diagnostic pop
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst_b(long offset) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, unsigned int imm32) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), imm32);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst(const char* assembly_format, unsigned int imm32) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, imm32);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_br(YuhuRegister reg) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "br %s", reg_name(reg));
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_b(address target) {
+    long offset = target - current_pc();
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "b #%d", offset);
     return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_b(YuhuLabel& label) {
+    if (label.is_bound()) {
+        write_inst_b(target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_b(current_pc());
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_b(YuhuCond cond, address target) {
+    long offset = target - current_pc();
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "b.%s #%d", cond_name(cond), offset);
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_b(YuhuCond cond, YuhuLabel& label) {
+    if (label.is_bound()) {
+        write_inst_b(cond, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_b(cond, current_pc());
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_cbz(YuhuRegister reg, address target) {
+    long offset = target - current_pc();
+    return write_inst("cbz %s, #%d", reg, offset);
+}
+
+address YuhuMacroAssembler::write_inst_cbz(YuhuRegister reg, YuhuLabel &label) {
+    if (label.is_bound()) {
+        write_inst_cbz(reg, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_cbz(reg, current_pc());
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_cbnz(YuhuRegister reg, address target) {
+    long offset = target - current_pc();
+    return write_inst("cbnz %s, #%d", reg, offset);
+}
+
+address YuhuMacroAssembler::write_inst_cbnz(YuhuRegister reg, YuhuLabel &label) {
+    if (label.is_bound()) {
+        write_inst_cbnz(reg, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_cbnz(reg, current_pc());
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_adrp(YuhuRegister reg, address target) {
+    uint64_t pc_page = (uint64_t)current_pc() >> 12;
+    uint64_t adr_page = (uint64_t)target >> 12;
+    intptr_t offset = adr_page - pc_page;
+    return write_inst("adrp %s, #%d", reg, offset);
+}
+
+void YuhuMacroAssembler::pin_label(YuhuLabel& label) {
+    if (label.is_bound()) {
+        // Assembler can bind a label more than once to the same place.
+        guarantee(label.loc() == locator(), "attempt to redefine label");
+        return;
+    }
+    label.bind_loc(locator());
+    label.patch_instructions(this);
 }
 
 address YuhuMacroAssembler::write_insts_stop(const char *msg) {
@@ -149,5 +271,52 @@ address YuhuMacroAssembler::write_insts_dispatch_next(TosState state, int step) 
     // load next bytecode
     write_inst("ldrb %s, [x22, #%d]!", w8, step);
     write_insts_dispatch_base(state, YuhuInterpreter::dispatch_table(state));
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_far_jump(address entry, CodeBuffer *cbuf, YuhuRegister tmp) {
+    assert(ReservedCodeCacheSize < 4*G, "branch out of range");
+    assert(CodeCache::find_blob(entry) != NULL,
+           "destination of far call not found in code cache");
+    if (far_branches()) {
+        uint64_t offset;
+        // We can use ADRP here because we know that the total size of
+        // the code cache cannot exceed 2Gb.
+        write_insts_adrp(tmp, entry, offset);
+        write_inst("add %s, %s, %d", tmp, tmp, offset);
+//        if (cbuf) cbuf->set_insts_mark();
+        write_inst_br(tmp);
+    } else {
+//        if (cbuf) cbuf->set_insts_mark();
+        write_inst_b(entry);
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_adrp(YuhuRegister reg, const address &dest, uint64_t &byte_offset) {
+//    relocInfo::relocType rtype = dest.rspec().reloc()->type();
+    uint64_t low_page = (uint64_t)CodeCache::low_bound() >> 12;
+    uint64_t high_page = (uint64_t)(CodeCache::high_bound()-1) >> 12;
+    uint64_t dest_page = (uint64_t) dest >> 12;
+    int64_t offset_low = dest_page - low_page;
+    int64_t offset_high = dest_page - high_page;
+
+    assert(is_valid_AArch64_address(dest), "bad address");
+//    assert(dest.getMode() == Address::literal, "ADRP must be applied to a literal address");
+
+//    InstructionMark im(this);
+//    code_section()->relocate(inst_mark(), dest.rspec());
+    // 8143067: Ensure that the adrp can reach the dest from anywhere within
+    // the code cache so that if it is relocated we know it will still reach
+    if (offset_high >= -(1<<20) && offset_low < (1<<20)) {
+        write_inst_adrp(reg, dest);
+    } else {
+        uint64_t target = (uint64_t)dest;
+        uint64_t adrp_target
+                = (target & 0xffffffffUL) | ((uint64_t)current_pc() & 0xffff00000000UL);
+        write_inst_adrp(reg, (address)adrp_target);
+        write_inst("movk %s, #%d, lsl #32", reg, (target >> 32) & 0xffff);
+    }
+    byte_offset = (uint64_t)dest & 0xfff;
     return current_pc();
 }

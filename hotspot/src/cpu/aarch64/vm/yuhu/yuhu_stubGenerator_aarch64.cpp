@@ -21,10 +21,6 @@
 
 #undef __
 #define __ _masm->
-#undef x8
-#define x8 YuhuMacroAssembler::x8
-#undef w8
-#define w8 YuhuMacroAssembler::w8
 
 class YuhuStubGenerator : public YuhuStubCodeGenerator {
 private:
@@ -81,8 +77,11 @@ private:
         // way a. saves bytes than b., but may be less efficient than b.
         /* push parameters into stack */
         // jump to label parameters_done
-        __ write_inst( "cbz w6, #20");
+        YuhuLabel parameters_done;
+        // cbz w6, #20
+        __ write_inst_cbz(YuhuMacroAssembler::w6, parameters_done);
         // -- label loop_start
+        address loop_start = __ current_pc();
         // load parameter and move pointer forward + 8 bytes
         __ write_inst( "ldr x8, [x5], #8");
         // this updates NZCV flags
@@ -91,8 +90,10 @@ private:
         __ write_inst( "str x8, [x20, #-8]!");
         // b.gt loop_start
         // jump to label loop_start
-        __ write_inst( "b.gt #-12");
+        // b.gt #-12
+        __ write_inst_b(YuhuMacroAssembler::gt, loop_start);
         // -- label parameters_done
+        __ pin_label(parameters_done);
         /* call java method */
         // save sp in x13 (sender sp)
         __ write_inst( "mov x13, sp");
@@ -103,43 +104,61 @@ private:
         __ write_inst( "ldur x3, [x29, #-56]");
         // load result type into x2
         __ write_inst( "ldur x2, [x29, #-48]");
+        YuhuLabel exit;
         // this updates NZCV flags
         // check result type is T_OBJECT
-        __ write_inst( "cmp x2, #0xc");
+        __ write_inst( "cmp x2, #%d", T_OBJECT);
         // jump to check T_LONG
-        __ write_inst( "b.ne #12");
+        YuhuLabel check_long;
+        // b.ne #12
+        __ write_inst_b(YuhuMacroAssembler::ne, check_long);
         // handle T_OBJECT
         __ write_inst( "str x0, [x3]");
         // jump to label exit
-        __ write_inst( "b.al #56");
+        // b.al #56
+        __ write_inst_b(YuhuMacroAssembler::al, exit);
         // check result type is T_LONG
-        __ write_inst( "cmp x2, #0xb");
+        __ pin_label(check_long);
+        __ write_inst( "cmp x2, #%d", T_LONG);
         // jump to check T_FLOAT
-        __ write_inst( "b.ne #12");
+        YuhuLabel check_float;
+        // b.ne #12
+        __ write_inst_b(YuhuMacroAssembler::ne, check_float);
         // handle T_LONG
         __ write_inst( "str x0, [x3]");
         // jump to label exit
-        __ write_inst( "b.al #40");
+        // b.al #40
+        __ write_inst_b(YuhuMacroAssembler::al, exit);
         // check result type is T_FLOAT
-        __ write_inst( "cmp x2, #0x6");
+        __ pin_label(check_float);
+        __ write_inst( "cmp x2, #%d", T_FLOAT);
         // jump to check T_DOUBLE
-        __ write_inst( "b.ne #12");
+        YuhuLabel check_double;
+        // b.ne #12
+        __ write_inst_b(YuhuMacroAssembler::ne, check_double);
         // handle T_FLOAT
         __ write_inst( "str s0, [x3]");
         // jump to label exit
-        __ write_inst( "b.al #24");
+        // b.al #24
+        __ write_inst_b(YuhuMacroAssembler::al, exit);
         // check result type is T_DOUBLE
-        __ write_inst( "cmp x2, #0x7");
+        __ pin_label(check_double);
+        __ write_inst( "cmp x2, #%d", T_DOUBLE);
         // jump to handle result is T_INT
-        __ write_inst( "b.ne #12");
+        YuhuLabel check_int;
+        // b.ne #12
+        __ write_inst_b(YuhuMacroAssembler::ne, check_int);
         // handle T_DOUBLE
         __ write_inst( "str d0, [x3]");
         // jump to label exit
-        __ write_inst( "b.al #8");
+        // b.al #8
+        __ write_inst_b(YuhuMacroAssembler::al, exit);
         // the result is T_INT for the rest of scenarios, and use 32-bytes register
         // x3 holds result address
+        __ pin_label(check_int);
         __ write_inst( "str w0, [x3]");
         // -- label exit
+        __ pin_label(exit);
         /* pop parameters */
         // reassign x20 to pop java parameters
         __ write_inst( "sub x20, x29, #0xd0");
@@ -178,14 +197,14 @@ private:
         __ write_inst( "str x0, [x28, #0x8]");
         /* save file */
         address imm64 = (address) __FILE__;
-        __ write_insts_mov_imm64(x8, (uint64_t)imm64);
+        __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t)imm64);
         __ write_inst( "str x8, [x28, #0x10]");
         /* save line */
         int imm32 = (int) __LINE__;
-        __ write_insts_mov_imm32(w8, (uint32_t)imm32);
+        __ write_insts_mov_imm32(YuhuMacroAssembler::w8, (uint32_t)imm32);
         __ write_inst( "str w8, [x28, #0x18]");
         /* return to VM */
-        __ write_inst_b( YuhuStubRoutines::_call_stub_return_address - __ current_pc());
+        __ write_inst_b(YuhuStubRoutines::_call_stub_return_address);
 
         // 使用 Disassembler 反汇编
         tty->print_cr("Disassembly:");
