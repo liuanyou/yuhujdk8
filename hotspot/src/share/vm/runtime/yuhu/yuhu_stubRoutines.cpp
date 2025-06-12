@@ -13,6 +13,10 @@
 address YuhuStubRoutines::_call_stub_entry = NULL;
 address YuhuStubRoutines::_call_stub_return_address = NULL;
 address YuhuStubRoutines::_catch_exception_entry = NULL;
+address YuhuStubRoutines::_forward_exception_entry = NULL;
+address YuhuStubRoutines::_throw_StackOverflowError_entry = NULL;
+address YuhuStubRoutines::_verify_oop_subroutine_entry = NULL;
+jint YuhuStubRoutines::_verify_oop_count = 0;
 BufferBlob* YuhuStubRoutines::_code1 = NULL;
 
 extern void YuhuStubGenerator_generate(CodeBuffer* code, bool all);

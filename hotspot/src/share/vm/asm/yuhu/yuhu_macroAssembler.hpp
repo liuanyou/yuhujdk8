@@ -50,7 +50,7 @@ public:
         x9, x10, x11, x12, x13, x14, x15, // Caller saved
         x16, x17, x18,
         x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, // Callee saved
-        x29, x30, x31, sp = x31, xzr = x31
+        x29, fp = x29, x30, lr = x30, x31, sp = x31, xzr = x31, noreg
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
@@ -115,6 +115,8 @@ public:
 
     address write_inst(const char* assembly_format, unsigned int imm32);
 
+    address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
+
     address write_inst_br(YuhuRegister reg);
 
     address write_inst_b(address target);
@@ -135,7 +137,13 @@ public:
 
     address write_inst_adrp(YuhuRegister reg, address target);
 
+    address write_inst_adr(YuhuRegister reg, address target);
+
     void pin_label(YuhuLabel& label);
+
+    address write_insts_enter();
+
+    address write_insts_leave();
 
     address write_insts_stop(const char* msg);
 
@@ -145,6 +153,8 @@ public:
      * @return
      */
     address write_insts_pusha();
+
+    address write_insts_pushrange(YuhuRegister start, YuhuRegister end, YuhuRegister stack);
 
     address write_insts_mov_ptr(YuhuRegister reg, uintptr_t imm64);
 
@@ -159,6 +169,20 @@ public:
     address write_insts_far_jump(address entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 
     address write_insts_adrp(YuhuRegister reg, const address &dest, uint64_t &byte_offset);
+
+    address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, address  last_java_pc, YuhuRegister scratch);
+
+    address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, YuhuRegister last_java_pc, YuhuRegister scratch);
+
+    address write_insts_reset_last_java_frame(bool clear_fp);
+
+    address write_insts_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1);
+
+    address write_insts_call_VM_leaf_base(address entry_point, int number_of_arguments, YuhuLabel *retaddr = NULL);
+
+    address write_insts_verify_oop(YuhuRegister reg, const char* s = "broken oop");
+
+    address write_insts_load_klass(YuhuRegister dst, YuhuRegister src);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

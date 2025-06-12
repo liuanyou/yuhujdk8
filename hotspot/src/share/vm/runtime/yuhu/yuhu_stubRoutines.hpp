@@ -22,7 +22,13 @@ public:
     static address _call_stub_entry;
     static address _call_stub_return_address;
 
+    static address _forward_exception_entry;
     static address _catch_exception_entry;
+
+    static address _throw_StackOverflowError_entry;
+
+    static address _verify_oop_subroutine_entry;
+    static jint    _verify_oop_count;
 
     static BufferBlob* _code1;
 public:
@@ -43,8 +49,12 @@ public:
     );
 
     static CallStub call_stub()                              { return CAST_TO_FN_PTR(CallStub, _call_stub_entry); }
-
+    static address forward_exception_entry()                 { return _forward_exception_entry; }
     static address catch_exception_entry()                   { return _catch_exception_entry; }
+    static address throw_StackOverflowError_entry()          { return _throw_StackOverflowError_entry; }
+
+    static address verify_oop_subroutine_entry_address()    { return (address)&_verify_oop_subroutine_entry; }
+    static jint*   verify_oop_count_addr()                   { return &_verify_oop_count; }
 
 #ifdef TARGET_ARCH_aarch64
 #include "yuhu_stubRoutines_aarch64.hpp"
