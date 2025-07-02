@@ -44,17 +44,17 @@ public:
         w9, w10, w11, w12, w13, w14, w15,
         w16, w17, w18,
         w19, w20, w21, w22, w23, w24, w25, w26, w27, w28,
-        w29, w30,
+        w29, w30, wzr,
         x0, x1, x2, x3, x4, x5, x6, x7,
         x8,
         x9, x10, x11, x12, x13, x14, x15, // Caller saved
         x16, x17, x18,
         x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, // Callee saved
-        x29, fp = x29, x30, lr = x30, x31, sp = x31, xzr = x31, noreg
+        x29, fp = x29, x30, lr = x30, xzr, sp, noreg
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi
+        gt, ne, al, ls, hi, le, eq
     };
 private:
     const char* reg_name(YuhuRegister reg) {
@@ -64,15 +64,17 @@ private:
             "w8", "w9", "w10", "w11", "w12", "w13", "w14", "w15",
             "w16", "w17", "w18", "w19", "w20", "w21", "w22", "w23",
             "w24", "w25", "w26", "w27", "w28", "w29", "w30",
+            // wzr
+            "wzr",
 
-            // x0-x31
+            // x0-x30
             "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
             "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
             "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23",
-            "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x31",
+            "x24", "x25", "x26", "x27", "x28", "x29", "x30",
 
-            // alias sp and xzr is mapped to x31
-            "sp", "xzr"
+            // xzr, sp
+            "xzr", "sp"
         };
 
         // check array index
@@ -89,6 +91,10 @@ private:
         size_t count = sizeof(cond_names)/sizeof(cond_names[0]);
         assert((int)cond >=0 && (int)cond < (int)count, "Unknown cond");
         return cond_names[(int)cond];
+    }
+    YuhuRegister w_reg(YuhuRegister reg) {
+        assert(reg >= x0 && reg <= xzr, "Unknown register");
+        return (YuhuRegister) (reg - (xzr - wzr));
     }
 public:
     YuhuMacroAssembler(CodeBuffer* code) : MacroAssembler(code) {
@@ -115,6 +121,10 @@ public:
 
     address write_inst(const char* assembly_format, unsigned int imm32);
 
+    address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
+
+    address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
+
     address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_br(YuhuRegister reg);
@@ -138,6 +148,8 @@ public:
     address write_inst_adrp(YuhuRegister reg, address target);
 
     address write_inst_adr(YuhuRegister reg, address target);
+
+    address write_inst_adr(YuhuRegister reg, YuhuLabel& label);
 
     void pin_label(YuhuLabel& label);
 
@@ -166,15 +178,25 @@ public:
 
     address write_insts_dispatch_base(TosState state, address* table, bool verifyoop = true);
 
+    address write_insts_get_dispatch();
+
     address write_insts_far_jump(address entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 
     address write_insts_adrp(YuhuRegister reg, const address &dest, uint64_t &byte_offset);
 
     address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, address  last_java_pc, YuhuRegister scratch);
 
+    address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, YuhuLabel &last_java_pc, YuhuRegister scratch);
+
     address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, YuhuRegister last_java_pc, YuhuRegister scratch);
 
     address write_insts_reset_last_java_frame(bool clear_fp);
+
+    address write_insts_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, bool check_exceptions = true);
+
+    address write_insts_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions = true);
+
+    address write_insts_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp, address  entry_point, int number_of_arguments, bool check_exceptions);
 
     address write_insts_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1);
 
@@ -183,6 +205,44 @@ public:
     address write_insts_verify_oop(YuhuRegister reg, const char* s = "broken oop");
 
     address write_insts_load_klass(YuhuRegister dst, YuhuRegister src);
+
+    address write_insts_lock_object(YuhuRegister lock_reg);
+
+    address write_insts_save_bcp() {
+        return write_inst("str x22, [x29, #%d]", frame::interpreter_frame_bcx_offset * wordSize);
+    }
+
+    address write_insts_restore_bcp() {
+        return write_inst("ldr x22, [x29, #%d]", frame::interpreter_frame_bcx_offset * wordSize);
+    }
+
+    address write_insts_restore_locals() {
+        return write_inst("ldr x24, [x29, #%d]", frame::interpreter_frame_locals_offset * wordSize);
+    }
+
+    address write_insts_final_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp, address  entry_point, int number_of_arguments, bool check_exceptions);
+
+    address write_insts_final_call_VM_leaf_base(address entry_point, int number_of_arguments, YuhuLabel *retaddr = NULL);
+
+    address write_insts_get_vm_result(YuhuRegister oop_result, YuhuRegister thread);
+
+    int write_insts_biased_locking_enter(YuhuRegister lock_reg, YuhuRegister obj_reg,
+                             YuhuRegister swap_reg, YuhuRegister tmp_reg,
+                             bool swap_reg_contains_mark,
+                             YuhuLabel& done, YuhuLabel* slow_case = NULL,
+                             BiasedLockingCounters* counters = NULL);
+
+    address write_insts_load_prototype_header(YuhuRegister dst, YuhuRegister src);
+
+    address write_insts_cmpxchgptr(YuhuRegister oldv, YuhuRegister newv, YuhuRegister addr, YuhuRegister tmp,
+                    YuhuLabel &suceed, YuhuLabel *fail);
+
+    address write_insts_atomic_incw(YuhuRegister counter_addr, YuhuRegister tmp, YuhuRegister tmp2);
+
+    address write_insts_atomic_incw(address counter_addr, YuhuRegister tmp1, YuhuRegister tmp2, YuhuRegister tmp3) {
+        write_insts_mov_imm64(tmp1, (uint64_t) counter_addr); // lea(tmp1, counter_addr);
+        return write_insts_atomic_incw(tmp1, tmp2, tmp3);
+    }
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

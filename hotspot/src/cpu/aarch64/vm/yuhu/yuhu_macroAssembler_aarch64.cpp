@@ -98,6 +98,24 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, unsigned int
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2));
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(reg3));
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "mov %s, %s", reg_name(reg1), reg_name(reg2));
@@ -183,6 +201,16 @@ address YuhuMacroAssembler::write_inst_adrp(YuhuRegister reg, address target) {
 address YuhuMacroAssembler::write_inst_adr(YuhuRegister reg, address target) {
     long offset = target - current_pc();
     return write_inst("adr %s, #%d", reg, offset);
+}
+
+address YuhuMacroAssembler::write_inst_adr(YuhuRegister reg, YuhuLabel &label) {
+    if (label.is_bound()) {
+        write_inst_adr(reg, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_adr(reg, current_pc());
+    }
+    return current_pc();
 }
 
 void YuhuMacroAssembler::pin_label(YuhuLabel& label) {
@@ -299,6 +327,13 @@ address YuhuMacroAssembler::write_insts_dispatch_base(TosState state, address* t
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_get_dispatch() {
+    uint64_t offset;
+    write_insts_adrp(x21, (address) YuhuInterpreter::dispatch_table(), offset);
+    write_inst("add x21, x21, #%d", offset); // lea(rdispatch, Address(rdispatch, offset));
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_dispatch_next(TosState state, int step) {
     // load next bytecode
     write_inst("ldrb %s, [x22, #%d]!", w8, step);
@@ -374,6 +409,20 @@ address YuhuMacroAssembler::write_insts_set_last_java_frame(YuhuRegister last_ja
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_set_last_java_frame(YuhuRegister last_java_sp,
+                                         YuhuRegister last_java_fp,
+                                         YuhuLabel &L,
+                                         YuhuRegister scratch) {
+    if (L.is_bound()) {
+        write_insts_set_last_java_frame(last_java_sp, last_java_fp, target(L, current_pc()), scratch);
+    } else {
+//        InstructionMark im(this);
+        L.add_patch_at(code(), locator());
+        write_insts_set_last_java_frame(last_java_sp, last_java_fp, (address)NULL, scratch);
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_reset_last_java_frame(bool clear_fp) {
     // we must set sp to zero to clear frame
     write_inst("str xzr, [x28, #%d]", in_bytes(JavaThread::last_Java_sp_offset()));
@@ -411,6 +460,48 @@ address YuhuMacroAssembler::write_insts_set_last_java_frame(YuhuRegister last_ja
     if (last_java_fp != noreg) {
         write_inst("str %s, [x28, #%d]", last_java_fp, in_bytes(JavaThread::last_Java_fp_offset()));
     }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, bool check_exceptions) {
+    if (arg_1 != x1) {
+        write_inst_mov_reg(x1, arg_1);
+    }
+    write_insts_call_VM_helper(oop_result, entry_point, 1, check_exceptions);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions) {
+    write_insts_call_VM_base(oop_result, noreg, noreg, entry_point, number_of_arguments, check_exceptions);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp, address entry_point, int number_of_arguments, bool check_exceptions) {
+    // interpreter specific
+    //
+    // Note: Could avoid restoring locals ptr (callee saved) - however doesn't
+    //       really make a difference for these runtime calls, since they are
+    //       slow anyway. Btw., bcp must be saved/restored since it may change
+    //       due to GC.
+    // assert(java_thread == noreg , "not expecting a precomputed java thread");
+    write_insts_save_bcp();
+#ifdef ASSERT
+    {
+        YuhuLabel L;
+        write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+        write_inst_cbz(x8, L);
+        write_insts_stop("InterpreterMacroAssembler::call_VM_leaf_base:"
+             " last_sp != NULL");
+        pin_label(L);
+    }
+#endif /* ASSERT */
+    // super call
+    write_insts_final_call_VM_base(oop_result, noreg, last_java_sp,
+                                 entry_point, number_of_arguments,
+                                 check_exceptions);
+// interpreter specific
+    write_insts_restore_bcp();
+    write_insts_restore_locals();
     return current_pc();
 }
 
@@ -484,5 +575,403 @@ address YuhuMacroAssembler::write_insts_load_klass(YuhuRegister dst, YuhuRegiste
     } else {
         write_inst("ldr %s, [%s, #%d]", dst, src, oopDesc::klass_offset_in_bytes());
     }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_lock_object(YuhuRegister lock_reg) {
+    assert(lock_reg == x1, "The argument is only for looks. It must be c_rarg1");
+    if (UseHeavyMonitors) {
+        write_insts_call_VM(noreg,
+                CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
+                lock_reg);
+    } else {
+        YuhuLabel done;
+
+        const YuhuRegister swap_reg = x0;
+        const YuhuRegister tmp = x2;
+        const YuhuRegister obj_reg = x3; // Will contain the oop
+
+        const int obj_offset = BasicObjectLock::obj_offset_in_bytes();
+        const int lock_offset = BasicObjectLock::lock_offset_in_bytes ();
+        const int mark_offset = lock_offset +
+                                BasicLock::displaced_header_offset_in_bytes();
+
+        YuhuLabel slow_case;
+
+        // Load object pointer into obj_reg %c_rarg3
+        write_inst("ldr x3, [%s, #%d]", lock_reg, obj_offset);
+
+        if (UseBiasedLocking) {
+            write_insts_biased_locking_enter(lock_reg, obj_reg, swap_reg, tmp, false, done, &slow_case);
+        }
+
+        // Load (object->mark() | 1) into swap_reg
+        write_inst("ldr x8, [x3, #%d]", 0);
+        write_inst("orr x0, x8, #%d", 1);
+
+        // Save (object->mark() | 1) into BasicLock's displaced header
+        write_inst("str x0, [%s, #%d]", lock_reg, mark_offset);
+
+        assert(lock_offset == 0,
+               "displached header must be first word in BasicObjectLock");
+
+        YuhuLabel fail;
+        if (PrintBiasedLockingStatistics) {
+            YuhuLabel fast;
+            write_insts_cmpxchgptr(swap_reg, lock_reg, obj_reg, x8, fast, &fail);
+            pin_label(fast);
+            write_insts_atomic_incw((address)BiasedLocking::fast_path_entry_count_addr(), x9, x8, tmp);
+            write_inst_b(done);
+            pin_label(fail);
+        } else {
+            write_insts_cmpxchgptr(swap_reg, lock_reg, obj_reg, x8, done, /*fallthrough*/NULL);
+        }
+
+        // Test if the oopMark is an obvious stack pointer, i.e.,
+        //  1) (mark & 7) == 0, and
+        //  2) rsp <= mark < mark + os::pagesize()
+        //
+        // These 3 tests can be done by evaluating the following
+        // expression: ((mark - rsp) & (7 - os::vm_page_size())),
+        // assuming both stack pointer and pagesize have their
+        // least significant 3 bits clear.
+        // NOTE: the oopMark is in swap_reg %r0 as the result of cmpxchg
+        // NOTE2: aarch64 does not like to subtract sp from rn so take a
+        // copy
+        write_inst("mov x8, sp");
+        write_inst("sub x0, x0, x8");
+        write_inst("ands x0, x0, #%d", (uint64_t)(7 - os::vm_page_size()));
+
+        // Save the test result, for recursive case, the result is zero
+        write_inst("str x0, [%s, #%d]", lock_reg, mark_offset);
+
+        if (PrintBiasedLockingStatistics) {
+            write_inst_b(ne, slow_case);
+            write_insts_atomic_incw((address)BiasedLocking::fast_path_entry_count_addr(), x9, x8, tmp);
+        }
+        write_inst_b(eq, done);
+
+        pin_label(slow_case);
+
+        // Call the runtime routine for slow case
+        write_insts_call_VM(noreg,
+                CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
+                lock_reg);
+
+        pin_label(done);
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp,
+                                                           address  entry_point, int number_of_arguments, bool check_exceptions) {
+    // determine java_thread register
+    if (java_thread == noreg) {
+        java_thread = x28;
+    }
+
+    // determine last_java_sp register
+    if (last_java_sp == noreg) {
+        last_java_sp = x20;
+    }
+
+    // debugging support
+    assert(number_of_arguments >= 0   , "cannot have negative number of arguments");
+    assert(java_thread == x28, "unexpected register");
+#ifdef ASSERT
+    // TraceBytecodes does not use r12 but saves it over the call, so don't verify
+    // if ((UseCompressedOops || UseCompressedClassPointers) && !TraceBytecodes) verify_heapbase("call_VM_base: heap base corrupted?");
+#endif // ASSERT
+
+    assert(java_thread != oop_result  , "cannot use the same register for java_thread & oop_result");
+    assert(java_thread != last_java_sp, "cannot use the same register for java_thread & last_java_sp");
+
+    // push java thread (becomes first argument of C function)
+
+    write_inst_mov_reg(x0, java_thread);
+
+    // set last Java frame before call
+    assert(last_java_sp != fp, "can't use rfp");
+
+    YuhuLabel l;
+    write_insts_set_last_java_frame(last_java_sp, fp, l, x8);
+
+    // do the call, remove parameters
+    write_insts_final_call_VM_leaf_base(entry_point, number_of_arguments, &l);
+
+    // lr could be poisoned with PAC signature during throw_pending_exception
+    // if it was tail-call optimized by compiler, since lr is not callee-saved
+    // reload it with proper value
+    write_inst_adr(lr, l);
+
+    // reset last Java frame
+    // Only interpreter should have to clear fp
+    write_insts_reset_last_java_frame(true);
+
+    // C++ interp handles this in the interpreter
+    // TODO
+//    check_and_handle_popframe(java_thread);
+//    check_and_handle_earlyret(java_thread);
+
+    if (check_exceptions) {
+        // check for pending exceptions (java_thread is set upon return)
+        write_inst("ldr x8, [%s, #%d]", java_thread, in_bytes(Thread::pending_exception_offset()));
+        YuhuLabel ok;
+        write_inst_cbz(x8, ok);
+        write_insts_mov_imm64(x8, (uint64_t) YuhuStubRoutines::forward_exception_entry());
+        write_inst_br(x8);
+        pin_label(ok);
+    }
+
+    // get oop result if there is one and reset the value in the thread
+    if (oop_result != noreg) {
+        write_insts_get_vm_result(oop_result, java_thread);
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM_leaf_base(address entry_point, int number_of_arguments, YuhuLabel *retaddr) {
+    write_inst("stp x8, x12, [sp, #%d]!", -2 * wordSize);
+
+    // We add 1 to number_of_arguments because the thread in arg0 is
+    // not counted
+    write_insts_mov_imm64(x8, (uint64_t) entry_point);
+    write_inst("blr x8");
+    if (retaddr)
+        pin_label(*retaddr);
+
+    write_inst("ldp x8, x12, [sp], #%d", 2 * wordSize);
+    write_inst("isb");
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_get_vm_result(YuhuRegister oop_result, YuhuRegister java_thread) {
+    write_inst("ldr %s, [%s, #%d]", oop_result, java_thread, in_bytes(JavaThread::vm_result_offset()));
+    write_inst("str %s, [%s, #%d]", xzr, java_thread, in_bytes(JavaThread::vm_result_offset()));
+    write_insts_verify_oop(oop_result, "broken oop in call_VM_base");
+    return current_pc();
+}
+
+int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
+                                         YuhuRegister obj_reg,
+                                         YuhuRegister swap_reg,
+                                         YuhuRegister tmp_reg,
+                                         bool swap_reg_contains_mark,
+                                         YuhuLabel& done,
+                                         YuhuLabel* slow_case,
+                                         BiasedLockingCounters* counters) {
+    assert(UseBiasedLocking, "why call this otherwise?");
+//    assert_different_registers(lock_reg, obj_reg, swap_reg);
+
+    // TODO
+    if (PrintBiasedLockingStatistics && counters == NULL)
+        counters = BiasedLocking::counters();
+
+//    assert_different_registers(lock_reg, obj_reg, swap_reg, tmp_reg, rscratch1, rscratch2, noreg);
+    assert(markOopDesc::age_shift == markOopDesc::lock_bits + markOopDesc::biased_lock_bits, "biased locking makes assumptions about bit layout");
+//    Address mark_addr      (obj_reg, oopDesc::mark_offset_in_bytes());
+//    Address klass_addr     (obj_reg, oopDesc::klass_offset_in_bytes());
+//    Address saved_mark_addr(lock_reg, 0);
+
+    // Biased locking
+    // See whether the lock is currently biased toward our thread and
+    // whether the epoch is still valid
+    // Note that the runtime guarantees sufficient alignment of JavaThread
+    // pointers to allow age to be placed into low bits
+    // First check to see whether biasing is even enabled for this object
+    YuhuLabel cas_label;
+    int null_check_offset = -1;
+    if (!swap_reg_contains_mark) {
+        null_check_offset = offset();
+        write_inst("ldr %s, [%s, #%d]", swap_reg, obj_reg, oopDesc::mark_offset_in_bytes());
+    }
+    write_inst("and %s, %s, #%d", tmp_reg, swap_reg, markOopDesc::biased_lock_mask_in_place);
+    write_inst("cmp %s, #%d", tmp_reg, markOopDesc::biased_lock_pattern);
+    write_inst_b(ne, cas_label);
+    // The bias pattern is present in the object's header. Need to check
+    // whether the bias owner and the epoch are both still current.
+    write_insts_load_prototype_header(tmp_reg, obj_reg);
+    write_inst_regs("orr %s, %s, x28", tmp_reg, tmp_reg);
+    write_inst_regs("eor %s, %s, %s", tmp_reg, swap_reg, tmp_reg);
+    write_inst("and %s, %s, #%d", tmp_reg, tmp_reg, ~((int) markOopDesc::age_mask_in_place));
+
+    if (counters != NULL) {
+        YuhuLabel around;
+        write_inst_cbnz(tmp_reg, around);
+        write_insts_atomic_incw((address)counters->biased_lock_entry_count_addr(), tmp_reg, x8, x9);
+        write_inst_b(done);
+        pin_label(around);
+    } else {
+        write_inst_cbz(tmp_reg, done);
+    }
+
+    YuhuLabel try_revoke_bias;
+    YuhuLabel try_rebias;
+
+    // At this point we know that the header has the bias pattern and
+    // that we are not the bias owner in the current epoch. We need to
+    // figure out more details about the state of the header in order to
+    // know what operations can be legally performed on the object's
+    // header.
+
+    // If the low three bits in the xor result aren't clear, that means
+    // the prototype header is no longer biased and we have to revoke
+    // the bias on this object.
+    write_inst("and x8, %s, #%d", tmp_reg, markOopDesc::biased_lock_mask_in_place);
+    write_inst_cbnz(x8, try_revoke_bias);
+
+    // Biasing is still enabled for this data type. See whether the
+    // epoch of the current bias is still valid, meaning that the epoch
+    // bits of the mark word are equal to the epoch bits of the
+    // prototype header. (Note that the prototype header's epoch bits
+    // only change at a safepoint.) If not, attempt to rebias the object
+    // toward the current thread. Note that we must be absolutely sure
+    // that the current epoch is invalid in order to do this because
+    // otherwise the manipulations it performs on the mark word are
+    // illegal.
+    write_inst("and x8, %s, #%d", tmp_reg, markOopDesc::epoch_mask_in_place);
+    write_inst_cbnz(x8, try_rebias);
+
+    // The epoch of the current bias is still valid but we know nothing
+    // about the owner; it might be set or it might be clear. Try to
+    // acquire the bias of the object using an atomic operation. If this
+    // fails we will go in to the runtime to revoke the object's bias.
+    // Note that we first construct the presumed unbiased header so we
+    // don't accidentally blow away another thread's valid bias.
+    {
+        YuhuLabel here;
+        write_insts_mov_imm64(x8, (markOopDesc::biased_lock_mask_in_place | markOopDesc::age_mask_in_place | markOopDesc::epoch_mask_in_place));
+        write_inst_regs("and %s, %s, x8", swap_reg, swap_reg);
+        write_inst_regs("orr %s, %s, x28", tmp_reg, swap_reg);
+        write_insts_cmpxchgptr(swap_reg, tmp_reg, obj_reg, x8, here, slow_case);
+        // If the biasing toward our thread failed, this means that
+        // another thread succeeded in biasing it toward itself and we
+        // need to revoke that bias. The revocation will occur in the
+        // interpreter runtime in the slow case.
+        pin_label(here);
+        if (counters != NULL) {
+            write_insts_atomic_incw((address)counters->anonymously_biased_lock_entry_count_addr(), tmp_reg, x8, x9);
+        }
+    }
+    write_inst_b(done);
+
+    pin_label(try_rebias);
+    // At this point we know the epoch has expired, meaning that the
+    // current "bias owner", if any, is actually invalid. Under these
+    // circumstances _only_, we are allowed to use the current header's
+    // value as the comparison value when doing the cas to acquire the
+    // bias in the current epoch. In other words, we allow transfer of
+    // the bias from one thread to another directly in this situation.
+    //
+    // FIXME: due to a lack of registers we currently blow away the age
+    // bits in this situation. Should attempt to preserve them.
+    {
+        YuhuLabel here;
+        write_insts_load_prototype_header(tmp_reg, obj_reg);
+        write_inst_regs("orr %s, x28, %s", tmp_reg, tmp_reg);
+        write_inst_regs("orr %s, x28, %s", tmp_reg, tmp_reg);
+        write_insts_cmpxchgptr(swap_reg, tmp_reg, obj_reg, x8, here, slow_case);
+        // If the biasing toward our thread failed, then another thread
+        // succeeded in biasing it toward itself and we need to revoke that
+        // bias. The revocation will occur in the runtime in the slow case.
+        pin_label(here);
+        if (counters != NULL) {
+            write_insts_atomic_incw((address)counters->rebiased_lock_entry_count_addr(), tmp_reg, x8, x9);
+        }
+    }
+    write_inst_b(done);
+
+    pin_label(try_revoke_bias);
+    // The prototype mark in the klass doesn't have the bias bit set any
+    // more, indicating that objects of this data type are not supposed
+    // to be biased any more. We are going to try to reset the mark of
+    // this object to the prototype value and fall through to the
+    // CAS-based locking scheme. Note that if our CAS fails, it means
+    // that another thread raced us for the privilege of revoking the
+    // bias of this particular object, so it's okay to continue in the
+    // normal locking code.
+    //
+    // FIXME: due to a lack of registers we currently blow away the age
+    // bits in this situation. Should attempt to preserve them.
+    {
+        YuhuLabel here, nope;
+        write_insts_load_prototype_header(tmp_reg, obj_reg);
+        write_insts_cmpxchgptr(swap_reg, tmp_reg, obj_reg, x8, here, &nope);
+        pin_label(here);
+
+        // Fall through to the normal CAS-based lock, because no matter what
+        // the result of the above CAS, some thread must have succeeded in
+        // removing the bias bit from the object's header.
+        if (counters != NULL) {
+            write_insts_atomic_incw((address)counters->revoked_lock_entry_count_addr(), tmp_reg, x8, x9);
+        }
+        pin_label(done);
+    }
+
+    pin_label(cas_label);
+
+    return null_check_offset;
+}
+
+address YuhuMacroAssembler::write_insts_load_prototype_header(YuhuRegister dst, YuhuRegister src) {
+    write_insts_load_klass(dst, src);
+    write_inst("ldr %s, [%s, #%d]", dst, dst, in_bytes(Klass::prototype_header_offset()));
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_cmpxchgptr(YuhuRegister oldv, YuhuRegister newv, YuhuRegister addr, YuhuRegister tmp,
+                                YuhuLabel &succeed, YuhuLabel *fail) {
+    // oldv holds comparison value
+    // newv holds value to write in exchange
+    // addr identifies memory word to compare against/update
+    if (UseLSE) {
+        write_inst_mov_reg(tmp, oldv);
+        write_inst_regs("casal %s, %s, [%s]", oldv, newv, addr);
+        write_inst_regs("cmp %s, %s", tmp, oldv);
+        write_inst_b(eq, succeed);
+        write_inst("dmb ish");
+    } else {
+        YuhuLabel retry_load, nope;
+        if ((VM_Version::cpu_cpuFeatures() & VM_Version::CPU_STXR_PREFETCH))
+            write_inst("prfm PSTL1STRM, [%s]", addr);
+        pin_label(retry_load);
+        // flush and load exclusive from the memory location
+        // and fail if it is not what we expect
+        write_inst_regs("ldaxr %s, [%s]", tmp, addr);
+        write_inst_regs("cmp %s, %s", tmp, oldv);
+        write_inst_b(ne, nope);
+        // if we store+flush with no intervening write tmp wil be zero
+        write_inst_regs("stlxr %s, %s, [%s]", w_reg(tmp), newv, addr);
+        write_inst_cbz(w_reg(tmp), succeed);
+        // retry so we only ever return after a load fails to compare
+        // ensures we don't return a stale value after a failed write.
+        write_inst_b(retry_load);
+        // if the memory word differs we return it in oldv and signal a fail
+        pin_label(nope);
+        write_inst("dmb ish");
+        write_inst_mov_reg(oldv, tmp);
+    }
+    if (fail)
+        write_inst_b(*fail);
+
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_atomic_incw(YuhuRegister counter_addr, YuhuRegister tmp, YuhuRegister tmp2) {
+    if (UseLSE) {
+        write_insts_mov_imm32(tmp, 1);
+        write_inst_regs("ldadd %s, %s, [%s]", w_reg(tmp), w_reg(xzr), counter_addr);
+        return current_pc();
+    }
+    YuhuLabel retry_load;
+    if ((VM_Version::cpu_cpuFeatures() & VM_Version::CPU_STXR_PREFETCH))
+        write_inst("prfm PSTL1STRM, [%s]", counter_addr);
+    pin_label(retry_load);
+    // flush and load exclusive from the memory location
+    write_inst_regs("ldxr %s, [%s]", w_reg(tmp), counter_addr);
+    write_inst_regs("add %s, %s, #1", w_reg(tmp), w_reg(tmp));
+    // if we store+flush with no intervening write tmp wil be zero
+    write_inst_regs("stxr %s, %s, [%s]", w_reg(tmp2), w_reg(tmp), counter_addr);
+    write_inst_cbnz(w_reg(tmp2), retry_load);
     return current_pc();
 }
