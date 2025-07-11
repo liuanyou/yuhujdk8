@@ -200,27 +200,27 @@ address YuhuInterpreterGenerator::generate_method_entry(
         case YuhuInterpreter::zerolocals_synchronized: synchronized = true;                                                        break;
         case YuhuInterpreter::native                 : entry_point = ((YuhuInterpreterGenerator*) this)->generate_native_entry(false); break;
         case YuhuInterpreter::native_synchronized    : entry_point = ((YuhuInterpreterGenerator*) this)->generate_native_entry(true);  break;
-//        case YuhuInterpreter::empty                  : entry_point = ((YuhuInterpreterGenerator*) this)->generate_empty_entry();       break;
-//        case YuhuInterpreter::accessor               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_accessor_entry();    break;
-//        case YuhuInterpreter::abstract               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_abstract_entry();    break;
+        case YuhuInterpreter::empty                  : entry_point = ((YuhuInterpreterGenerator*) this)->generate_empty_entry();       break;
+        case YuhuInterpreter::accessor               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_accessor_entry();    break;
+        case YuhuInterpreter::abstract               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_abstract_entry();    break;
 //
-//        case YuhuInterpreter::java_lang_math_sin     : // fall thru
-//        case YuhuInterpreter::java_lang_math_cos     : // fall thru
-//        case YuhuInterpreter::java_lang_math_tan     : // fall thru
-//        case YuhuInterpreter::java_lang_math_abs     : // fall thru
-//        case YuhuInterpreter::java_lang_math_log     : // fall thru
-//        case YuhuInterpreter::java_lang_math_log10   : // fall thru
-//        case YuhuInterpreter::java_lang_math_sqrt    : // fall thru
-//        case YuhuInterpreter::java_lang_math_pow     : // fall thru
-//        case YuhuInterpreter::java_lang_math_exp     : entry_point = ((YuhuInterpreterGenerator*) this)->generate_math_entry(kind);    break;
-//        case YuhuInterpreter::java_lang_ref_reference_get
-//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_Reference_get_entry(); break;
-//        case YuhuInterpreter::java_util_zip_CRC32_update
-//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_update_entry();  break;
-//        case YuhuInterpreter::java_util_zip_CRC32_updateBytes
-//            : // fall thru
-//        case YuhuInterpreter::java_util_zip_CRC32_updateByteBuffer
-//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_updateBytes_entry(kind); break;
+        case YuhuInterpreter::java_lang_math_sin     : // fall thru
+        case YuhuInterpreter::java_lang_math_cos     : // fall thru
+        case YuhuInterpreter::java_lang_math_tan     : // fall thru
+        case YuhuInterpreter::java_lang_math_abs     : // fall thru
+        case YuhuInterpreter::java_lang_math_log     : // fall thru
+        case YuhuInterpreter::java_lang_math_log10   : // fall thru
+        case YuhuInterpreter::java_lang_math_sqrt    : // fall thru
+        case YuhuInterpreter::java_lang_math_pow     : // fall thru
+        case YuhuInterpreter::java_lang_math_exp     : entry_point = ((YuhuInterpreterGenerator*) this)->generate_math_entry(kind);    break;
+        case YuhuInterpreter::java_lang_ref_reference_get
+            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_Reference_get_entry(); break;
+        case YuhuInterpreter::java_util_zip_CRC32_update
+            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_update_entry();  break;
+        case YuhuInterpreter::java_util_zip_CRC32_updateBytes
+            : // fall thru
+        case YuhuInterpreter::java_util_zip_CRC32_updateByteBuffer
+            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_updateBytes_entry(kind); break;
         default                                  : __ write_insts_stop("should not reach here");                                                       break;
     }
 
@@ -408,7 +408,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // r1: Method*
     // rscratch1: sender sp
 
-    address entry_point = __ pc();
+    address entry_point = __ current_pc();
 
 //    const Address constMethod       (rmethod, Method::const_offset());
 //    const Address access_flags      (rmethod, Method::access_flags_offset());
@@ -854,6 +854,349 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 //    }
 
     return entry_point;
+}
+
+address YuhuInterpreterGenerator::generate_empty_entry(void) {
+    // rmethod: Method*
+    // r13: sender sp must set sp to this value on return
+
+    if (!UseFastEmptyMethods) {
+        return NULL;
+    }
+
+    address entry_point = __ current_pc();
+
+    // If we need a safepoint check, generate full interpreter entry.
+    YuhuLabel slow_path;
+    {
+        uint64_t offset;
+        assert(SafepointSynchronize::_not_synchronized == 0,
+               "SafepointSynchronize::_not_synchronized");
+        __ write_insts_adrp(YuhuMacroAssembler::x9, SafepointSynchronize::address_of_state(), offset);
+        __ write_inst("ldr w9, [x9, #%d]", offset);
+        __ write_inst_cbnz(YuhuMacroAssembler::x9, slow_path);
+    }
+
+    // do nothing for empty methods (do not even increment invocation counter)
+    // Code: _return
+    // _return
+    // return w/o popping parameters
+    __ write_inst_mov_reg(YuhuMacroAssembler::sp, YuhuMacroAssembler::x13); // Restore caller's SP
+    __ write_inst_br(YuhuMacroAssembler::lr);
+
+    __ pin_label(slow_path);
+    (void) generate_normal_entry(false);
+    return entry_point;
+}
+
+address YuhuInterpreterGenerator::generate_accessor_entry(void) {
+    return NULL;
+}
+
+address YuhuInterpreterGenerator::generate_abstract_entry(void) {
+    // rmethod: Method*
+    // r13: sender SP
+
+    address entry_point = __ current_pc();
+
+    // abstract method entry
+
+    //  pop return address, reset last_sp to NULL
+    __ write_insts_empty_expression_stack();
+    __ write_insts_restore_bcp();      // bcp must be correct for exception handler   (was destroyed)
+    __ write_insts_restore_locals();   // make sure locals pointer is correct as well (was destroyed)
+
+    // throw exception
+    __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address,
+                                       InterpreterRuntime::throw_AbstractMethodError));
+    // the call_VM checks for exception, so we should never return here.
+    __ write_insts_stop("should not reach here");
+
+    return entry_point;
+}
+
+address YuhuInterpreterGenerator::generate_math_entry(YuhuInterpreter::MethodKind kind) {
+    // rmethod: Method*
+    // r13: sender sp
+    // esp: args
+
+    if (!InlineIntrinsics) return NULL; // Generate a vanilla entry
+
+    // These don't need a safepoint check because they aren't virtually
+    // callable. We won't enter these intrinsics from compiled code.
+    // If in the future we added an intrinsic which was virtually callable
+    // we'd have to worry about how to safepoint so that this code is used.
+
+    // mathematical functions inlined by compiler
+    // (interpreter must provide identical implementation
+    // in order to avoid monotonicity bugs when switching
+    // from interpreter to compiler in the middle of some
+    // computation)
+    //
+    // stack:
+    //        [ arg ] <-- esp
+    //        [ arg ]
+    // retaddr in lr
+
+    address entry_point = NULL;
+    YuhuMacroAssembler::YuhuRegister continuation = YuhuMacroAssembler::lr;
+    switch (kind) {
+        case YuhuInterpreter::java_lang_math_abs:
+            entry_point = __ current_pc();
+            __ write_inst("ldr d0, [x20]");
+            __ write_inst("fabs d0, d0");
+            __ write_inst("mov sp, x13"); // Restore caller's SP
+            break;
+        case YuhuInterpreter::java_lang_math_sqrt:
+            entry_point = __ current_pc();
+            __ write_inst("ldr d0, [x20]");
+            __ write_inst("fsqrt d0, d0");
+            __ write_inst("mov sp, x13");
+            break;
+        case YuhuInterpreter::java_lang_math_sin :
+        case YuhuInterpreter::java_lang_math_cos :
+        case YuhuInterpreter::java_lang_math_tan :
+        case YuhuInterpreter::java_lang_math_log :
+        case YuhuInterpreter::java_lang_math_log10 :
+        case YuhuInterpreter::java_lang_math_exp :
+            entry_point = __ current_pc();
+            __ write_inst("ldr d0, [x20]");
+            __ write_inst("mov sp, x13");
+            __ write_inst("mov x19, lr");
+            continuation = YuhuMacroAssembler::x19;  // The first callee-saved register
+            generate_transcendental_entry(kind, 1);
+            break;
+        case YuhuInterpreter::java_lang_math_pow :
+            entry_point = __ current_pc();
+            __ write_inst("mov x19, lr");
+            continuation = YuhuMacroAssembler::x19;
+            __ write_inst("ldr d0, [x20, #%d]", 2 * Interpreter::stackElementSize);
+            __ write_inst("ldr d1, [x20]");
+            __ write_inst("mov sp, x13");
+            generate_transcendental_entry(kind, 2);
+            break;
+        default:
+            ;
+    }
+    if (entry_point) {
+        __ write_inst_br(continuation);
+    }
+
+    return entry_point;
+}
+
+void YuhuInterpreterGenerator::generate_transcendental_entry(YuhuInterpreter::MethodKind kind, int fpargs) {
+    address fn;
+    switch (kind) {
+        case YuhuInterpreter::java_lang_math_sin :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dsin);
+            break;
+        case YuhuInterpreter::java_lang_math_cos :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dcos);
+            break;
+        case YuhuInterpreter::java_lang_math_tan :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dtan);
+            break;
+        case YuhuInterpreter::java_lang_math_log :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dlog);
+            break;
+        case YuhuInterpreter::java_lang_math_log10 :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dlog10);
+            break;
+        case YuhuInterpreter::java_lang_math_exp :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dexp);
+            break;
+        case YuhuInterpreter::java_lang_math_pow :
+            fn = CAST_FROM_FN_PTR(address, SharedRuntime::dpow);
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t) fn);
+    __ write_inst_blr(YuhuMacroAssembler::x8);
+}
+
+address YuhuInterpreterGenerator::generate_Reference_get_entry(void) {
+#if INCLUDE_ALL_GCS
+    // Code: _aload_0, _getfield, _areturn
+    // parameter size = 1
+    //
+    // The code that gets generated by this routine is split into 2 parts:
+    //    1. The "intrinsified" code for G1 (or any SATB based GC),
+    //    2. The slow path - which is an expansion of the regular method entry.
+    //
+    // Notes:-
+    // * In the G1 code we do not check whether we need to block for
+    //   a safepoint. If G1 is enabled then we must execute the specialized
+    //   code for Reference.get (except when the Reference object is null)
+    //   so that we can log the value in the referent field with an SATB
+    //   update buffer.
+    //   If the code for the getfield template is modified so that the
+    //   G1 pre-barrier code is executed when the current method is
+    //   Reference.get() then going through the normal method entry
+    //   will be fine.
+    // * The G1 code can, however, check the receiver object (the instance
+    //   of java.lang.Reference) and jump to the slow path if null. If the
+    //   Reference object is null then we obviously cannot fetch the referent
+    //   and so we don't need to call the G1 pre-barrier. Thus we can use the
+    //   regular method entry code to generate the NPE.
+    //
+    // This code is based on generate_accessor_entry.
+    //
+    // rmethod: Method*
+    // r13: senderSP must preserve for slow path, set SP to it on fast path
+
+    address entry = __ current_pc();
+
+    const int referent_offset = java_lang_ref_Reference::referent_offset;
+    guarantee(referent_offset > 0, "referent offset not initialized");
+
+    if (UseG1GC) {
+        YuhuLabel slow_path;
+        const YuhuMacroAssembler::YuhuRegister local_0 = YuhuMacroAssembler::x0;
+        // Check if local 0 != NULL
+        // If the receiver is null then it is OK to jump to the slow path.
+        __ write_inst("ldr %s, [x20, #%d]", local_0, 0);
+        __ write_inst_cbz(local_0, slow_path);
+
+        // Load the value of the referent field.
+//        const Address field_address(local_0, referent_offset);
+        __ write_insts_load_heap_oop(local_0, local_0, referent_offset);
+
+        __ write_inst("mov x19, x13"); // Move senderSP to a callee-saved register
+        // Generate the G1 pre-barrier code to log the value of
+        // the referent field in an SATB buffer.
+        __ write_insts_enter(); // g1_write may call runtime
+        __ write_insts_g1_write_barrier_pre(YuhuMacroAssembler::noreg /* obj */,
+                                local_0 /* pre_val */,
+                                YuhuMacroAssembler::x28 /* thread */,
+                                YuhuMacroAssembler::x9 /* tmp */,
+                                true /* tosca_live */,
+                                true /* expand_call */);
+        __ write_insts_leave();
+        // areturn
+        __ write_inst("and sp, x19, #-16"); // done with stack
+        __ write_inst("ret");
+
+        // generate a vanilla interpreter entry as the slow path
+        __ pin_label(slow_path);
+        (void) generate_normal_entry(false);
+
+        return entry;
+    }
+#endif // INCLUDE_ALL_GCS
+
+    // If G1 is not enabled then attempt to go through the accessor entry point
+    // Reference.get is an accessor
+    return generate_accessor_entry();
+}
+
+address YuhuInterpreterGenerator::generate_CRC32_update_entry() {
+    if (UseCRC32Intrinsics) {
+        address entry = __ current_pc();
+
+        // rmethod: Method*
+        // r13: senderSP must preserved for slow path
+        // esp: args
+
+        YuhuLabel slow_path;
+        // If we need a safepoint check, generate full interpreter entry.
+//        ExternalAddress state(SafepointSynchronize::address_of_state());
+        uint64_t offset;
+        __ write_insts_adrp(YuhuMacroAssembler::x8, SafepointSynchronize::address_of_state(), offset);
+        __ write_inst("ldr x8, [x8, #%d]", offset);
+        assert(SafepointSynchronize::_not_synchronized == 0, "rewrite this code");
+        __ write_inst_cbnz(YuhuMacroAssembler::x8, slow_path);
+
+        // We don't generate local frame and don't align stack because
+        // we call stub code and there is no safepoint on this path.
+
+        // Load parameters
+        const YuhuMacroAssembler::YuhuRegister crc = YuhuMacroAssembler::x0;  // crc
+        const YuhuMacroAssembler::YuhuRegister val = YuhuMacroAssembler::x1;  // source java byte value
+        const YuhuMacroAssembler::YuhuRegister tbl = YuhuMacroAssembler::x2;  // scratch
+
+        // Arguments are reversed on java expression stack
+        __ write_inst("ldr %s, [x20, #%d]", __ w_reg(val), 0); // byte value
+        __ write_inst("ldr %s, [x20, #%d]", __ w_reg(crc), wordSize); // Initial CRC
+
+        __ write_insts_adrp(tbl, StubRoutines::crc_table_addr(), offset);
+        __ write_inst("add %s, %s, #%d", tbl, tbl, offset);
+
+        __ write_inst_regs("orn %s, %s, %s", __ w_reg(crc), __ w_reg(YuhuMacroAssembler::xzr), __ w_reg(crc)); // ~crc
+
+        __ write_insts_update_byte_crc32(crc, val, tbl); // ~crc
+
+        // result in c_rarg0
+
+        __ write_inst("and sp, x13, #-16");
+        __ write_inst("ret");
+
+        // generate a vanilla native entry as the slow path
+        __ pin_label(slow_path);
+
+        (void) generate_native_entry(false);
+
+        return entry;
+    }
+    return generate_native_entry(false);
+}
+
+address YuhuInterpreterGenerator::generate_CRC32_updateBytes_entry(YuhuInterpreter::MethodKind kind) {
+    if (UseCRC32Intrinsics) {
+        address entry = __ current_pc();
+
+        // rmethod,: Method*
+        // r13: senderSP must preserved for slow path
+
+        YuhuLabel slow_path;
+        // If we need a safepoint check, generate full interpreter entry.
+//        ExternalAddress state(SafepointSynchronize::address_of_state());
+        uint64_t offset;
+        __ write_insts_adrp(YuhuMacroAssembler::x8, SafepointSynchronize::address_of_state(), offset);
+        __ write_inst("ldr w8, [x8, #%d]", offset);
+        assert(SafepointSynchronize::_not_synchronized == 0, "rewrite this code");
+        __ write_inst_cbnz(YuhuMacroAssembler::x8, slow_path);
+
+        // We don't generate local frame and don't align stack because
+        // we call stub code and there is no safepoint on this path.
+
+        // Load parameters
+        const YuhuMacroAssembler::YuhuRegister crc = YuhuMacroAssembler::x0;  // crc
+        const YuhuMacroAssembler::YuhuRegister buf = YuhuMacroAssembler::x1;  // source java byte array address
+        const YuhuMacroAssembler::YuhuRegister len = YuhuMacroAssembler::x2;  // length
+        const YuhuMacroAssembler::YuhuRegister off = len;      // offset (never overlaps with 'len')
+
+        // Arguments are reversed on java expression stack
+        // Calculate address of start element
+        if (kind == YuhuInterpreter::java_util_zip_CRC32_updateByteBuffer) {
+            __ write_inst("ldr %s, [x20, #%d]", buf, 2 * wordSize); // long buf
+            __ write_inst("ldr %s, [x20, #%d]", __ w_reg(off), wordSize); // offset
+            __ write_inst_regs("add %s, %s, %s", buf, buf, off); // + offset
+            __ write_inst("ldr %s, [x20, #%d]", __ w_reg(crc), 4 * wordSize); // Initial CRC
+        } else {
+            __ write_inst("ldr %s, [x20, #%d]", buf, 2 * wordSize); // byte[] array
+            __ write_inst("add %s, %s, #%d", buf, buf, arrayOopDesc::base_offset_in_bytes(T_BYTE)); // + header size
+            __ write_inst("ldr %s, [x20, #%d]", __ w_reg(off), wordSize); // offset
+            __ write_inst("add %s, %s, %s", buf, buf, off); // + offset
+            __ write_inst("ldr %s, [x20, #%d]", __ w_reg(crc), 3 * wordSize); // Initial CRC
+        }
+        // Can now load 'len' since we're finished with 'off'
+        __ write_inst("ldr %s, [x20, #%d]", __ w_reg(len), 0x0); // Length
+
+        __ write_inst("and sp, x13, #-16"); // Restore the caller's SP
+
+        // We are frameless so we can just jump to the stub.
+        __ write_inst_b(CAST_FROM_FN_PTR(address, StubRoutines::updateBytesCRC32()));
+
+        // generate a vanilla native entry as the slow path
+        __ pin_label(slow_path);
+
+        (void) generate_native_entry(false);
+
+        return entry;
+    }
+    return generate_native_entry(false);
 }
 
 void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {

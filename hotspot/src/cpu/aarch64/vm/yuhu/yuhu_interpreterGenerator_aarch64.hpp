@@ -13,14 +13,14 @@ private:
 
     address generate_normal_entry(bool synchronized);
     address generate_native_entry(bool synchronized);
-//    address generate_abstract_entry(void);
-//    address generate_math_entry(YuhuInterpreter::MethodKind kind);
-//    void generate_transcendental_entry(YuhuInterpreter::MethodKind kind, int fpargs);
-//    address generate_empty_entry(void);
-//    address generate_accessor_entry(void);
-//    address generate_Reference_get_entry();
-//    address generate_CRC32_update_entry();
-//    address generate_CRC32_updateBytes_entry(YuhuInterpreter::MethodKind kind);
+    address generate_abstract_entry(void);
+    address generate_math_entry(YuhuInterpreter::MethodKind kind);
+    void generate_transcendental_entry(YuhuInterpreter::MethodKind kind, int fpargs);
+    address generate_empty_entry(void);
+    address generate_accessor_entry(void);
+    address generate_Reference_get_entry();
+    address generate_CRC32_update_entry();
+    address generate_CRC32_updateBytes_entry(YuhuInterpreter::MethodKind kind);
     void lock_method(void);
     void generate_stack_overflow_check(void);
 
