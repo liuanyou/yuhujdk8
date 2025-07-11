@@ -80,11 +80,29 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, unsigned int imm32) {
+    char buffer[50];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), imm32);
+#pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, unsigned int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
     snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), imm32);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, unsigned int imm32) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(reg3), imm32);
     #pragma clang diagnostic pop
     return write_inst(machine_code(buffer));
 }
@@ -125,6 +143,12 @@ address YuhuMacroAssembler::write_inst_mov_reg(YuhuRegister reg1, YuhuRegister r
 address YuhuMacroAssembler::write_inst_br(YuhuRegister reg) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "br %s", reg_name(reg));
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_blr(YuhuRegister reg) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "blr %s", reg_name(reg));
     return write_inst(machine_code(buffer));
 }
 
@@ -192,6 +216,46 @@ address YuhuMacroAssembler::write_inst_cbnz(YuhuRegister reg, YuhuLabel &label) 
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_inst_tbz(YuhuRegister reg, int bitpos, address target) {
+    long offset = target - current_pc();
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), "tbz %s, #%d, #%d", reg_name(reg), bitpos, offset);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_tbz(YuhuRegister reg, int bitpos, YuhuLabel &label) {
+    if (label.is_bound()) {
+        write_inst_tbz(reg, bitpos, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_tbz(reg, bitpos, current_pc());
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_tbnz(YuhuRegister reg, int bitpos, address target) {
+    long offset = target - current_pc();
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), "tbnz %s, #%d, #%d", reg_name(reg), bitpos, offset);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_tbnz(YuhuRegister reg, int bitpos, YuhuLabel &label) {
+    if (label.is_bound()) {
+        write_inst_tbnz(reg, bitpos, target(label, current_pc()));
+    } else {
+        label.add_patch_at(code(), locator());
+        write_inst_tbnz(reg, bitpos, current_pc());
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_inst_adrp(YuhuRegister reg, address target) {
     // 确保目标地址页面对齐
     uint64_t target_page = ((uint64_t)target >> 12) << 12;
@@ -221,6 +285,46 @@ void YuhuMacroAssembler::pin_label(YuhuLabel& label) {
     }
     label.bind_loc(locator());
     label.patch_instructions(this);
+}
+
+address YuhuMacroAssembler::write_inst_pop_ptr(YuhuRegister r) {
+    return write_inst("ldr %s, [x20], #%d", r, wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_pop_i(YuhuRegister r) {
+    return write_inst("ldr %s, [x20], #%d", w_reg(r), wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_pop_l(YuhuRegister r) {
+    return write_inst("ldr %s, [x20], #%d", r, 2 * Interpreter::stackElementSize);
+}
+
+address YuhuMacroAssembler::write_inst_push_ptr(YuhuRegister r) {
+    return write_inst("str %s, [x20, #%d]!", r, -wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_push_i(YuhuRegister r) {
+    return write_inst("str %s, [x20, #%d]!", r, -wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_push_l(YuhuRegister r) {
+    return write_inst("str %s, [x20, #%d]!", r, 2 * -wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_pop_f(YuhuFloatRegister r) {
+    return write_inst("ldr %s, [x20], #%d", r, wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_pop_d(YuhuFloatRegister r) {
+    return write_inst("ldr d0, [x20], #%d", 2 * Interpreter::stackElementSize);
+}
+
+address YuhuMacroAssembler::write_inst_push_f(YuhuFloatRegister r) {
+    return write_inst("str s0, [x20, #%d]!", r, -wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_push_d(YuhuFloatRegister r) {
+    return write_inst("str d0, [x20, #%d]!", r, 2 * -wordSize);
 }
 
 address YuhuMacroAssembler::write_insts_enter() {
@@ -274,6 +378,26 @@ address YuhuMacroAssembler::write_insts_pushrange(YuhuRegister start, YuhuRegist
             write_inst("str %s, [%s, #%d]", (YuhuRegister) (start+1), stack, (i - start) * wordSize);
         }
     }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_popa() {
+    write_inst("ldp x2, x3, [sp, #0x10]");
+    write_inst("ldp x4, x5, [sp, #0x20]");
+    write_inst("ldp x6, x7, [sp, #0x30]");
+    write_inst("ldp x8, x9, [sp, #0x40]");
+    write_inst("ldp x10, x11, [sp, #0x50]");
+    write_inst("ldp x12, x13, [sp, #0x60]");
+    write_inst("ldp x14, x15, [sp, #0x70]");
+    write_inst("ldp x16, x17, [sp, #0x80]");
+    write_inst("ldp x18, x19, [sp, #0x90]");
+    write_inst("ldp x20, x21, [sp, #0xa0]");
+    write_inst("ldp x22, x23, [sp, #0xb0]");
+    write_inst("ldp x24, x25, [sp, #0xc0]");
+    write_inst("ldp x26, x27, [sp, #0xd0]");
+    write_inst("ldp x28, x29, [sp, #0xe0]");
+    write_inst("ldp x30, xzr, [sp, #0xf0]");
+    write_inst("ldp x0, x1, [sp], #0x100");
     return current_pc();
 }
 
@@ -463,19 +587,6 @@ address YuhuMacroAssembler::write_insts_set_last_java_frame(YuhuRegister last_ja
     return current_pc();
 }
 
-address YuhuMacroAssembler::write_insts_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, bool check_exceptions) {
-    if (arg_1 != x1) {
-        write_inst_mov_reg(x1, arg_1);
-    }
-    write_insts_call_VM_helper(oop_result, entry_point, 1, check_exceptions);
-    return current_pc();
-}
-
-address YuhuMacroAssembler::write_insts_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions) {
-    write_insts_call_VM_base(oop_result, noreg, noreg, entry_point, number_of_arguments, check_exceptions);
-    return current_pc();
-}
-
 address YuhuMacroAssembler::write_insts_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp, address entry_point, int number_of_arguments, bool check_exceptions) {
     // interpreter specific
     //
@@ -502,17 +613,6 @@ address YuhuMacroAssembler::write_insts_call_VM_base(YuhuRegister oop_result, Yu
 // interpreter specific
     write_insts_restore_bcp();
     write_insts_restore_locals();
-    return current_pc();
-}
-
-address YuhuMacroAssembler::write_insts_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1) {
-    if (arg_0 != x0) {
-        write_inst_mov_reg(x0, arg_0);
-    }
-    if (arg_1 != x1) {
-        write_inst_mov_reg(x1, arg_1);
-    }
-    write_insts_call_VM_leaf_base(entry_point, 2);
     return current_pc();
 }
 
@@ -567,6 +667,13 @@ address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, const char*
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, TosState state) {
+    if (state == atos) {
+        write_insts_verify_oop(reg, "broken oop");
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_load_klass(YuhuRegister dst, YuhuRegister src) {
     if (UseCompressedClassPointers) {
         write_insts_stop("unimplemented");
@@ -581,7 +688,7 @@ address YuhuMacroAssembler::write_insts_load_klass(YuhuRegister dst, YuhuRegiste
 address YuhuMacroAssembler::write_insts_lock_object(YuhuRegister lock_reg) {
     assert(lock_reg == x1, "The argument is only for looks. It must be c_rarg1");
     if (UseHeavyMonitors) {
-        write_insts_call_VM(noreg,
+        write_insts_final_call_VM(noreg,
                 CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
                 lock_reg);
     } else {
@@ -654,12 +761,82 @@ address YuhuMacroAssembler::write_insts_lock_object(YuhuRegister lock_reg) {
         pin_label(slow_case);
 
         // Call the runtime routine for slow case
-        write_insts_call_VM(noreg,
+        write_insts_final_call_VM(noreg,
                 CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
                 lock_reg);
 
         pin_label(done);
     }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_unlock_object(YuhuRegister lock_reg)
+{
+    assert(lock_reg == x1, "The argument is only for looks. It must be rarg1");
+
+    if (UseHeavyMonitors) {
+        write_insts_final_call_VM(noreg,
+                CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
+                lock_reg);
+    } else {
+        YuhuLabel done;
+
+        const YuhuRegister swap_reg   = x0;
+        const YuhuRegister header_reg = x2;  // Will contain the old oopMark
+        const YuhuRegister obj_reg    = x3;  // Will contain the oop
+
+        write_insts_save_bcp(); // Save in case of exception
+
+        // Convert from BasicObjectLock structure to object and BasicLock
+        // structure Store the BasicLock address into %r0
+        write_inst("ldr %s, [%s, #%d]", swap_reg, lock_reg, BasicObjectLock::lock_offset_in_bytes()); // lea(swap_reg, Address(lock_reg, BasicObjectLock::lock_offset_in_bytes()));
+
+        // Load oop into obj_reg(%c_rarg3)
+        write_inst("ldr %s, [%s, #%d]", obj_reg, lock_reg, BasicObjectLock::obj_offset_in_bytes());
+
+        // Free entry
+        write_inst("str xzr, [%s, #%d]", lock_reg, BasicObjectLock::obj_offset_in_bytes());
+
+        if (UseBiasedLocking) {
+            write_insts_biased_locking_exit(obj_reg, header_reg, done);
+        }
+
+        // Load the old header from BasicLock structure
+        write_inst("ldr %s, [%s, #%d]", header_reg, swap_reg, BasicLock::displaced_header_offset_in_bytes());
+
+        // Test for recursion
+        write_inst_cbz(header_reg, done);
+
+        // Atomic swap back the old header
+        write_insts_cmpxchgptr(swap_reg, header_reg, obj_reg, x8, done, /*fallthrough*/NULL);
+
+        // Call the runtime routine for slow case.
+        write_inst("str %s, [%s, #%d]", obj_reg, lock_reg, BasicObjectLock::obj_offset_in_bytes()); // restore obj
+        write_insts_final_call_VM(noreg,
+                CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
+                lock_reg);
+
+        pin_label(done);
+
+        write_insts_restore_bcp();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM(YuhuRegister oop_result, address entry_point, bool check_exceptions) {
+    return write_insts_final_call_VM_helper(oop_result, entry_point, 0, check_exceptions);
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, bool check_exceptions) {
+    if (arg_1 != x1) {
+        write_inst_mov_reg(x1, arg_1);
+    }
+    write_insts_final_call_VM_helper(oop_result, entry_point, 1, check_exceptions);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions) {
+    write_insts_call_VM_base(oop_result, noreg, noreg, entry_point, number_of_arguments, check_exceptions);
     return current_pc();
 }
 
@@ -742,6 +919,17 @@ address YuhuMacroAssembler::write_insts_final_call_VM_leaf_base(address entry_po
 
     write_inst("ldp x8, x12, [sp], #%d", 2 * wordSize);
     write_inst("isb");
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1) {
+    if (arg_0 != x0) {
+        write_inst_mov_reg(x0, arg_0);
+    }
+    if (arg_1 != x1) {
+        write_inst_mov_reg(x1, arg_1);
+    }
+    write_insts_call_VM_leaf_base(entry_point, 2);
     return current_pc();
 }
 
@@ -913,6 +1101,21 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
     return null_check_offset;
 }
 
+void YuhuMacroAssembler::write_insts_biased_locking_exit(YuhuRegister obj_reg, YuhuRegister temp_reg, YuhuLabel& done) {
+    assert(UseBiasedLocking, "why call this otherwise?");
+
+    // Check for biased locking unlock case, which is a no-op
+    // Note: we do not have to check the thread ID for two reasons.
+    // First, the interpreter checks for IllegalMonitorStateException at
+    // a higher level. Second, if the bias was revoked while we held the
+    // lock, the object could not be rebiased toward another thread, so
+    // the bias bit would be clear.
+    write_inst("ldr %s, [%s, #%d]", temp_reg, obj_reg, oopDesc::mark_offset_in_bytes());
+    write_inst("and %s, %s, #%d", temp_reg, temp_reg, markOopDesc::biased_lock_mask_in_place);
+    write_inst("cmp %s, #%d", temp_reg, markOopDesc::biased_lock_pattern);
+    write_inst_b(eq, done);
+}
+
 address YuhuMacroAssembler::write_insts_load_prototype_header(YuhuRegister dst, YuhuRegister src) {
     write_insts_load_klass(dst, src);
     write_inst("ldr %s, [%s, #%d]", dst, dst, in_bytes(Klass::prototype_header_offset()));
@@ -973,5 +1176,213 @@ address YuhuMacroAssembler::write_insts_atomic_incw(YuhuRegister counter_addr, Y
     // if we store+flush with no intervening write tmp wil be zero
     write_inst_regs("stxr %s, %s, [%s]", w_reg(tmp2), w_reg(tmp), counter_addr);
     write_inst_cbnz(w_reg(tmp2), retry_load);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_pop(TosState state) {
+    switch (state) {
+        case atos: write_inst_pop_ptr();                 break;
+        case btos:
+//  case ztos:
+        case ctos:
+        case stos:
+        case itos: write_inst_pop_i();                   break;
+        case ltos: write_inst_pop_l();                   break;
+        case ftos: write_inst_pop_f();                   break;
+        case dtos: write_inst_pop_d();                   break;
+        case vtos: /* nothing to do */        break;
+        default:   ShouldNotReachHere();
+    }
+    write_insts_verify_oop(x0, state);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_push(TosState state) {
+    write_insts_verify_oop(x0, state);
+    switch (state) {
+        case atos: write_inst_push_ptr();                break;
+        case btos:
+//  case ztos:
+        case ctos:
+        case stos:
+        case itos: write_inst_push_i();                  break;
+        case ltos: write_inst_push_l();                  break;
+        case ftos: write_inst_push_f();                  break;
+        case dtos: write_inst_push_d();                  break;
+        case vtos: /* nothing to do */        break;
+        default  : ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+int YuhuMacroAssembler::write_insts_push(unsigned int bitset, YuhuRegister stack) {
+    int words_pushed = 0;
+
+    // Scan bitset to accumulate register pairs
+    unsigned char regs[32];
+    int count = 0;
+    for (int reg = 0; reg <= 30; reg++) {
+        if (1 & bitset)
+            regs[count++] = reg;
+        bitset >>= 1;
+    }
+    regs[count++] = xzr - x0;
+    count &= ~1;  // Only push an even nuber of regs
+
+    if (count) {
+        write_inst("stp %s, %s, [%s, #%d]!", (YuhuRegister) (regs[0] + x0),
+                   (YuhuRegister) (regs[1] + x0), stack, -count * wordSize);
+        words_pushed += 2;
+    }
+    for (int i = 2; i < count; i += 2) {
+        write_inst("stp %s, %s, [%s, #%d]", (YuhuRegister) (regs[i] + x0),
+                   (YuhuRegister) (regs[i+1] + x0), stack, i * wordSize);
+        words_pushed += 2;
+    }
+
+    assert(words_pushed == count, "oops, pushed != count");
+
+    return count;
+}
+
+int YuhuMacroAssembler::write_insts_pop(unsigned int bitset, YuhuRegister stack) {
+    int words_pushed = 0;
+
+    // Scan bitset to accumulate register pairs
+    unsigned char regs[32];
+    int count = 0;
+    for (int reg = 0; reg <= 30; reg++) {
+        if (1 & bitset)
+            regs[count++] = reg;
+        bitset >>= 1;
+    }
+    regs[count++] = xzr - x0;
+    count &= ~1;
+
+    for (int i = 2; i < count; i += 2) {
+        write_inst("ldp %s, %s, [%s, #%d]", (YuhuRegister) (regs[i] + x0),
+                   (YuhuRegister) (regs[i+1] + x0), stack, i * wordSize);
+        words_pushed += 2;
+    }
+    if (count) {
+        write_inst("ldp %s, %s, [%s], #%d", (YuhuRegister) (regs[0] + x0),
+                   (YuhuRegister) (regs[1] + x0), stack, count * wordSize);
+        words_pushed += 2;
+    }
+
+    assert(words_pushed == count, "oops, pushed != count");
+
+    return count;
+}
+
+address YuhuMacroAssembler::write_insts_g1_write_barrier_pre(YuhuRegister obj,
+                                                             YuhuRegister pre_val,
+                                                             YuhuRegister thread,
+                                                             YuhuRegister tmp,
+                                                             bool tosca_live,
+                                                             bool expand_call) {
+    // If expand_call is true then we expand the call_VM_leaf macro
+    // directly to skip generating the check by
+    // InterpreterMacroAssembler::call_VM_leaf_base that checks _last_sp.
+
+#ifdef _LP64
+    assert(thread == x28, "must be");
+#endif // _LP64
+
+    YuhuLabel done;
+    YuhuLabel runtime;
+
+//    assert_different_registers(obj, pre_val, tmp, rscratch1);
+    assert(pre_val != noreg &&  tmp != noreg, "expecting a register");
+
+//    Address in_progress(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+//                                         PtrQueue::byte_offset_of_active()));
+//    Address index(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+//                                   PtrQueue::byte_offset_of_index()));
+//    Address buffer(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+//                                    PtrQueue::byte_offset_of_buf()));
+
+
+    // Is marking active?
+    if (in_bytes(PtrQueue::byte_width_of_active()) == 4) {
+        write_inst("ldr %s, [x28, #%d]", w_reg(tmp), in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                                                                PtrQueue::byte_offset_of_active()));
+    } else {
+        assert(in_bytes(PtrQueue::byte_width_of_active()) == 1, "Assumption");
+        write_inst("ldrb %s, [x28, #%d]", w_reg(tmp), in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                                                                    PtrQueue::byte_offset_of_active()));
+    }
+    write_inst_cbz(w_reg(tmp), done);
+
+    // Do we need to load the previous value?
+    if (obj != noreg) {
+        write_insts_load_heap_oop(pre_val, obj, 0);
+    }
+
+    // Is the previous value null?
+    write_inst_cbz(pre_val, done);
+
+    // Can we store original value in the thread's buffer?
+    // Is index == 0?
+    // (The index field is typed as size_t.)
+
+    write_inst("ldr %s, [%s, #%d]", tmp, thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                          PtrQueue::byte_offset_of_index())); // tmp := *index_adr
+    write_inst_cbz(tmp, runtime); // tmp == 0?
+    // If yes, goto runtime
+
+    write_inst("sub %s, %s, #%d", tmp, tmp, wordSize); // tmp := tmp - wordSize
+    write_inst("str %s, [%s, #%d]", tmp, thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                          PtrQueue::byte_offset_of_index())); // *index_adr := tmp
+    write_inst("ldr x8, [%s, #%d]", thread, in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                     PtrQueue::byte_offset_of_buf()));
+    write_inst_regs("add %s, %s, x8", tmp, tmp); // tmp := tmp + *buffer_adr
+
+    // Record the previous value
+    write_inst_regs("str, %s, [%s, #0]", pre_val, tmp);
+    write_inst_b(done);
+
+    pin_label(runtime);
+    // save the live input values
+    write_insts_push(bit(x0, tosca_live) | bit(obj, obj != noreg) | bit(pre_val, true), sp);
+
+    // Calling the runtime using the regular call_VM_leaf mechanism generates
+    // code (generated by InterpreterMacroAssember::call_VM_leaf_base)
+    // that checks that the *(rfp+frame::interpreter_frame_last_sp) == NULL.
+    //
+    // If we care generating the pre-barrier without a frame (e.g. in the
+    // intrinsified Reference.get() routine) then ebp might be pointing to
+    // the caller frame and so this check will most likely fail at runtime.
+    //
+    // Expanding the call directly bypasses the generation of the check.
+    // So when we do not have have a full interpreter frame on the stack
+    // expand_call should be passed true.
+
+    if (expand_call) {
+        LP64_ONLY( assert(pre_val != x1, "smashed arg"); )
+        if (thread != x1) {
+            write_inst_mov_reg(x1, thread);
+        }
+        if (pre_val != x0) {
+            write_inst_mov_reg(x0, pre_val);
+        }
+        write_insts_final_call_VM_leaf_base(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), 2);
+    } else {
+        write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), pre_val, thread);
+    }
+
+    write_insts_pop(bit(x0, tosca_live) | bit(obj, obj != noreg) | bit(pre_val, true), sp);
+    pin_label(done);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset) {
+    // TODO
+//    if (UseCompressedOops) {
+//        ldrw(dst, src);
+//        decode_heap_oop(dst);
+//    } else {
+        write_inst("ldr %s, [%s, #%d]", dst, obj, offset);
+//    }
     return current_pc();
 }
