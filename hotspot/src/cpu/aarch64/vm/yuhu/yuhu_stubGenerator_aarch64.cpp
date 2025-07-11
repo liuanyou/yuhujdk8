@@ -308,7 +308,7 @@ private:
         __ write_inst("mov x19, x30");
 //        BLOCK_COMMENT("call exception_handler_for_return_address");
 
-        __ write_insts_call_VM_leaf(CAST_FROM_FN_PTR(address,
+        __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
                                          SharedRuntime::exception_handler_for_return_address),
                         YuhuMacroAssembler::x28, YuhuMacroAssembler::x1);
         // we should not really care that lr is no longer the callee
@@ -338,7 +338,7 @@ private:
         // r0: exception
         // r3: throwing pc
         // r19: exception handler
-        __ write_insts_verify_oop(YuhuMacroAssembler::x0);
+        __ write_insts_verify_oop(YuhuMacroAssembler::x0, "broken oop");
         __ write_inst_br(YuhuMacroAssembler::x19);
 
         return start;
