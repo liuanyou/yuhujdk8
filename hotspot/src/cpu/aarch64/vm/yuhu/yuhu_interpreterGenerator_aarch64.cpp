@@ -1,0 +1,1063 @@
+//
+// Created by Anyou Liu on 2025/5/6.
+//
+#include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
+#include "interpreter/yuhu/yuhu_templateTable.hpp"
+#include "asm/yuhu/yuhu_macroAssembler.hpp"
+#include "interpreter/interpreterRuntime.hpp"
+
+# define __ _masm->
+
+address YuhuInterpreterGenerator::generate_error_exit(const char* msg) {
+    address entry = __ current_pc();
+    __ write_insts_stop(msg);
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_return_entry_for(TosState state, int step, size_t index_size) {
+    address entry = __ pc();
+    // TODO
+    // Restore stack bottom in case i2c adjusted stack
+//    __ ldr(esp, Address(rfp, frame::interpreter_frame_last_sp_offset * wordSize));
+//    // and NULL it as marker that esp is now tos until next java call
+//    __ str(zr, Address(rfp, frame::interpreter_frame_last_sp_offset * wordSize));
+//    __ restore_bcp();
+//    __ restore_locals();
+//    __ restore_constant_pool_cache();
+//    __ get_method(rmethod);
+//
+//    // Pop N words from the stack
+//    __ get_cache_and_index_at_bcp(r1, r2, 1, index_size);
+//    __ ldr(r1, Address(r1, ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::flags_offset()));
+//    __ andr(r1, r1, ConstantPoolCacheEntry::parameter_size_mask);
+//
+//    __ add(esp, esp, r1, Assembler::LSL, 3);
+//
+//    // Restore machine SP
+//    __ ldr(rscratch1, Address(rmethod, Method::const_offset()));
+//    __ ldrh(rscratch1, Address(rscratch1, ConstMethod::max_stack_offset()));
+//    __ add(rscratch1, rscratch1, frame::interpreter_frame_monitor_size() + 2);
+//    __ ldr(rscratch2,
+//           Address(rfp, frame::interpreter_frame_initial_sp_offset * wordSize));
+//    __ sub(rscratch1, rscratch2, rscratch1, ext::uxtw, 3);
+//    __ andr(sp, rscratch1, -16);
+//
+//    __ get_dispatch();
+//    __ dispatch_next(state, step);
+
+    return entry;
+}
+
+void YuhuInterpreterGenerator::generate_and_dispatch(YuhuTemplate* t, TosState tos_out) {
+    // TODO
+//    if (PrintBytecodeHistogram)                                    histogram_bytecode(t);
+//#ifndef PRODUCT
+//    // debugging code
+//    if (CountBytecodes || TraceBytecodes || StopInterpreterAt > 0) count_bytecode();
+//    if (PrintBytecodePairHistogram)                                histogram_bytecode_pair(t);
+//    if (TraceBytecodes)                                            trace_bytecode(t);
+//    if (StopInterpreterAt > 0)                                     stop_interpreter_at();
+//    __ verify_FPU(1, t->tos_in());
+//#endif // !PRODUCT
+    int step;
+    if (!t->does_dispatch()) {
+        step = t->is_wide() ? Bytecodes::wide_length_for(t->bytecode()) : Bytecodes::length_for(t->bytecode());
+        if (tos_out == ilgl) tos_out = t->tos_out();
+        // compute bytecode size
+        assert(step > 0, "just checkin'");
+        // setup stuff for dispatching next bytecode
+        // TODO
+//        if (ProfileInterpreter && VerifyDataPointer
+//            && MethodData::bytecode_has_profile(t->bytecode())) {
+//            __ verify_method_data_pointer();
+//        }
+        // do nothing
+    }
+    // generate template
+    t->generate(_masm);
+    // advance
+    if (t->does_dispatch()) {
+#ifdef ASSERT
+        // make sure execution doesn't go beyond this point if code is broken
+        __ write_insts_stop("should not reach here");
+#endif // ASSERT
+    } else {
+        // dispatch to next bytecode
+        __ write_insts_dispatch_next(tos_out, step);
+    }
+}
+
+void YuhuInterpreterGenerator::set_vtos_entry_points(YuhuTemplate* t,
+                                                     address& bep,
+                                                     address& cep,
+                                                     address& sep,
+                                                     address& aep,
+                                                     address& iep,
+                                                     address& lep,
+                                                     address& fep,
+                                                     address& dep,
+                                                     address& vep) {
+    assert(t->is_valid() && t->tos_in() == vtos, "illegal template");
+    YuhuLabel generate_and_dispatch_label;
+
+    aep = __ current_pc();
+    // pre mode
+    __ write_inst("str x0, [x20, #-8]!");
+    // b #32
+    __ write_inst_b(generate_and_dispatch_label);
+
+    fep = __ current_pc();
+    __ write_inst("str s0, [x20, #-8]!");
+    // b #24
+    __ write_inst_b(generate_and_dispatch_label);
+
+    dep = __ current_pc();
+    __ write_inst("str d0, [x20, #-16]!");
+    // b #16
+    __ write_inst_b(generate_and_dispatch_label);
+
+    lep = __ current_pc();
+    __ write_inst("str x0, [x20, #-16]!");
+    // b #8
+    __ write_inst_b(generate_and_dispatch_label);
+
+    bep = cep = sep =
+    iep = __ current_pc();
+    __ write_inst("str w0, [x20, #-8]!");
+
+    vep = __ current_pc();
+    __ pin_label(generate_and_dispatch_label);
+    generate_and_dispatch(t);
+}
+
+void YuhuInterpreterGenerator::set_short_entry_points(YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep) {
+    assert(t->is_valid(), "template must exist");
+    switch (t->tos_in()) {
+        case btos:
+        case ctos:
+        case stos:
+            ShouldNotReachHere();  // btos/ctos/stos should use itos.
+            break;
+        case atos:
+            vep = __ current_pc();
+            __ write_insts_pop(atos);
+//            __ write_inst("ldr x0, [x20], #8");
+            aep = __ current_pc();
+            generate_and_dispatch(t);
+            break;
+        case itos:
+            vep = __ current_pc();
+            __ write_insts_pop(itos);
+//            __ write_inst("ldr w0, [x20], #8");
+            iep = __ current_pc();
+            generate_and_dispatch(t);
+            break;
+        case ltos:
+            vep = __ current_pc();
+            __ write_insts_pop(ltos);
+//            __ write_inst("ldr x0, [x20], #16");
+            lep = __ current_pc();
+            generate_and_dispatch(t);
+            break;
+        case ftos:
+            vep = __ current_pc();
+            __ write_insts_pop(ftos);
+//            __ write_inst("ldr s0, [x20], #8");
+            fep = __ current_pc();
+            generate_and_dispatch(t);
+            break;
+        case dtos:
+            vep = __ current_pc();
+            __ write_insts_pop(dtos);
+//            __ write_inst("ldr d0, [x20], #16");
+            dep = __ current_pc();
+            generate_and_dispatch(t);
+            break;
+        case vtos:
+            set_vtos_entry_points(t, bep, cep, sep, aep, iep, lep, fep, dep, vep);
+            break;
+        default  :
+            ShouldNotReachHere();
+            break;
+    }
+}
+
+void YuhuInterpreterGenerator::set_wide_entry_point(YuhuTemplate* t, address& wep) {
+    assert(t->is_valid(), "template must exist");
+    assert(t->tos_in() == vtos, "only vtos tos_in supported for wide instructions");
+    wep = __ current_pc();
+    generate_and_dispatch(t);
+}
+
+address YuhuInterpreterGenerator::generate_method_entry(
+        YuhuInterpreter::MethodKind kind) {
+    // determine code generation flags
+    bool synchronized = false;
+    address entry_point = NULL;
+
+    switch (kind) {
+        case YuhuInterpreter::zerolocals             :                                                                             break;
+        case YuhuInterpreter::zerolocals_synchronized: synchronized = true;                                                        break;
+        case YuhuInterpreter::native                 : entry_point = ((YuhuInterpreterGenerator*) this)->generate_native_entry(false); break;
+        case YuhuInterpreter::native_synchronized    : entry_point = ((YuhuInterpreterGenerator*) this)->generate_native_entry(true);  break;
+//        case YuhuInterpreter::empty                  : entry_point = ((YuhuInterpreterGenerator*) this)->generate_empty_entry();       break;
+//        case YuhuInterpreter::accessor               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_accessor_entry();    break;
+//        case YuhuInterpreter::abstract               : entry_point = ((YuhuInterpreterGenerator*) this)->generate_abstract_entry();    break;
+//
+//        case YuhuInterpreter::java_lang_math_sin     : // fall thru
+//        case YuhuInterpreter::java_lang_math_cos     : // fall thru
+//        case YuhuInterpreter::java_lang_math_tan     : // fall thru
+//        case YuhuInterpreter::java_lang_math_abs     : // fall thru
+//        case YuhuInterpreter::java_lang_math_log     : // fall thru
+//        case YuhuInterpreter::java_lang_math_log10   : // fall thru
+//        case YuhuInterpreter::java_lang_math_sqrt    : // fall thru
+//        case YuhuInterpreter::java_lang_math_pow     : // fall thru
+//        case YuhuInterpreter::java_lang_math_exp     : entry_point = ((YuhuInterpreterGenerator*) this)->generate_math_entry(kind);    break;
+//        case YuhuInterpreter::java_lang_ref_reference_get
+//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_Reference_get_entry(); break;
+//        case YuhuInterpreter::java_util_zip_CRC32_update
+//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_update_entry();  break;
+//        case YuhuInterpreter::java_util_zip_CRC32_updateBytes
+//            : // fall thru
+//        case YuhuInterpreter::java_util_zip_CRC32_updateByteBuffer
+//            : entry_point = ((YuhuInterpreterGenerator*)this)->generate_CRC32_updateBytes_entry(kind); break;
+        default                                  : __ write_insts_stop("should not reach here");                                                       break;
+    }
+
+    if (entry_point) {
+        return entry_point;
+    }
+
+    return ((YuhuInterpreterGenerator*) this)->
+    generate_normal_entry(synchronized);
+}
+
+address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
+    // TODO
+//    // determine code generation flags
+//    bool inc_counter  = UseCompiler || CountCompiledCalls;
+//
+//    // rscratch1: sender sp
+    address entry_point = __ current_pc();
+//
+//    const Address constMethod(rmethod, Method::const_offset());
+//    const Address access_flags(rmethod, Method::access_flags_offset());
+//    const Address size_of_parameters(r3,
+//                                     ConstMethod::size_of_parameters_offset());
+//    const Address size_of_locals(r3, ConstMethod::size_of_locals_offset());
+
+    // get parameter size (always needed)
+    // need to load the const method first
+    __ write_inst("ldr x3, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh w2, [x3, #%d]", in_bytes(ConstMethod::size_of_parameters_offset()));
+
+    // r2: size of parameters
+    // get size of locals in words
+    __ write_inst("ldrh w3, [x3, #%d]", in_bytes(ConstMethod::size_of_locals_offset()));
+    __ write_inst("sub x3, x3, x2"); // r3 = no. of additional locals
+
+    // see if we've got enough room on the stack for locals plus overhead.
+    generate_stack_overflow_check();
+
+    // compute beginning of parameters (rlocals)
+    __ write_inst("add x24, x20, x2, uxtx, #3");
+    __ write_inst("sub x24, x24, #0x8");
+
+    // Make room for locals
+    __ write_inst("sub x8, x20, x3, uxtx, #3");
+    __ write_inst("and sp, x8, #-16"); // sp-adjustment
+
+    // r3 - # of additional locals
+    // allocate space for locals
+    // explicitly initialize locals
+    {
+        YuhuLabel exit, loop;
+        __ write_inst("ands xzr, x3, x3");
+        __ write_inst_b(YuhuMacroAssembler::le, exit); // do nothing if r3 <= 0
+        __ pin_label(loop);
+        __ write_inst("str xzr, [x8], #%d", wordSize);
+        __ write_inst("sub x3, x3, 1"); // until everything initialized
+        __ write_inst_cbnz(YuhuMacroAssembler::x3, loop);
+        __ pin_label(exit);
+    }
+
+    // And the base dispatch table
+    __ write_insts_get_dispatch();
+
+    // initialize fixed part of activation frame
+    generate_fixed_frame(false);
+
+    // make sure method is not native & not abstract
+#ifdef ASSERT
+    __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+  {
+    YuhuLabel L;
+    __ write_inst("tst x0, #%d", JVM_ACC_NATIVE);
+    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_insts_stop("tried to execute native method as non-native");
+    __ pin_label(L);
+  }
+ {
+    YuhuLabel L;
+    __ write_inst("tst x0, #%d", JVM_ACC_ABSTRACT);
+    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_insts_stop("tried to execute abstract method in interpreter");
+    __ pin_label(L);
+  }
+#endif
+
+    // Since at this point in the method invocation the exception
+    // handler would try to exit the monitor of synchronized methods
+    // which hasn't been entered yet, we set the thread local variable
+    // _do_not_unlock_if_synchronized to true. The remove_activation
+    // will check this flag.
+
+//    const Address do_not_unlock_if_synchronized(rthread,
+//                                                in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+    __ write_inst("mov x9, #1");
+    __ write_inst("strb w9, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+
+    // TODO
+//    // increment invocation count & check for overflow
+//    Label invocation_counter_overflow;
+//    Label profile_method;
+//    Label profile_method_continue;
+//    if (inc_counter) {
+//        generate_counter_incr(&invocation_counter_overflow,
+//                              &profile_method,
+//                              &profile_method_continue);
+//        if (ProfileInterpreter) {
+//            __ bind(profile_method_continue);
+//        }
+//    }
+//
+//    Label continue_after_compile;
+//    __ bind(continue_after_compile);
+
+    bang_stack_shadow_pages(false);
+
+    // reset the _do_not_unlock_if_synchronized flag
+    __ write_inst("strb wzr, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+
+    // check for synchronized methods
+    // Must happen AFTER invocation_counter check and stack overflow check,
+    // so method is not locked if overflows.
+    if (synchronized) {
+        // Allocate monitor and lock method
+        lock_method();
+    } else {
+        // no synchronization necessary
+#ifdef ASSERT
+        {
+      YuhuLabel L;
+      __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+      __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
+      __ write_inst_b(YuhuMacroAssembler::eq, L);
+      __ write_insts_stop("method needs synchronization");
+      __ pin_label(L);
+    }
+#endif
+    }
+
+    // start execution
+#ifdef ASSERT
+    {
+    YuhuLabel L;
+//     const Address monitor_block_top (rfp,
+//                 frame::interpreter_frame_monitor_block_top_offset * wordSize);
+    __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
+    __ write_inst("cmp x20, x8");
+    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_insts_stop("broken stack frame setup in interpreter");
+    __ pin_label(L);
+  }
+#endif
+
+    // TODO
+//    // jvmti support
+//    __ notify_method_entry();
+
+
+    __ write_insts_dispatch_next(vtos);
+
+    // TODO
+//    // invocation counter overflow
+//    if (inc_counter) {
+//        if (ProfileInterpreter) {
+//            // We have decided to profile this method in the interpreter
+//            __ bind(profile_method);
+//            __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
+//            __ set_method_data_pointer_for_bcp();
+//            // don't think we need this
+//            __ get_method(r1);
+//            __ b(profile_method_continue);
+//        }
+//        // Handle overflow of counter and compile method
+//        __ bind(invocation_counter_overflow);
+//        generate_counter_overflow(&continue_after_compile);
+//    }
+
+    return entry_point;
+}
+
+address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
+    // TODO
+//    // determine code generation flags
+//    bool inc_counter  = UseCompiler || CountCompiledCalls;
+
+    // r1: Method*
+    // rscratch1: sender sp
+
+    address entry_point = __ pc();
+
+//    const Address constMethod       (rmethod, Method::const_offset());
+//    const Address access_flags      (rmethod, Method::access_flags_offset());
+//    const Address size_of_parameters(r2, ConstMethod::
+//    size_of_parameters_offset());
+
+    // get parameter size (always needed)
+    __ write_inst("ldr x2, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh w2, [x2, #%d]", in_bytes(ConstMethod::size_of_parameters_offset()));
+
+    // native calls don't need the stack size check since they have no
+    // expression stack and the arguments are already on the stack and
+    // we only add a handful of words to the stack
+
+    // rmethod: Method*
+    // r2: size of parameters
+    // rscratch1: sender sp
+
+    // for natives the size of locals is zero
+
+    // compute beginning of parameters (rlocals)
+    __ write_inst("add x24, x20, x2, uxtx, #3");
+    __ write_inst("add x24, x24, #-8");
+
+    // Pull SP back to minimum size: this avoids holes in the stack
+    __ write_inst("and sp, x20, #-16");
+
+    // initialize fixed part of activation frame
+    generate_fixed_frame(true);
+
+    // make sure method is native & not abstract
+#ifdef ASSERT
+    __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+    {
+        YuhuLabel L;
+        __ write_inst("tst x0, #%d", JVM_ACC_NATIVE);
+        __ write_inst_b(YuhuMacroAssembler::ne, L);
+        __ write_insts_stop("tried to execute non-native method as native");
+        __ pin_label(L);
+    }
+    {
+        YuhuLabel L;
+        __ write_inst("tst x0, #%d", JVM_ACC_ABSTRACT);
+        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_insts_stop("tried to execute abstract method in interpreter");
+        __ pin_label(L);
+    }
+#endif
+
+    // Since at this point in the method invocation the exception
+    // handler would try to exit the monitor of synchronized methods
+    // which hasn't been entered yet, we set the thread local variable
+    // _do_not_unlock_if_synchronized to true. The remove_activation
+    // will check this flag.
+
+//    const Address do_not_unlock_if_synchronized(rthread,
+//                                                in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x9, true);
+    __ write_inst("strb w9, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+
+    // TODO
+//    // increment invocation count & check for overflow
+//    Label invocation_counter_overflow;
+//    if (inc_counter) {
+//        generate_counter_incr(&invocation_counter_overflow, NULL, NULL);
+//    }
+
+    YuhuLabel continue_after_compile;
+    __ pin_label(continue_after_compile);
+
+    bang_stack_shadow_pages(true);
+
+    // reset the _do_not_unlock_if_synchronized flag
+    __ write_inst("strb wzr, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+
+    // check for synchronized methods
+    // Must happen AFTER invocation_counter check and stack overflow check,
+    // so method is not locked if overflows.
+    if (synchronized) {
+        lock_method();
+    } else {
+        // no synchronization necessary
+#ifdef ASSERT
+        {
+            YuhuLabel L;
+            __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+            __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
+            __ write_inst_b(YuhuMacroAssembler::eq, L);
+            __ write_insts_stop("method needs synchronization");
+            __ pin_label(L);
+        }
+#endif
+    }
+
+    // start execution
+#ifdef ASSERT
+    {
+        YuhuLabel L;
+        const Address monitor_block_top(rfp,
+                                        frame::interpreter_frame_monitor_block_top_offset * wordSize);
+        __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
+        __ write_inst("cmp x20, x8");
+        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_insts_stop("broken stack frame setup in interpreter");
+        __ pin_label(L);
+    }
+#endif
+
+    // TODO
+//    // jvmti support
+//    __ notify_method_entry();
+
+    // work registers
+    const YuhuMacroAssembler::YuhuRegister t = YuhuMacroAssembler::x17;
+    const YuhuMacroAssembler::YuhuRegister result_handler = YuhuMacroAssembler::x19;
+
+    // allocate space for parameters
+    __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
+    __ write_inst("ldrh %s, [%s, #%d]", __ w_reg(t), t, in_bytes(ConstMethod::size_of_parameters_offset()));
+
+    __ write_inst("sub x8, x20, %s, uxtx, #%d", t, Interpreter::logStackElementSize);
+    __ write_inst("and sp, x8, #-16");
+    __ write_inst_mov_reg(YuhuMacroAssembler::x20, YuhuMacroAssembler::x8);
+
+    // get signature handler
+    {
+        YuhuLabel L;
+        __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::signature_handler_offset()));
+        __ write_inst_cbnz(t, L);
+        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
+                   YuhuMacroAssembler::x12);
+        __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::signature_handler_offset()));
+        __ pin_label(L);
+    }
+
+    // call signature handler
+//    assert(InterpreterRuntime::SignatureHandlerGenerator::from() == rlocals,
+//           "adjust this code");
+//    assert(InterpreterRuntime::SignatureHandlerGenerator::to() == sp,
+//           "adjust this code");
+//    assert(InterpreterRuntime::SignatureHandlerGenerator::temp() == rscratch1,
+//           "adjust this code");
+
+    // The generated handlers do not touch rmethod (the method).
+    // However, large signatures cannot be cached and are generated
+    // each time here.  The slow-path generator can do a GC on return,
+    // so we must reload it after the call.
+    __ write_inst_blr(t);
+    __ write_insts_get_method(YuhuMacroAssembler::x12);        // slow path can do a GC, reload rmethod
+
+
+    // result handler is in r0
+    // set result handler
+    __ write_inst_mov_reg(result_handler, YuhuMacroAssembler::x0);
+    // pass mirror handle if static call
+    {
+        YuhuLabel L;
+        const int mirror_offset = in_bytes(Klass::java_mirror_offset());
+        __ write_inst("ldr %s, [x12, #%d]", __ w_reg(t), in_bytes(Method::access_flags_offset()));
+        __ write_inst("tst %s, #%d", t, JVM_ACC_STATIC);
+        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        // get mirror
+        __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
+        __ write_inst("ldr %s, [%s, #%d]", t, t, in_bytes(ConstMethod::constants_offset()));
+        __ write_inst("ldr %s, [%s, #%d]", t, t, ConstantPool::pool_holder_offset_in_bytes());
+        __ write_inst("ldr %s, [%s, #%d]", t, t, mirror_offset);
+        // copy mirror into activation frame
+        __ write_inst("str %s, [x29, #%d]", t, frame::interpreter_frame_oop_temp_offset * wordSize);
+        // pass handle to mirror
+        __ write_inst("add x1, x29, #%d", frame::interpreter_frame_oop_temp_offset * wordSize);
+        __ pin_label(L);
+    }
+
+    // get native function entry point in r10
+    {
+        YuhuLabel L;
+        __ write_inst("ldr x10, [x12, #%d]", in_bytes(Method::native_function_offset()));
+        address unsatisfied = (SharedRuntime::native_method_throw_unsatisfied_link_error_entry());
+        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) unsatisfied);
+        __ write_inst("ldr x9, [x9]");
+        __ write_inst("cmp x10, x9");
+        __ write_inst_b(YuhuMacroAssembler::ne, L);
+        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
+                   YuhuMacroAssembler::x12);
+        __ write_insts_get_method(YuhuMacroAssembler::x12);
+        __ write_inst("ldr x10, [x12, #%d]", in_bytes(Method::native_function_offset()));
+        __ pin_label(L);
+    }
+
+    // pass JNIEnv
+    __ write_inst("add x0, x28, #%d", in_bytes(JavaThread::jni_environment_offset()));
+
+    // Set the last Java PC in the frame anchor to be the return address from
+    // the call to the native method: this will allow the debugger to
+    // generate an accurate stack trace.
+    YuhuLabel native_return;
+    __ write_insts_set_last_java_frame(YuhuMacroAssembler::x20, YuhuMacroAssembler::x29, native_return, YuhuMacroAssembler::x8);
+
+    // change thread state
+#ifdef ASSERT
+    {
+        YuhuLabel L;
+        __ write_inst("ldr %s, [x28, #%d]", __ w_reg(t), in_bytes(JavaThread::thread_state_offset()));
+        __ write_inst("cmp %s, #%d", t, _thread_in_Java);
+        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_insts_stop("Wrong thread state in native stub");
+        __ pin_label(L);
+    }
+#endif
+
+    // Change state to native
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native);
+    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+
+    // Call the native method.
+    __ write_inst_blr(YuhuMacroAssembler::x10);
+    __ pin_label(native_return);
+    __ write_inst("isb");
+    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    // result potentially in r0 or v0
+
+    // make room for the pushes we're about to do
+    __ write_inst("sub x8, x20, #%d", 4 * wordSize);
+    __ write_inst("and sp, x8, #-16");
+
+    // NOTE: The order of these pushes is known to frame::interpreter_frame_result
+    // in order to extract the result of a method call. If the order of these
+    // pushes change or anything else is added to the stack then the code in
+    // interpreter_frame_result must also change.
+    __ write_insts_push(dtos);
+    __ write_insts_push(ltos);
+
+    // change thread state
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native_trans);
+    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+
+    if (os::is_MP()) {
+        if (UseMembar) {
+            // Force this write out before the read below
+            __ write_inst("dsb sy");
+        } else {
+            // Write serialization page so VM thread can do a pseudo remote membar.
+            // We use the current thread pointer to calculate a thread specific
+            // offset to write to within the page. This minimizes bus traffic
+            // due to cache line collision.
+            __ write_inst("dsb sy"); // __ serialize_memory(rthread, rscratch2);
+        }
+    }
+
+    // check for safepoint operation in progress and/or pending suspend requests
+    {
+        YuhuLabel Continue;
+        {
+            uint64_t offset;
+            __ write_insts_adrp(YuhuMacroAssembler::x9, SafepointSynchronize::address_of_state(), offset);
+            __ write_inst("ldr %s, [x9, #%d]", __ w_reg(YuhuMacroAssembler::x9), offset);
+        }
+        assert(SafepointSynchronize::_not_synchronized == 0,
+               "SafepointSynchronize::_not_synchronized");
+        YuhuLabel L;
+        __ write_inst_cbnz(YuhuMacroAssembler::x9, L);
+        __ write_inst("ldr %s, [x28, #%d]", __ w_reg(YuhuMacroAssembler::x9), in_bytes(JavaThread::suspend_flags_offset()));
+        __ write_inst_cbz(YuhuMacroAssembler::x9, Continue);
+        __ pin_label(L);
+
+        // Don't use call_VM as it will see a possible pending exception
+        // and forward it and never return here preventing us from
+        // clearing _last_native_pc down below.  Also can't use
+        // call_VM_leaf either as it will check to see if r13 & r14 are
+        // preserved and correspond to the bcp/locals pointers. So we do a
+        // runtime call by hand.
+        //
+        __ write_inst("mov x0, x28");
+        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) CAST_FROM_FN_PTR(address, JavaThread::check_special_condition_for_native_trans));
+        __ write_inst_blr(YuhuMacroAssembler::x9);
+        __ write_inst("isb");
+        __ write_insts_get_method(YuhuMacroAssembler::x12);
+        // TODO
+//        __ reinit_heapbase();
+        __ pin_label(Continue);
+    }
+
+    // change thread state
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_Java);
+    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst("stlr %s, %s", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+
+    // reset_last_Java_frame
+    __ write_insts_reset_last_java_frame(true);
+
+    // reset handle block
+    __ write_inst("ldr %s, [x28, #%d]", t, in_bytes(JavaThread::active_handles_offset()));
+    __ write_inst("str xzr, [%s, #%d]", t, JNIHandleBlock::top_offset_in_bytes());
+
+    // If result is an oop unbox and store it in frame where gc will see it
+    // and result handler will pick it up
+
+    {
+        YuhuLabel no_oop, not_weak, store_result;
+        __ write_inst_adr(t, AbstractInterpreter::result_handler(T_OBJECT));
+        __ write_inst("cmp %s, %s", t, result_handler);
+        __ write_inst_b(YuhuMacroAssembler::ne, no_oop);
+        // Unbox oop result, e.g. JNIHandles::resolve result.
+        __ write_insts_pop(ltos);
+        __ write_inst_cbz(YuhuMacroAssembler::x0, store_result); // Use NULL as-is.
+//    STATIC_ASSERT(JNIHandles::weak_tag_mask == 1u);
+        __ write_inst_tbz(YuhuMacroAssembler::x0, 0, not_weak); // Test for jweak tag.
+        // Resolve jweak.
+//    __ ldr(r0, Address(r0, -JNIHandles::weak_tag_value));
+#if INCLUDE_ALL_GCS
+        if (UseG1GC) {
+            __ write_insts_enter(); // Barrier may call runtime.
+            __ write_insts_g1_write_barrier_pre(YuhuMacroAssembler::noreg /* obj */,
+                                    YuhuMacroAssembler::x0 /* pre_val */,
+                                    YuhuMacroAssembler::x28 /* thread */,
+                                    t /* tmp */,
+                                    true /* tosca_live */,
+                                    true /* expand_call */);
+            __ write_insts_leave();
+        }
+#endif // INCLUDE_ALL_GCS
+        __ write_inst_b(store_result);
+        __ pin_label(not_weak);
+        // Resolve (untagged) jobject.
+        __ write_inst("ldr x0, [x0]");
+        __ ldr(r0, Address(r0, 0));
+        __ pin_label(store_result);
+        __ write_inst("str x0, [%s, #%d]", YuhuMacroAssembler::x29, frame::interpreter_frame_oop_temp_offset*wordSize);
+        // keep stack depth as expected by pushing oop which will eventually be discarded
+        __ write_insts_push(ltos);
+        __ pin_label(no_oop);
+    }
+
+    {
+        YuhuLabel no_reguard;
+        __ write_inst("ldr x8, [x28, #%d]", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
+        __ write_inst_regs("ldrb %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x8);
+        __ write_inst("cmp x8, #%d", JavaThread::stack_guard_yellow_disabled);
+        __ write_inst_b(YuhuMacroAssembler::ne, no_reguard);
+
+        __ write_insts_pusha(); // XXX only save smashed registers
+        __ write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x28);
+        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) CAST_FROM_FN_PTR(address, SharedRuntime::reguard_yellow_pages));
+        __ write_inst_blr(YuhuMacroAssembler::x9);
+        __ write_insts_popa(); // XXX only restore smashed registers
+        __ pin_label(no_reguard);
+    }
+
+    // The method register is junk from after the thread_in_native transition
+    // until here.  Also can't call_VM until the bcp has been
+    // restored.  Need bcp for throwing exception below so get it now.
+    __ write_insts_get_method(YuhuMacroAssembler::x12);
+
+    // restore bcp to have legal interpreter frame, i.e., bci == 0 <=>
+    // rbcp == code_base()
+    __ write_inst("ldr x22, [x12, #%d]", in_bytes(Method::const_offset())); // get ConstMethod*
+    __ write_inst("add x22, x22, #%d", in_bytes(ConstMethod::codes_offset())); // get codebase
+    // handle exceptions (exception handling will handle unlocking!)
+    {
+        YuhuLabel L;
+        __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
+        __ write_inst_cbz(YuhuMacroAssembler::x8, L);
+        // Note: At some point we may want to unify this with the code
+        // used in call_VM_base(); i.e., we should use the
+        // StubRoutines::forward_exception code. For now this doesn't work
+        // here because the rsp is not correctly set at this point.
+        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+                                   CAST_FROM_FN_PTR(address,
+                                                    InterpreterRuntime::throw_pending_exception));
+        __ write_insts_stop("should not reach here");
+        __ pin_label(L);
+    }
+
+    // do unlocking if necessary
+    {
+        YuhuLabel L;
+        __ write_inst("ldr %s, [x12, #%d]", __ w_reg(t), in_bytes(Method::access_flags_offset()));
+        __ write_inst("tst %s, #%d", t, JVM_ACC_SYNCHRONIZED);
+        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        // the code below should be shared with interpreter macro
+        // assembler implementation
+        {
+            YuhuLabel unlock;
+            // BasicObjectLock will be first in list, since this is a
+            // synchronized method. However, need to check that the object
+            // has not been unlocked by an explicit monitorexit bytecode.
+
+            // monitor expect in c_rarg1 for slow unlock path
+            __ write_inst("ldr x1, [x29, #%d]", (intptr_t)(frame::interpreter_frame_initial_sp_offset *
+                                                           wordSize - sizeof(BasicObjectLock))); /*__ lea (c_rarg1, Address(rfp,   // address of first monitor
+                                     (intptr_t)(frame::interpreter_frame_initial_sp_offset *
+                                                wordSize - sizeof(BasicObjectLock))));*/
+
+            __ write_inst("ldr %s, [x1, #%d]", t, BasicObjectLock::obj_offset_in_bytes());
+            __ write_inst_cbnz(t, unlock);
+
+            // Entry already unlocked, need to throw exception
+            __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+                                       CAST_FROM_FN_PTR(address,
+                                                        InterpreterRuntime::throw_illegal_monitor_state_exception));
+            __ write_insts_stop("should not reach here");
+
+            __ pin_label(unlock);
+            __ write_insts_unlock_object(YuhuMacroAssembler::x1);
+        }
+        __ pin_label(L);
+    }
+
+    // jvmti support
+    // Note: This must happen _after_ handling/throwing any exceptions since
+    //       the exception handler code notifies the runtime of method exits
+    //       too. If this happens before, method entry/exit notifications are
+    //       not properly paired (was bug - gri 11/22/99).
+    // TODO
+//    __ notify_method_exit(vtos, InterpreterMacroAssembler::NotifyJVMTI);
+
+    // restore potential result in r0:d0, call result handler to
+    // restore potential result in ST0 & handle result
+
+    __ write_insts_pop(ltos);
+    __ write_insts_pop(dtos);
+
+    __ write_inst_blr(result_handler);
+
+    // remove activation
+    __ write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_sender_sp_offset *
+                                         wordSize); // get sender sp
+    // remove frame anchor
+    __ write_insts_leave();
+
+    // resture sender sp
+    __ write_inst("mov sp, x20");
+
+    __ write_inst("ret");
+
+    // TODO
+//    if (inc_counter) {
+//        // Handle overflow of counter and compile method
+//        __ bind(invocation_counter_overflow);
+//        generate_counter_overflow(&continue_after_compile);
+//    }
+
+    return entry_point;
+}
+
+void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {
+    // initialize fixed part of activation frame
+    if (native_call) {
+        __ write_inst("sub x20, sp, #%d", 12 * wordSize);
+        __ write_inst_mov_reg(YuhuMacroAssembler::x22, YuhuMacroAssembler::xzr);
+        __ write_inst("stp x20, xzr, [sp, #%d]!", -12 * wordSize);
+        // add 2 zero-initialized slots for native calls
+        __ write_inst("stp xzr, xzr, [sp, #%d]", 10 * wordSize);
+    } else {
+        __ write_inst("sub x20, sp, #%d", 10 * wordSize);
+        __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset())); // get ConstMethod
+        __ write_inst("add x22, x8, #%d", in_bytes(ConstMethod::codes_offset())); // get codebase
+        __ write_inst("stp x20, x22, [sp, #%d]!", -10 * wordSize);
+    }
+
+    // TODO
+//    if (ProfileInterpreter) {
+//        Label method_data_continue;
+//        __ ldr(rscratch1, Address(rmethod, Method::method_data_offset()));
+//        __ cbz(rscratch1, method_data_continue);
+//        __ lea(rscratch1, Address(rscratch1, in_bytes(MethodData::data_offset())));
+//        __ bind(method_data_continue);
+//        __ stp(rscratch1, rmethod, Address(sp, 4 * wordSize));  // save Method* and mdp (method data pointer)
+//    } else {
+        __ write_inst("stp xzr, x12, [sp, #%d]", 4 * wordSize); // save Method* (no mdp)
+//    }
+
+    __ write_inst("ldr x26, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldr x26, [x26, #%d]", in_bytes(ConstMethod::constants_offset()));
+    __ write_inst("ldr x26, [x26, #%d]", ConstantPool::cache_offset_in_bytes());
+    __ write_inst("stp x24, x26, [sp, #%d]", 2 * wordSize);
+
+    __ write_inst("stp x29, x30, [sp, #%d]", 8 * wordSize);
+    __ write_inst("add x29, sp, #%d", 8 * wordSize); // __ lea(rfp, Address(sp, 8 * wordSize));
+
+    // set sender sp
+    // leave last_sp as null
+    __ write_inst("stp xzr, x13, [sp, #%d]", 6 * wordSize);
+
+    // Move SP out of the way
+    if (! native_call) {
+        __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+        __ write_inst("ldrh w8, [x8, #%d]", in_bytes(ConstMethod::max_stack_offset()));
+        __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
+                                         + (EnableInvokeDynamic ? 2 : 0));
+        __ write_inst("sub x8, sp, x8, uxtw, #3"); // w8, uxtw, #3 is used in old code
+        __ write_inst("and sp, x8, #-16"); // sp-adjustment
+    }
+}
+
+void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
+
+    // monitor entry size: see picture of stack set
+    // (generate_method_entry) and frame_amd64.hpp
+    const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
+
+    // total overhead size: entry_size + (saved rbp through expr stack
+    // bottom).  be sure to change this if you add/subtract anything
+    // to/from the overhead area
+    const int overhead_size =
+            -(frame::interpreter_frame_initial_sp_offset * wordSize) + entry_size;
+
+    const int page_size = os::vm_page_size();
+
+    YuhuLabel after_frame_check;
+
+    // see if the frame is greater than one page in size. If so,
+    // then we need to verify there is enough stack space remaining
+    // for the additional locals.
+    //
+    // Note that we use SUBS rather than CMP here because the immediate
+    // field of this instruction may overflow.  SUBS can cope with this
+    // because it is a macro that will expand to some number of MOV
+    // instructions and a register operation.
+    __ write_inst("subs x8, x3, #%d", (page_size - overhead_size) / Interpreter::stackElementSize);
+    __ write_inst_b(YuhuMacroAssembler::ls, after_frame_check);
+
+    // compute rsp as if this were going to be the last frame on
+    // the stack before the red zone
+
+    const Address stack_base(rthread, Thread::stack_base_offset());
+    const Address stack_size(rthread, Thread::stack_size_offset());
+
+    // locals + overhead, in bytes
+    __ write_insts_mov_imm64(YuhuMacroAssembler::x0, overhead_size);
+    __ write_inst("add x0, x0, x3, lsl, #%d", Interpreter::logStackElementSize); // 2 slots per parameter.
+
+    __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::stack_base_offset()));
+    __ write_inst("ldr x9, [x28, #%d]", in_bytes(Thread::stack_size_offset()));
+
+#ifdef ASSERT
+    YuhuLabel stack_base_okay, stack_size_okay;
+    // verify that thread stack base is non-zero
+    // cbnz x8, #8
+    __ write_inst_cbnz(YuhuMacroAssembler::x8, stack_base_okay);
+    __ write_insts_stop("stack base is zero");
+    // verify that thread stack size is non-zero
+    __ pin_label(stack_base_okay);
+    // cbnz x9, #8
+    __ write_inst_cbnz(YuhuMacroAssembler::x9, stack_size_okay);
+    __ write_insts_stop("stack size is zero");
+    __ pin_label(stack_size_okay);
+#endif
+
+    // Add stack base to locals and subtract stack size
+    __ write_inst("sub x8, x8, x9"); // Stack limit
+    __ write_inst("add x0, x0, x8");
+
+    // Use the maximum number of pages we might bang.
+    const int max_pages = StackShadowPages > (StackRedPages+StackYellowPages) ? StackShadowPages :
+                          (StackRedPages+StackYellowPages);
+
+    // add in the red and yellow zone sizes
+    __ write_inst("add x0, x0, #%d", max_pages * page_size * 2);
+
+    // check against the current stack bottom
+    __ write_inst("cmp sp, x0");
+    __ write_inst_b(YuhuMacroAssembler::hi, after_frame_check);
+
+    // Remove the incoming args, peeling the machine SP back to where it
+    // was in the caller.  This is not strictly necessary, but unless we
+    // do so the stack frame may have a garbage FP; this ensures a
+    // correct call stack that we can always unwind.  The ANDR should be
+    // unnecessary because the sender SP in r13 is always aligned, but
+    // it doesn't hurt.
+    __ write_inst("and sp, x13, #%d", -16);
+
+    // Note: the restored frame is not necessarily interpreted.
+    // Use the shared runtime version of the StackOverflowError.
+    assert(YuhuStubRoutines::throw_StackOverflowError_entry() != NULL, "stub not yet generated");
+    __ write_insts_far_jump(YuhuStubRoutines::throw_StackOverflowError_entry());
+
+    // all done with frame size check
+    __ pin_label(after_frame_check);
+}
+
+void YuhuInterpreterGenerator::bang_stack_shadow_pages(bool native_call) {
+    // Bang each page in the shadow zone. We can't assume it's been done for
+    // an interpreter frame with greater than a page of locals, so each page
+    // needs to be checked.  Only true for non-native.
+    if (UseStackBanging) {
+        const int start_page = native_call ? StackShadowPages : 1;
+        const int page_size = os::vm_page_size();
+        for (int pages = start_page; pages <= StackShadowPages ; pages++) {
+            __ write_inst("sub x9, sp, #%d", pages*page_size);
+            __ write_inst("str xzr, [x9]");
+        }
+    }
+}
+
+void YuhuInterpreterGenerator::lock_method(void) {
+    // synchronize method
+//    const Address access_flags(rmethod, Method::access_flags_offset());
+//    const Address monitor_block_top(
+//            rfp,
+//            frame::interpreter_frame_monitor_block_top_offset * wordSize);
+    const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
+
+#ifdef ASSERT
+    {
+        YuhuLabel L;
+        __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+        __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
+        __ write_inst_b(YuhuMacroAssembler::ne, L);
+        __ write_insts_stop("method doesn't need synchronization");
+        __ pin_label(L);
+    }
+#endif // ASSERT
+
+    // get synchronization object
+    {
+        const int mirror_offset = in_bytes(Klass::java_mirror_offset());
+        YuhuLabel done;
+        __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
+        __ write_inst("tst x0, #%d", JVM_ACC_STATIC);
+        // get receiver (assume this is frequent case)
+        __ write_inst("ldr x0, [x24, #%d]", Interpreter::local_offset_in_bytes(0));
+        __ write_inst_b(YuhuMacroAssembler::eq, done);
+        __ write_inst("ldr x0, [x12, #%d]", in_bytes(Method::const_offset()));
+        __ write_inst("ldr x0, [x0, #%d]", in_bytes(ConstMethod::constants_offset()));
+        __ write_inst("ldr x0, [x0, #%d]", ConstantPool::pool_holder_offset_in_bytes());
+        __ write_inst("ldr x0, [x0, #%d]", mirror_offset);
+
+#ifdef ASSERT
+        {
+            YuhuLabel L;
+            __ write_inst_cbnz(YuhuMacroAssembler::x0, L);
+            __ write_insts_stop("synchronization object is NULL");
+            __ pin_label(L);
+        }
+#endif // ASSERT
+
+        __ pin_label(done);
+    }
+
+    // add space for monitor & lock
+    __ write_inst("sub sp, sp, #%d", entry_size); // add space for a monitor entry
+    __ write_inst("sub x20, x20, #%d", entry_size);
+    __ write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x20);
+    __ write_inst("str x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize); // set new monitor block top
+    // store object
+    __ write_inst("str x0, [x20, #%d]", BasicObjectLock::obj_offset_in_bytes());
+    __ write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x20); // object address
+    __ write_insts_lock_object(YuhuMacroAssembler::x1);
+}

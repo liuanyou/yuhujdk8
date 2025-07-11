@@ -28,8 +28,15 @@ protected:
     void set_entry_points(Bytecodes::Code code);
     void set_unimplemented(int i);
     void set_entry_points_for_all_bytes();
+
+    // entry point generator
+    address generate_method_entry(YuhuInterpreter::MethodKind kind);
 public:
     YuhuInterpreterGenerator();
+
+#ifdef TARGET_ARCH_aarch64
+# include "yuhu_interpreterGenerator_aarch64.hpp"
+#endif
 };
 
 #endif //JDK8_YUHU_INTERPRETERGENERATOR_HPP
