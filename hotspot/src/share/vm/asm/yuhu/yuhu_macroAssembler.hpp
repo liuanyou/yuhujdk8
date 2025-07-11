@@ -336,6 +336,14 @@ public:
                                              bool expand_call);
 
     address write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset);
+
+    address write_insts_empty_expression_stack() {
+        write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
+        // NULL last_sp until next java call
+        write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    }
+
+    address write_insts_update_byte_crc32(YuhuRegister crc, YuhuRegister val, YuhuRegister table);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

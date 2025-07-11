@@ -1386,3 +1386,11 @@ address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuRegi
 //    }
     return current_pc();
 }
+
+address YuhuMacroAssembler::write_insts_update_byte_crc32(YuhuRegister crc, YuhuRegister val, YuhuRegister table) {
+    write_inst_regs("eor %s, %s, %s", crc, val, table);
+    write_inst_regs("and %s, %s, #0xff", val, val);
+    write_inst_regs("ldr %s, [%s, %s, lsl #2]", w_reg(val), table, val);
+    write_inst_regs("eor %s, %s, %s, lsr #8", crc, val, crc);
+    return current_pc();
+}
