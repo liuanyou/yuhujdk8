@@ -52,16 +52,48 @@ public:
 
 class YuhuInterpreter : AllStatic {
 friend class YuhuInterpreterGenerator;
+public:
+    enum MethodKind {
+        zerolocals,                                                 // method needs locals initialization
+        zerolocals_synchronized,                                    // method needs locals initialization & is synchronized
+        native,                                                     // native method
+        native_synchronized,                                        // native method & is synchronized
+        empty,                                                      // empty method (code: _return)
+        accessor,                                                   // accessor method (code: _aload_0, _getfield, _(a|i)return)
+        abstract,                                                   // abstract method (throws an AbstractMethodException)
+        method_handle_invoke_FIRST,                                 // java.lang.invoke.MethodHandles::invokeExact, etc.
+        method_handle_invoke_LAST                                   = (method_handle_invoke_FIRST
+                                                                       + (vmIntrinsics::LAST_MH_SIG_POLY
+                                                                          - vmIntrinsics::FIRST_MH_SIG_POLY)),
+        java_lang_math_sin,                                         // implementation of java.lang.Math.sin   (x)
+        java_lang_math_cos,                                         // implementation of java.lang.Math.cos   (x)
+        java_lang_math_tan,                                         // implementation of java.lang.Math.tan   (x)
+        java_lang_math_abs,                                         // implementation of java.lang.Math.abs   (x)
+        java_lang_math_sqrt,                                        // implementation of java.lang.Math.sqrt  (x)
+        java_lang_math_log,                                         // implementation of java.lang.Math.log   (x)
+        java_lang_math_log10,                                       // implementation of java.lang.Math.log10 (x)
+        java_lang_math_pow,                                         // implementation of java.lang.Math.pow   (x,y)
+        java_lang_math_exp,                                         // implementation of java.lang.Math.exp   (x)
+        java_lang_ref_reference_get,                                // implementation of java.lang.ref.Reference.get()
+        java_util_zip_CRC32_update,                                 // implementation of java.util.zip.CRC32.update()
+        java_util_zip_CRC32_updateBytes,                            // implementation of java.util.zip.CRC32.updateBytes()
+        java_util_zip_CRC32_updateByteBuffer,                       // implementation of java.util.zip.CRC32.updateByteBuffer()
+        number_of_method_entries,
+        invalid = -1
+    };
 protected:
     static StubQueue* _code;
     static YuhuEntryPoint _return_entry[number_of_states];
     static YuhuDispatchTable _active_table;                           // the active    dispatch table (used by the interpreter for dispatch)
     static YuhuDispatchTable _normal_table;                           // the normal    dispatch table (used to set the active table in normal mode)
     static address       _wentry_point[YuhuDispatchTable::length];    // wide instructions only (vtos tosca always)
+    // method entry points
+    static address    _entry_table[number_of_method_entries];     // entry points for a given method
 public:
     static StubQueue* code() { return _code; }
     static void initialize();
     static address*   dispatch_table(TosState state)              { return _active_table.table_for(state); }
+    static address*   dispatch_table()                            { return _active_table.table_for(); }
     static int        distance_from_dispatch_table(TosState state){ return _active_table.distance_from(state); }
 
 #ifdef TARGET_ARCH_aarch64

@@ -11,6 +11,8 @@ YuhuDispatchTable YuhuInterpreter::_active_table;
 YuhuDispatchTable YuhuInterpreter::_normal_table;
 address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
 
+address    YuhuInterpreter::_entry_table            [YuhuInterpreter::number_of_method_entries];
+
 YuhuEntryPoint::YuhuEntryPoint() {
     assert(number_of_states == 9, "check the code below");
     _entry[btos] = NULL;
