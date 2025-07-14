@@ -113,6 +113,10 @@ void VM_Version::initialize() {
   if (_cpuFeatures & CPU_LSE) {
     if (FLAG_IS_DEFAULT(UseLSE))
       FLAG_SET_DEFAULT(UseLSE, true);
+    if (UseYuhuInt) {
+        // YuhuInt uses keystone to convert assembly to machine code, it doesn't recognize armv8.1 instructions
+        FLAG_SET_DEFAULT(UseLSE, false);
+    }
   } else {
     if (UseLSE) {
       warning("UseLSE specified, but not supported on this CPU");
