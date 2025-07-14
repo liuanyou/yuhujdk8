@@ -6,8 +6,6 @@
 #define JDK8_YUHU_INTERPRETERGENERATOR_AARCH64_HPP
 
 protected:
-
-    void bang_stack_shadow_pages(bool native_call);
     void generate_fixed_frame(bool native_call);
 private:
 

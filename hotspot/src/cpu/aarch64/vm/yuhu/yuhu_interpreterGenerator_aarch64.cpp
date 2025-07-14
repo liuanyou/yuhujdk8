@@ -16,34 +16,32 @@ address YuhuInterpreterGenerator::generate_error_exit(const char* msg) {
 
 address YuhuInterpreterGenerator::generate_return_entry_for(TosState state, int step, size_t index_size) {
     address entry = __ pc();
-    // TODO
     // Restore stack bottom in case i2c adjusted stack
-//    __ ldr(esp, Address(rfp, frame::interpreter_frame_last_sp_offset * wordSize));
-//    // and NULL it as marker that esp is now tos until next java call
-//    __ str(zr, Address(rfp, frame::interpreter_frame_last_sp_offset * wordSize));
-//    __ restore_bcp();
-//    __ restore_locals();
-//    __ restore_constant_pool_cache();
-//    __ get_method(rmethod);
-//
-//    // Pop N words from the stack
-//    __ get_cache_and_index_at_bcp(r1, r2, 1, index_size);
-//    __ ldr(r1, Address(r1, ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::flags_offset()));
-//    __ andr(r1, r1, ConstantPoolCacheEntry::parameter_size_mask);
-//
-//    __ add(esp, esp, r1, Assembler::LSL, 3);
-//
-//    // Restore machine SP
-//    __ ldr(rscratch1, Address(rmethod, Method::const_offset()));
-//    __ ldrh(rscratch1, Address(rscratch1, ConstMethod::max_stack_offset()));
-//    __ add(rscratch1, rscratch1, frame::interpreter_frame_monitor_size() + 2);
-//    __ ldr(rscratch2,
-//           Address(rfp, frame::interpreter_frame_initial_sp_offset * wordSize));
-//    __ sub(rscratch1, rscratch2, rscratch1, ext::uxtw, 3);
-//    __ andr(sp, rscratch1, -16);
-//
-//    __ get_dispatch();
-//    __ dispatch_next(state, step);
+    __ write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    // and NULL it as marker that esp is now tos until next java call
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    __ write_insts_restore_bcp();
+    __ write_insts_restore_locals();
+    __ write_insts_restore_constant_pool_cache();
+    __ write_insts_get_method(YuhuMacroAssembler::x12);
+
+    // Pop N words from the stack
+    __ write_insts_get_cache_and_index_at_bcp(YuhuMacroAssembler::x1, YuhuMacroAssembler::x2, 1, index_size);
+    __ write_inst("ldr x1, [x1, #%d]", in_bytes(ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::flags_offset()));
+    __ write_inst("and x1, x1, #%d", ConstantPoolCacheEntry::parameter_size_mask);
+
+    __ write_inst("add x20, x20, x1, lsl #3");
+
+    // Restore machine SP
+    __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh w8, [x8, #%d]", in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size() + 2);
+    __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
+    __ write_inst("sub x8, x9, w8, uxtw #3");
+    __ write_inst("and sp, x8, #-16");
+
+    __ write_insts_get_dispatch();
+    __ write_insts_dispatch_next(state, step);
 
     return entry;
 }
@@ -260,11 +258,11 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
     generate_stack_overflow_check();
 
     // compute beginning of parameters (rlocals)
-    __ write_inst("add x24, x20, x2, uxtx, #3");
+    __ write_inst("add x24, x20, x2, uxtx #3");
     __ write_inst("sub x24, x24, #0x8");
 
     // Make room for locals
-    __ write_inst("sub x8, x20, x3, uxtx, #3");
+    __ write_inst("sub x8, x20, x3, uxtx #3");
     __ write_inst("and sp, x8, #-16"); // sp-adjustment
 
     // r3 - # of additional locals
@@ -430,7 +428,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // for natives the size of locals is zero
 
     // compute beginning of parameters (rlocals)
-    __ write_inst("add x24, x20, x2, uxtx, #3");
+    __ write_inst("add x24, x20, x2, uxtx #3");
     __ write_inst("add x24, x24, #-8");
 
     // Pull SP back to minimum size: this avoids holes in the stack
@@ -507,8 +505,8 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 #ifdef ASSERT
     {
         YuhuLabel L;
-        const Address monitor_block_top(rfp,
-                                        frame::interpreter_frame_monitor_block_top_offset * wordSize);
+//        const Address monitor_block_top(rfp,
+//                                        frame::interpreter_frame_monitor_block_top_offset * wordSize);
         __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
         __ write_inst("cmp x20, x8");
         __ write_inst_b(YuhuMacroAssembler::eq, L);
@@ -529,7 +527,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
     __ write_inst("ldrh %s, [%s, #%d]", __ w_reg(t), t, in_bytes(ConstMethod::size_of_parameters_offset()));
 
-    __ write_inst("sub x8, x20, %s, uxtx, #%d", t, Interpreter::logStackElementSize);
+    __ write_inst("sub x8, x20, %s, uxtx #%d", t, Interpreter::logStackElementSize);
     __ write_inst("and sp, x8, #-16");
     __ write_inst_mov_reg(YuhuMacroAssembler::x20, YuhuMacroAssembler::x8);
 
@@ -621,8 +619,8 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // Change state to native
     __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native);
-    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
 
     // Call the native method.
     __ write_inst_blr(YuhuMacroAssembler::x10);
@@ -644,7 +642,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // change thread state
     __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native_trans);
-    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
     __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
 
     if (os::is_MP()) {
@@ -695,8 +693,8 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // change thread state
     __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_Java);
-    __ write_inst("ldr x9, [x28, #%d]", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst("stlr %s, %s", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
 
     // reset_last_Java_frame
     __ write_insts_reset_last_java_frame(true);
@@ -711,7 +709,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     {
         YuhuLabel no_oop, not_weak, store_result;
         __ write_inst_adr(t, AbstractInterpreter::result_handler(T_OBJECT));
-        __ write_inst("cmp %s, %s", t, result_handler);
+        __ write_inst_regs("cmp %s, %s", t, result_handler);
         __ write_inst_b(YuhuMacroAssembler::ne, no_oop);
         // Unbox oop result, e.g. JNIHandles::resolve result.
         __ write_insts_pop(ltos);
@@ -736,7 +734,6 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         __ pin_label(not_weak);
         // Resolve (untagged) jobject.
         __ write_inst("ldr x0, [x0]");
-        __ ldr(r0, Address(r0, 0));
         __ pin_label(store_result);
         __ write_inst("str x0, [%s, #%d]", YuhuMacroAssembler::x29, frame::interpreter_frame_oop_temp_offset*wordSize);
         // keep stack depth as expected by pushing oop which will eventually be discarded
@@ -746,7 +743,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     {
         YuhuLabel no_reguard;
-        __ write_inst("ldr x8, [x28, #%d]", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
+        __ write_inst("add x8, x28, #%d", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
         __ write_inst_regs("ldrb %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x8);
         __ write_inst("cmp x8, #%d", JavaThread::stack_guard_yellow_disabled);
         __ write_inst_b(YuhuMacroAssembler::ne, no_reguard);
@@ -799,8 +796,8 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
             // has not been unlocked by an explicit monitorexit bytecode.
 
             // monitor expect in c_rarg1 for slow unlock path
-            __ write_inst("ldr x1, [x29, #%d]", (intptr_t)(frame::interpreter_frame_initial_sp_offset *
-                                                           wordSize - sizeof(BasicObjectLock))); /*__ lea (c_rarg1, Address(rfp,   // address of first monitor
+            __ write_inst("add x1, x29, #%d", (intptr_t)(frame::interpreter_frame_initial_sp_offset *
+                                                           wordSize - sizeof(BasicObjectLock))); /*__ lea(c_rarg1, Address(rfp,   // address of first monitor
                                      (intptr_t)(frame::interpreter_frame_initial_sp_offset *
                                                 wordSize - sizeof(BasicObjectLock))));*/
 
@@ -1178,7 +1175,7 @@ address YuhuInterpreterGenerator::generate_CRC32_updateBytes_entry(YuhuInterpret
             __ write_inst("ldr %s, [x20, #%d]", buf, 2 * wordSize); // byte[] array
             __ write_inst("add %s, %s, #%d", buf, buf, arrayOopDesc::base_offset_in_bytes(T_BYTE)); // + header size
             __ write_inst("ldr %s, [x20, #%d]", __ w_reg(off), wordSize); // offset
-            __ write_inst("add %s, %s, %s", buf, buf, off); // + offset
+            __ write_inst_regs("add %s, %s, %s", buf, buf, off); // + offset
             __ write_inst("ldr %s, [x20, #%d]", __ w_reg(crc), 3 * wordSize); // Initial CRC
         }
         // Can now load 'len' since we're finished with 'off'
@@ -1244,7 +1241,7 @@ void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {
         __ write_inst("ldrh w8, [x8, #%d]", in_bytes(ConstMethod::max_stack_offset()));
         __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
                                          + (EnableInvokeDynamic ? 2 : 0));
-        __ write_inst("sub x8, sp, x8, uxtw, #3"); // w8, uxtw, #3 is used in old code
+        __ write_inst("sub x8, sp, w8, uxtw #3"); // w8, uxtw, #3 is used in old code
         __ write_inst("and sp, x8, #-16"); // sp-adjustment
     }
 }
@@ -1279,12 +1276,12 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
     // compute rsp as if this were going to be the last frame on
     // the stack before the red zone
 
-    const Address stack_base(rthread, Thread::stack_base_offset());
-    const Address stack_size(rthread, Thread::stack_size_offset());
+//    const Address stack_base(rthread, Thread::stack_base_offset());
+//    const Address stack_size(rthread, Thread::stack_size_offset());
 
     // locals + overhead, in bytes
     __ write_insts_mov_imm64(YuhuMacroAssembler::x0, overhead_size);
-    __ write_inst("add x0, x0, x3, lsl, #%d", Interpreter::logStackElementSize); // 2 slots per parameter.
+    __ write_inst("add x0, x0, x3, lsl #%d", Interpreter::logStackElementSize); // 2 slots per parameter.
 
     __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::stack_base_offset()));
     __ write_inst("ldr x9, [x28, #%d]", in_bytes(Thread::stack_size_offset()));
