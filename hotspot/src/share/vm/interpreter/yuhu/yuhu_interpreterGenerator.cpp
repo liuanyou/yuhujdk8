@@ -30,6 +30,108 @@ void YuhuInterpreterGenerator::generate_all() {
         }
     }
 
+//    { CodeletMark cm(_masm, "invoke return entry points");
+//        const TosState states[] = {itos, itos, itos, itos, ltos, ftos, dtos, atos, vtos};
+//        const int invoke_length = Bytecodes::length_for(Bytecodes::_invokestatic);
+//        const int invokeinterface_length = Bytecodes::length_for(Bytecodes::_invokeinterface);
+//        const int invokedynamic_length = Bytecodes::length_for(Bytecodes::_invokedynamic);
+//
+//        for (int i = 0; i < Interpreter::number_of_return_addrs; i++) {
+//            TosState state = states[i];
+//            Interpreter::_invoke_return_entry[i] = generate_return_entry_for(state, invoke_length, sizeof(u2));
+//            Interpreter::_invokeinterface_return_entry[i] = generate_return_entry_for(state, invokeinterface_length, sizeof(u2));
+//            Interpreter::_invokedynamic_return_entry[i] = generate_return_entry_for(state, invokedynamic_length, sizeof(u4));
+//        }
+//    }
+//
+//    { CodeletMark cm(_masm, "earlyret entry points");
+//        Interpreter::_earlyret_entry =
+//                EntryPoint(
+//                        generate_earlyret_entry_for(btos),
+//                        generate_earlyret_entry_for(ctos),
+//                        generate_earlyret_entry_for(stos),
+//                        generate_earlyret_entry_for(atos),
+//                        generate_earlyret_entry_for(itos),
+//                        generate_earlyret_entry_for(ltos),
+//                        generate_earlyret_entry_for(ftos),
+//                        generate_earlyret_entry_for(dtos),
+//                        generate_earlyret_entry_for(vtos)
+//                );
+//    }
+//
+//    { CodeletMark cm(_masm, "deoptimization entry points");
+//        for (int i = 0; i < Interpreter::number_of_deopt_entries; i++) {
+//            Interpreter::_deopt_entry[i] =
+//                    EntryPoint(
+//                            generate_deopt_entry_for(itos, i),
+//                            generate_deopt_entry_for(itos, i),
+//                            generate_deopt_entry_for(itos, i),
+//                            generate_deopt_entry_for(atos, i),
+//                            generate_deopt_entry_for(itos, i),
+//                            generate_deopt_entry_for(ltos, i),
+//                            generate_deopt_entry_for(ftos, i),
+//                            generate_deopt_entry_for(dtos, i),
+//                            generate_deopt_entry_for(vtos, i)
+//                    );
+//        }
+//    }
+//
+//    { CodeletMark cm(_masm, "result handlers for native calls");
+//        // The various result converter stublets.
+//        int is_generated[Interpreter::number_of_result_handlers];
+//        memset(is_generated, 0, sizeof(is_generated));
+//
+//        for (int i = 0; i < Interpreter::number_of_result_handlers; i++) {
+//            BasicType type = types[i];
+//            if (!is_generated[Interpreter::BasicType_as_index(type)]++) {
+//                Interpreter::_native_abi_to_tosca[Interpreter::BasicType_as_index(type)] = generate_result_handler_for(type);
+//            }
+//        }
+//    }
+//
+//    { CodeletMark cm(_masm, "continuation entry points");
+//        Interpreter::_continuation_entry =
+//                EntryPoint(
+//                        generate_continuation_for(btos),
+//                        generate_continuation_for(ctos),
+//                        generate_continuation_for(stos),
+//                        generate_continuation_for(atos),
+//                        generate_continuation_for(itos),
+//                        generate_continuation_for(ltos),
+//                        generate_continuation_for(ftos),
+//                        generate_continuation_for(dtos),
+//                        generate_continuation_for(vtos)
+//                );
+//    }
+//
+//    { CodeletMark cm(_masm, "safepoint entry points");
+//        Interpreter::_safept_entry =
+//                EntryPoint(
+//                        generate_safept_entry_for(btos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(ctos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(stos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(atos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(itos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(ltos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(ftos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(dtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+//                        generate_safept_entry_for(vtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint))
+//                );
+//    }
+//
+//    { CodeletMark cm(_masm, "exception handling");
+//        // (Note: this is not safepoint safe because thread may return to compiled code)
+//        generate_throw_exception();
+//    }
+//
+//    { CodeletMark cm(_masm, "throw exception entrypoints");
+//        Interpreter::_throw_ArrayIndexOutOfBoundsException_entry = generate_ArrayIndexOutOfBounds_handler("java/lang/ArrayIndexOutOfBoundsException");
+//        Interpreter::_throw_ArrayStoreException_entry            = generate_klass_exception_handler("java/lang/ArrayStoreException"                 );
+//        Interpreter::_throw_ArithmeticException_entry            = generate_exception_handler("java/lang/ArithmeticException"           , "/ by zero");
+//        Interpreter::_throw_ClassCastException_entry             = generate_ClassCastException_handler();
+//        Interpreter::_throw_NullPointerException_entry           = generate_exception_handler("java/lang/NullPointerException"          , NULL       );
+//        Interpreter::_throw_StackOverflowError_entry             = generate_StackOverflowError_handler();
+//    }
 
 #define method_entry(kind)                                                                    \
     {                                                                                             \
@@ -60,18 +162,20 @@ void YuhuInterpreterGenerator::generate_all() {
         method_entry(java_util_zip_CRC32_updateByteBuffer)
     }
 
-//    initialize_method_handle_entries();
+    initialize_method_handle_entries();
 
     // all native method kinds (must be one contiguous block)
-//    Interpreter::_native_entry_begin = Interpreter::code()->code_end();
-//    method_entry(native)
-//    method_entry(native_synchronized)
-//    Interpreter::_native_entry_end = Interpreter::code()->code_end();
+    YuhuInterpreter::_native_entry_begin = YuhuInterpreter::code()->code_end();
+    method_entry(native)
+    method_entry(native_synchronized)
+    YuhuInterpreter::_native_entry_end = YuhuInterpreter::code()->code_end();
 
 #undef method_entry
 
     // Bytecodes
     set_entry_points_for_all_bytes();
+
+    set_safepoints_for_all_bytes();
 }
 
 void YuhuInterpreterGenerator::set_entry_points(Bytecodes::Code code) {
@@ -121,6 +225,21 @@ void YuhuInterpreterGenerator::set_entry_points_for_all_bytes() {
         } else {
             set_unimplemented(i);
         }
+    }
+}
+
+void YuhuInterpreterGenerator::set_safepoints_for_all_bytes() {
+    for (int i = 0; i < DispatchTable::length; i++) {
+        Bytecodes::Code code = (Bytecodes::Code)i;
+        if (Bytecodes::is_defined(code)) YuhuInterpreter::_safept_table.set_entry(code, YuhuInterpreter::_safept_entry);
+    }
+}
+
+void YuhuInterpreterGenerator::initialize_method_handle_entries() {
+    // method handle entry kinds are generated later in MethodHandlesAdapterGenerator::generate:
+    for (int i = YuhuInterpreter::method_handle_invoke_FIRST; i <= YuhuInterpreter::method_handle_invoke_LAST; i++) {
+        YuhuInterpreter::MethodKind kind = (YuhuInterpreter::MethodKind) i;
+        YuhuInterpreter::_entry_table[kind] = YuhuInterpreter::_entry_table[Interpreter::abstract];
     }
 }
 

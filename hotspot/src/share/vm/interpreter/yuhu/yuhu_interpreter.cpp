@@ -6,8 +6,12 @@
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 
 StubQueue* YuhuInterpreter::_code = NULL;
+address YuhuInterpreter::_native_entry_begin = NULL;
+address YuhuInterpreter::_native_entry_end = NULL;
 YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_states];
+YuhuEntryPoint YuhuInterpreter::_safept_entry;
 YuhuDispatchTable YuhuInterpreter::_active_table;
+YuhuDispatchTable YuhuInterpreter::_safept_table;
 YuhuDispatchTable YuhuInterpreter::_normal_table;
 address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
 

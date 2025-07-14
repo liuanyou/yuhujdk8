@@ -28,9 +28,14 @@ protected:
     void set_entry_points(Bytecodes::Code code);
     void set_unimplemented(int i);
     void set_entry_points_for_all_bytes();
+    void set_safepoints_for_all_bytes();
 
     // entry point generator
     address generate_method_entry(YuhuInterpreter::MethodKind kind);
+
+    void bang_stack_shadow_pages(bool native_call);
+
+    void initialize_method_handle_entries();
 public:
     YuhuInterpreterGenerator();
 

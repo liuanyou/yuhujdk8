@@ -83,9 +83,15 @@ public:
     };
 protected:
     static StubQueue* _code;
+    static address    _native_entry_begin;                        // Region for native entry code
+    static address    _native_entry_end;
     static YuhuEntryPoint _return_entry[number_of_states];
+    static YuhuEntryPoint _safept_entry;
+
     static YuhuDispatchTable _active_table;                           // the active    dispatch table (used by the interpreter for dispatch)
     static YuhuDispatchTable _normal_table;                           // the normal    dispatch table (used to set the active table in normal mode)
+    static YuhuDispatchTable _safept_table;                           // the safepoint dispatch table (used to set the active table for safepoints)
+
     static address       _wentry_point[YuhuDispatchTable::length];    // wide instructions only (vtos tosca always)
     // method entry points
     static address    _entry_table[number_of_method_entries];     // entry points for a given method
