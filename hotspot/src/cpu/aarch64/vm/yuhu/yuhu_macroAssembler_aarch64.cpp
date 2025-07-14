@@ -71,7 +71,7 @@ address YuhuMacroAssembler::write_inst(const char* assembly) {
     return write_inst(machine_code(assembly));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, unsigned int imm32) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -80,7 +80,7 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, unsigned int imm32) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32) {
     char buffer[50];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -89,7 +89,7 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatReg
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, unsigned int imm32) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -98,7 +98,7 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, unsigned int imm32) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -107,7 +107,7 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, unsigned int imm32) {
+address YuhuMacroAssembler::write_inst(const char* assembly_format, int imm32) {
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -316,15 +316,15 @@ address YuhuMacroAssembler::write_inst_pop_f(YuhuFloatRegister r) {
 }
 
 address YuhuMacroAssembler::write_inst_pop_d(YuhuFloatRegister r) {
-    return write_inst("ldr d0, [x20], #%d", 2 * Interpreter::stackElementSize);
+    return write_inst("ldr %s, [x20], #%d", r, 2 * Interpreter::stackElementSize);
 }
 
 address YuhuMacroAssembler::write_inst_push_f(YuhuFloatRegister r) {
-    return write_inst("str s0, [x20, #%d]!", r, -wordSize);
+    return write_inst("str %s, [x20, #%d]!", r, -wordSize);
 }
 
 address YuhuMacroAssembler::write_inst_push_d(YuhuFloatRegister r) {
-    return write_inst("str d0, [x20, #%d]!", r, 2 * -wordSize);
+    return write_inst("str %s, [x20, #%d]!", r, 2 * -wordSize);
 }
 
 address YuhuMacroAssembler::write_insts_enter() {
@@ -437,9 +437,9 @@ address YuhuMacroAssembler::write_insts_dispatch_base(TosState state, address* t
 //    if (VerifyActivationFrameSize) {
 //        Unimplemented();
 //    }
-//    if (verifyoop) {
-//        verify_oop(r0, state);
-//    }
+    if (verifyoop) {
+        write_insts_verify_oop(x0, state);
+    }
     if (table == YuhuInterpreter::dispatch_table(state)) {
         write_inst("add w9, %s, #%d", w8, YuhuInterpreter::distance_from_dispatch_table(state));
         write_inst("ldr x9, [x21, w9, uxtw #3]");
@@ -1093,7 +1093,7 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
         if (counters != NULL) {
             write_insts_atomic_incw((address)counters->revoked_lock_entry_count_addr(), tmp_reg, x8, x9);
         }
-        pin_label(done);
+        pin_label(nope);
     }
 
     pin_label(cas_label);
@@ -1392,5 +1392,44 @@ address YuhuMacroAssembler::write_insts_update_byte_crc32(YuhuRegister crc, Yuhu
     write_inst_regs("and %s, %s, #0xff", val, val);
     write_inst_regs("ldr %s, [%s, %s, lsl #2]", w_reg(val), table, val);
     write_inst_regs("eor %s, %s, %s, lsr #8", crc, val, crc);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_get_cache_and_index_at_bcp(YuhuRegister cache,
+                                                           YuhuRegister index,
+                                                           int bcp_offset,
+                                                           size_t index_size) {
+//    assert_different_registers(cache, index);
+//    assert_different_registers(cache, rcpool);
+    write_insts_get_cache_index_at_bcp(index, bcp_offset, index_size);
+    assert(sizeof(ConstantPoolCacheEntry) == 4 * wordSize, "adjust code below");
+    // convert from field index to ConstantPoolCacheEntry
+    // aarch64 already has the cache in rcpool so there is no need to
+    // install it in cache. instead we pre-add the indexed offset to
+    // rcpool and return it in cache. All clients of this method need to
+    // be modified accordingly.
+    write_inst_regs("add %s, x26, %s, lsl #5", cache, index);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister index,
+                                                       int bcp_offset,
+                                                       size_t index_size) {
+    assert(bcp_offset > 0, "bcp is still pointing to start of bytecode");
+    if (index_size == sizeof(u2)) {
+        write_inst("ldrh %s, [x22, #%d]", w_reg(index), bcp_offset);
+    } else if (index_size == sizeof(u4)) {
+        assert(EnableInvokeDynamic, "giant index used only for JSR 292");
+        write_inst("ldr %s, [x22, #%d]", w_reg(index), bcp_offset);
+        // Check if the secondary index definition is still ~x, otherwise
+        // we have to change the following assembler code to calculate the
+        // plain index.
+        assert(ConstantPool::decode_invokedynamic_index(~123) == 123, "else change next line");
+        write_inst_regs("eon %s, %s, %s", w_reg(index), w_reg(index), w_reg(xzr)); // convert to plain index
+    } else if (index_size == sizeof(u1)) {
+        write_inst("ldrb %s, [x22, #%d]", w_reg(index), bcp_offset);
+    } else {
+        ShouldNotReachHere();
+    }
     return current_pc();
 }

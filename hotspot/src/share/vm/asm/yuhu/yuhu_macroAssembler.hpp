@@ -98,7 +98,7 @@ private:
     }
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
-                "gt", "ne", "al", "ls", "hi"
+                "gt", "ne", "al", "ls", "hi", "le", "eq"
         };
 
         // check array index
@@ -154,15 +154,15 @@ public:
 
     address write_inst(const char* assembly);
 
-    address write_inst(const char* assembly_format, YuhuRegister reg, unsigned int imm32);
+    address write_inst(const char* assembly_format, YuhuRegister reg, int imm32);
 
-    address write_inst(const char* assembly_format, YuhuFloatRegister reg, unsigned int imm32);
+    address write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32);
 
-    address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, unsigned int imm32);
+    address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm32);
 
-    address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, unsigned int imm32);
+    address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, int imm32);
 
-    address write_inst(const char* assembly_format, unsigned int imm32);
+    address write_inst(const char* assembly_format, int imm32);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
 
@@ -319,7 +319,7 @@ public:
     }
 
     address write_insts_get_method(YuhuRegister reg) {
-        return write_inst("ldr %s, [x29, #%d]", frame::interpreter_frame_method_offset * wordSize);
+        return write_inst("ldr %s, [x29, #%d]", reg, frame::interpreter_frame_method_offset * wordSize);
     }
 
     address write_insts_pop(TosState state); // transition vtos -> state
@@ -341,9 +341,19 @@ public:
         write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
         // NULL last_sp until next java call
         write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+        return current_pc();
     }
 
     address write_insts_update_byte_crc32(YuhuRegister crc, YuhuRegister val, YuhuRegister table);
+
+    address write_insts_restore_constant_pool_cache() {
+        write_inst("ldr x26, [x29, #%d]", frame::interpreter_frame_cache_offset * wordSize);
+        return current_pc();
+    }
+
+    address write_insts_get_cache_and_index_at_bcp(YuhuRegister cache, YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
+
+    address write_insts_get_cache_index_at_bcp(YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
