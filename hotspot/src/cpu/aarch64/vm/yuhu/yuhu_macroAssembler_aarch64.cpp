@@ -327,6 +327,12 @@ address YuhuMacroAssembler::write_inst_push_d(YuhuFloatRegister r) {
     return write_inst("str %s, [x20, #%d]!", r, 2 * -wordSize);
 }
 
+address YuhuMacroAssembler::write_inst_cset(YuhuRegister reg, YuhuCond cond) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "cset %s, %s", reg_name(reg), cond_name(cond));
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_insts_enter() {
     write_inst("stp x29, x30, [sp, #-0x10]!");
     write_inst("mov x29, sp");
@@ -1431,5 +1437,15 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
     } else {
         ShouldNotReachHere();
     }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_c2bool(YuhuRegister x) {
+    // implements x == 0 ? 0 : 1
+    // note: must only look at least-significant byte of x
+    //       since C-style booleans are stored in one byte
+    //       only! (was bug)
+    write_inst("tst %s, #%d", x, 0xff);
+    write_inst_cset(x, YuhuMacroAssembler::ne);
     return current_pc();
 }

@@ -217,6 +217,8 @@ public:
     address write_inst_push_f(YuhuFloatRegister r = s0);
     address write_inst_push_d(YuhuFloatRegister r = d0);
 
+    address write_inst_cset(YuhuRegister reg, YuhuCond cond);
+
     address write_insts_enter();
 
     address write_insts_leave();
@@ -354,6 +356,8 @@ public:
     address write_insts_get_cache_and_index_at_bcp(YuhuRegister cache, YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
 
     address write_insts_get_cache_index_at_bcp(YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
+
+    address write_insts_c2bool(YuhuRegister x);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
