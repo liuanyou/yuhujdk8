@@ -20,6 +20,8 @@ protected:
     void generate_all();
     address generate_error_exit(const char* msg);
     address generate_return_entry_for(TosState state, int step, size_t index_size);
+    address generate_deopt_entry_for(TosState state, int step);
+    address generate_result_handler_for(BasicType type);
 
     void generate_and_dispatch (YuhuTemplate* t, TosState tos_out = ilgl);
     void set_vtos_entry_points (YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);

@@ -81,12 +81,25 @@ public:
         number_of_method_entries,
         invalid = -1
     };
+    enum MoreConstants {
+        number_of_return_entries  = number_of_states,               // number of return entry points
+        number_of_deopt_entries   = number_of_states,               // number of deoptimization entry points
+        number_of_return_addrs    = number_of_states                // number of return addresses
+    };
+    enum SomeConstants {
+        number_of_result_handlers = 10                              // number of result handlers for native calls
+    };
 protected:
     static StubQueue* _code;
     static address    _native_entry_begin;                        // Region for native entry code
     static address    _native_entry_end;
-    static YuhuEntryPoint _return_entry[number_of_states];
+    static YuhuEntryPoint _return_entry[number_of_return_entries];    // entry points to return to from a call
+    static YuhuEntryPoint _deopt_entry[number_of_deopt_entries];      // entry points to return to from a deoptimization
     static YuhuEntryPoint _safept_entry;
+
+    static address _invoke_return_entry[number_of_return_addrs];           // for invokestatic, invokespecial, invokevirtual return entries
+    static address _invokeinterface_return_entry[number_of_return_addrs];  // for invokeinterface return entries
+    static address _invokedynamic_return_entry[number_of_return_addrs];    // for invokedynamic return entries
 
     static YuhuDispatchTable _active_table;                           // the active    dispatch table (used by the interpreter for dispatch)
     static YuhuDispatchTable _normal_table;                           // the normal    dispatch table (used to set the active table in normal mode)
@@ -95,12 +108,14 @@ protected:
     static address       _wentry_point[YuhuDispatchTable::length];    // wide instructions only (vtos tosca always)
     // method entry points
     static address    _entry_table[number_of_method_entries];     // entry points for a given method
+    static address    _native_abi_to_tosca[number_of_result_handlers];  // for native method result handlers
 public:
     static StubQueue* code() { return _code; }
     static void initialize();
     static address*   dispatch_table(TosState state)              { return _active_table.table_for(state); }
     static address*   dispatch_table()                            { return _active_table.table_for(); }
     static int        distance_from_dispatch_table(TosState state){ return _active_table.distance_from(state); }
+    static int        BasicType_as_index(BasicType type);         // computes index into result_handler_by_index table
 
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"

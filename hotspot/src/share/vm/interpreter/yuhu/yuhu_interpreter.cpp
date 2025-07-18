@@ -8,14 +8,21 @@
 StubQueue* YuhuInterpreter::_code = NULL;
 address YuhuInterpreter::_native_entry_begin = NULL;
 address YuhuInterpreter::_native_entry_end = NULL;
-YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_states];
+YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_return_entries];
+YuhuEntryPoint YuhuInterpreter::_deopt_entry[number_of_deopt_entries];
 YuhuEntryPoint YuhuInterpreter::_safept_entry;
+
+address YuhuInterpreter::_invoke_return_entry[number_of_return_addrs];
+address YuhuInterpreter::_invokeinterface_return_entry[number_of_return_addrs];
+address YuhuInterpreter::_invokedynamic_return_entry[number_of_return_addrs];
+
 YuhuDispatchTable YuhuInterpreter::_active_table;
 YuhuDispatchTable YuhuInterpreter::_safept_table;
 YuhuDispatchTable YuhuInterpreter::_normal_table;
 address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
 
 address    YuhuInterpreter::_entry_table            [YuhuInterpreter::number_of_method_entries];
+address    YuhuInterpreter::_native_abi_to_tosca[number_of_result_handlers];
 
 YuhuEntryPoint::YuhuEntryPoint() {
     assert(number_of_states == 9, "check the code below");
@@ -125,3 +132,23 @@ void YuhuInterpreter::initialize() {
     _active_table = _normal_table;
 }
 
+int YuhuInterpreter::BasicType_as_index(BasicType type) {
+    int i = 0;
+    switch (type) {
+        case T_BOOLEAN: i = 0; break;
+        case T_CHAR   : i = 1; break;
+        case T_BYTE   : i = 2; break;
+        case T_SHORT  : i = 3; break;
+        case T_INT    : i = 4; break;
+        case T_LONG   : i = 5; break;
+        case T_VOID   : i = 6; break;
+        case T_FLOAT  : i = 7; break;
+        case T_DOUBLE : i = 8; break;
+        case T_OBJECT : i = 9; break;
+        case T_ARRAY  : i = 9; break;
+        default       : ShouldNotReachHere();
+    }
+    assert(0 <= i && i < YuhuInterpreter::number_of_result_handlers,
+           "index out of bounds");
+    return i;
+}

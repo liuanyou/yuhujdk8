@@ -46,6 +46,44 @@ address YuhuInterpreterGenerator::generate_return_entry_for(TosState state, int 
     return entry;
 }
 
+address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int step) {
+    address entry = __ pc();
+    __ write_insts_restore_bcp();
+    __ write_insts_restore_locals();
+    __ write_insts_restore_constant_pool_cache();
+    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    __ write_insts_get_dispatch();
+
+    // Calculate stack limit
+    __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(YuhuMacroAssembler::x8), in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
+                                     + (EnableInvokeDynamic ? 2 : 0));
+    __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
+    __ write_inst("sub x8, x9, x8, uxtx #3");
+    __ write_inst("and sp, x8, #-16");
+
+    // Restore expression stack pointer
+    __ write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    // NULL last_sp until next java call
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+
+    // handle exceptions
+    {
+        YuhuLabel L;
+        __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
+        __ write_inst_cbz(YuhuMacroAssembler::x8, L);
+        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+                   CAST_FROM_FN_PTR(address,
+                                    InterpreterRuntime::throw_pending_exception));
+        __ write_insts_stop("should not reach here");
+        __ pin_label(L);
+    }
+
+    __ write_insts_dispatch_next(state, step);
+    return entry;
+}
+
 void YuhuInterpreterGenerator::generate_and_dispatch(YuhuTemplate* t, TosState tos_out) {
     // TODO
 //    if (PrintBytecodeHistogram)                                    histogram_bytecode(t);
@@ -1400,4 +1438,29 @@ void YuhuInterpreterGenerator::lock_method(void) {
     __ write_inst("str x0, [x20, #%d]", BasicObjectLock::obj_offset_in_bytes());
     __ write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x20); // object address
     __ write_insts_lock_object(YuhuMacroAssembler::x1);
+}
+
+address YuhuInterpreterGenerator::generate_result_handler_for(
+        BasicType type) {
+    address entry = __ current_pc();
+    switch (type) {
+        case T_BOOLEAN: __ write_insts_c2bool(YuhuMacroAssembler::x0);          break;
+        case T_CHAR   : __ write_inst_regs("uxth %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
+        case T_BYTE   : __ write_inst_regs("sxtb %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
+        case T_SHORT  : __ write_inst_regs("sxth %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
+        case T_INT    : __ write_inst_regs("uxtw %s, %s", YuhuMacroAssembler::x0, __ w_reg(YuhuMacroAssembler::x0));        break;  // FIXME: We almost certainly don't need this
+        case T_LONG   : /* nothing to do */        break;
+        case T_VOID   : /* nothing to do */        break;
+        case T_FLOAT  : /* nothing to do */        break;
+        case T_DOUBLE : /* nothing to do */        break;
+        case T_OBJECT :
+            // retrieve result from frame
+            __ write_inst("ldr x0, [x29, #%d]", frame::interpreter_frame_oop_temp_offset*wordSize);
+            // and verify it
+            __ write_insts_verify_oop(YuhuMacroAssembler::x0, "broken oop");
+            break;
+        default       : ShouldNotReachHere();
+    }
+    __ write_inst("ret");  // return from result handler
+    return entry;
 }

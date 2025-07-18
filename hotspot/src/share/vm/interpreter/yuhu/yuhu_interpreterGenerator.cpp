@@ -5,6 +5,19 @@
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 #include "interpreter/yuhu/yuhu_templateTable.hpp"
 
+static const BasicType types[YuhuInterpreter::number_of_result_handlers] = {
+        T_BOOLEAN,
+        T_CHAR   ,
+        T_BYTE   ,
+        T_SHORT  ,
+        T_INT    ,
+        T_LONG   ,
+        T_VOID   ,
+        T_FLOAT  ,
+        T_DOUBLE ,
+        T_OBJECT
+};
+
 void YuhuInterpreterGenerator::generate_all() {
     {
         YuhuCodeletMark cm(_masm, "yuhu error exits");
@@ -14,7 +27,7 @@ void YuhuInterpreterGenerator::generate_all() {
     {
         YuhuCodeletMark cm(_masm, "yuhu return entry points");
         const int index_size = sizeof(u2);
-        for (int i = 0; i < number_of_states; i++) {
+        for (int i = 0; i < YuhuInterpreter::number_of_return_entries; i++) {
             YuhuInterpreter::_return_entry[i] =
                 YuhuEntryPoint(
                     generate_return_entry_for(itos, i, index_size),
@@ -30,20 +43,21 @@ void YuhuInterpreterGenerator::generate_all() {
         }
     }
 
-//    { CodeletMark cm(_masm, "invoke return entry points");
-//        const TosState states[] = {itos, itos, itos, itos, ltos, ftos, dtos, atos, vtos};
-//        const int invoke_length = Bytecodes::length_for(Bytecodes::_invokestatic);
-//        const int invokeinterface_length = Bytecodes::length_for(Bytecodes::_invokeinterface);
-//        const int invokedynamic_length = Bytecodes::length_for(Bytecodes::_invokedynamic);
-//
-//        for (int i = 0; i < Interpreter::number_of_return_addrs; i++) {
-//            TosState state = states[i];
-//            Interpreter::_invoke_return_entry[i] = generate_return_entry_for(state, invoke_length, sizeof(u2));
-//            Interpreter::_invokeinterface_return_entry[i] = generate_return_entry_for(state, invokeinterface_length, sizeof(u2));
-//            Interpreter::_invokedynamic_return_entry[i] = generate_return_entry_for(state, invokedynamic_length, sizeof(u4));
-//        }
-//    }
-//
+    { YuhuCodeletMark cm(_masm, "yuhu invoke return entry points");
+        const TosState states[] = {itos, itos, itos, itos, ltos, ftos, dtos, atos, vtos};
+        const int invoke_length = Bytecodes::length_for(Bytecodes::_invokestatic);
+        const int invokeinterface_length = Bytecodes::length_for(Bytecodes::_invokeinterface);
+        const int invokedynamic_length = Bytecodes::length_for(Bytecodes::_invokedynamic);
+
+        for (int i = 0; i < YuhuInterpreter::number_of_return_addrs; i++) {
+            TosState state = states[i];
+            YuhuInterpreter::_invoke_return_entry[i] = generate_return_entry_for(state, invoke_length, sizeof(u2));
+            YuhuInterpreter::_invokeinterface_return_entry[i] = generate_return_entry_for(state, invokeinterface_length, sizeof(u2));
+            YuhuInterpreter::_invokedynamic_return_entry[i] = generate_return_entry_for(state, invokedynamic_length, sizeof(u4));
+        }
+    }
+
+    // TODO
 //    { CodeletMark cm(_masm, "earlyret entry points");
 //        Interpreter::_earlyret_entry =
 //                EntryPoint(
@@ -58,37 +72,37 @@ void YuhuInterpreterGenerator::generate_all() {
 //                        generate_earlyret_entry_for(vtos)
 //                );
 //    }
-//
-//    { CodeletMark cm(_masm, "deoptimization entry points");
-//        for (int i = 0; i < Interpreter::number_of_deopt_entries; i++) {
-//            Interpreter::_deopt_entry[i] =
-//                    EntryPoint(
-//                            generate_deopt_entry_for(itos, i),
-//                            generate_deopt_entry_for(itos, i),
-//                            generate_deopt_entry_for(itos, i),
-//                            generate_deopt_entry_for(atos, i),
-//                            generate_deopt_entry_for(itos, i),
-//                            generate_deopt_entry_for(ltos, i),
-//                            generate_deopt_entry_for(ftos, i),
-//                            generate_deopt_entry_for(dtos, i),
-//                            generate_deopt_entry_for(vtos, i)
-//                    );
-//        }
-//    }
-//
-//    { CodeletMark cm(_masm, "result handlers for native calls");
-//        // The various result converter stublets.
-//        int is_generated[Interpreter::number_of_result_handlers];
-//        memset(is_generated, 0, sizeof(is_generated));
-//
-//        for (int i = 0; i < Interpreter::number_of_result_handlers; i++) {
-//            BasicType type = types[i];
-//            if (!is_generated[Interpreter::BasicType_as_index(type)]++) {
-//                Interpreter::_native_abi_to_tosca[Interpreter::BasicType_as_index(type)] = generate_result_handler_for(type);
-//            }
-//        }
-//    }
-//
+
+    { YuhuCodeletMark cm(_masm, "yuhu deoptimization entry points");
+        for (int i = 0; i < YuhuInterpreter::number_of_deopt_entries; i++) {
+            YuhuInterpreter::_deopt_entry[i] =
+                    YuhuEntryPoint(
+                            generate_deopt_entry_for(itos, i),
+                            generate_deopt_entry_for(itos, i),
+                            generate_deopt_entry_for(itos, i),
+                            generate_deopt_entry_for(atos, i),
+                            generate_deopt_entry_for(itos, i),
+                            generate_deopt_entry_for(ltos, i),
+                            generate_deopt_entry_for(ftos, i),
+                            generate_deopt_entry_for(dtos, i),
+                            generate_deopt_entry_for(vtos, i)
+                    );
+        }
+    }
+
+    { YuhuCodeletMark cm(_masm, "yuhu result handlers for native calls");
+        // The various result converter stublets.
+        int is_generated[YuhuInterpreter::number_of_result_handlers];
+        memset(is_generated, 0, sizeof(is_generated));
+
+        for (int i = 0; i < YuhuInterpreter::number_of_result_handlers; i++) {
+            BasicType type = types[i];
+            if (!is_generated[YuhuInterpreter::BasicType_as_index(type)]++) {
+                YuhuInterpreter::_native_abi_to_tosca[YuhuInterpreter::BasicType_as_index(type)] = generate_result_handler_for(type);
+            }
+        }
+    }
+
 //    { CodeletMark cm(_masm, "continuation entry points");
 //        Interpreter::_continuation_entry =
 //                EntryPoint(
