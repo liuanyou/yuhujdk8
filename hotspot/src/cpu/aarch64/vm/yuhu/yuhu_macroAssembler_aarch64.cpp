@@ -471,6 +471,13 @@ address YuhuMacroAssembler::write_insts_dispatch_next(TosState state, int step) 
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_dispatch_via(TosState state, address* table) {
+    // load current bytecode
+    write_inst("ldrb w8, [x22, #0]");
+    write_insts_dispatch_base(state, table);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_far_jump(address entry, CodeBuffer *cbuf, YuhuRegister tmp) {
     assert(ReservedCodeCacheSize < 4*G, "branch out of range");
     assert(CodeCache::find_blob(entry) != NULL,

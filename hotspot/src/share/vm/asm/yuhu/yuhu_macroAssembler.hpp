@@ -244,6 +244,8 @@ public:
 
     address write_insts_dispatch_next(TosState state, int step = 0);
 
+    address write_insts_dispatch_via(TosState state, address* table);
+
     address write_insts_dispatch_base(TosState state, address* table, bool verifyoop = true);
 
     address write_insts_get_dispatch();
