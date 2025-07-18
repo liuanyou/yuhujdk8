@@ -2,6 +2,7 @@
 // Created by Anyou Liu on 2025/4/24.
 //
 
+#include "interpreter/interpreterRuntime.hpp"
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 #include "interpreter/yuhu/yuhu_templateTable.hpp"
 
@@ -103,36 +104,36 @@ void YuhuInterpreterGenerator::generate_all() {
         }
     }
 
-//    { CodeletMark cm(_masm, "continuation entry points");
-//        Interpreter::_continuation_entry =
-//                EntryPoint(
-//                        generate_continuation_for(btos),
-//                        generate_continuation_for(ctos),
-//                        generate_continuation_for(stos),
-//                        generate_continuation_for(atos),
-//                        generate_continuation_for(itos),
-//                        generate_continuation_for(ltos),
-//                        generate_continuation_for(ftos),
-//                        generate_continuation_for(dtos),
-//                        generate_continuation_for(vtos)
-//                );
-//    }
-//
-//    { CodeletMark cm(_masm, "safepoint entry points");
-//        Interpreter::_safept_entry =
-//                EntryPoint(
-//                        generate_safept_entry_for(btos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(ctos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(stos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(atos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(itos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(ltos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(ftos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(dtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
-//                        generate_safept_entry_for(vtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint))
-//                );
-//    }
-//
+    { YuhuCodeletMark cm(_masm, "yuhu continuation entry points");
+        YuhuInterpreter::_continuation_entry =
+                YuhuEntryPoint(
+                        generate_continuation_for(btos),
+                        generate_continuation_for(ctos),
+                        generate_continuation_for(stos),
+                        generate_continuation_for(atos),
+                        generate_continuation_for(itos),
+                        generate_continuation_for(ltos),
+                        generate_continuation_for(ftos),
+                        generate_continuation_for(dtos),
+                        generate_continuation_for(vtos)
+                );
+    }
+
+    { YuhuCodeletMark cm(_masm, "yuhu safepoint entry points");
+        YuhuInterpreter::_safept_entry =
+                YuhuEntryPoint(
+                        generate_safept_entry_for(btos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(ctos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(stos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(atos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(itos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(ltos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(ftos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(dtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint)),
+                        generate_safept_entry_for(vtos, CAST_FROM_FN_PTR(address, InterpreterRuntime::at_safepoint))
+                );
+    }
+
 //    { CodeletMark cm(_masm, "exception handling");
 //        // (Note: this is not safepoint safe because thread may return to compiled code)
 //        generate_throw_exception();

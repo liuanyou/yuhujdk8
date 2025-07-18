@@ -10,6 +10,7 @@ address YuhuInterpreter::_native_entry_begin = NULL;
 address YuhuInterpreter::_native_entry_end = NULL;
 YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_return_entries];
 YuhuEntryPoint YuhuInterpreter::_deopt_entry[number_of_deopt_entries];
+YuhuEntryPoint YuhuInterpreter::_continuation_entry;
 YuhuEntryPoint YuhuInterpreter::_safept_entry;
 
 address YuhuInterpreter::_invoke_return_entry[number_of_return_addrs];

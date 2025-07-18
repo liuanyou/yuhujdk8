@@ -292,13 +292,19 @@ public:
 
     address write_insts_final_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, bool check_exceptions = true);
 
+    address write_insts_final_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, YuhuRegister arg_2, YuhuRegister arg_3, bool check_exceptions = true);
+
     address write_insts_final_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions = true);
 
     address write_insts_final_call_VM_base(YuhuRegister oop_result, YuhuRegister java_thread, YuhuRegister last_java_sp, address  entry_point, int number_of_arguments, bool check_exceptions);
 
     address write_insts_final_call_VM_leaf_base(address entry_point, int number_of_arguments, YuhuLabel *retaddr = NULL);
 
+    address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0);
+
     address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1);
+
+    address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1, YuhuRegister arg_2);
 
     address write_insts_get_vm_result(YuhuRegister oop_result, YuhuRegister thread);
 
@@ -360,6 +366,11 @@ public:
     address write_insts_get_cache_index_at_bcp(YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
 
     address write_insts_c2bool(YuhuRegister x);
+
+    address write_insts_remove_activation(TosState state,
+                           bool throw_monitor_exception = true,
+                           bool install_monitor_exception = true,
+                           bool notify_jvmdi = true);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

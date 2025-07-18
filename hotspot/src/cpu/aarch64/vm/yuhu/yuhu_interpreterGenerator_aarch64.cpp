@@ -1464,3 +1464,22 @@ address YuhuInterpreterGenerator::generate_result_handler_for(
     __ write_inst("ret");  // return from result handler
     return entry;
 }
+
+address YuhuInterpreterGenerator::generate_continuation_for(TosState state) {
+    address entry = __ current_pc();
+    // NULL last_sp until next java call
+    __ write_inst("str xzr [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    __ write_insts_dispatch_next(state);
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_safept_entry_for(
+        TosState state,
+        address runtime_entry) {
+    address entry = __ current_pc();
+    __ write_insts_push(state);
+    __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, runtime_entry);
+    __ write_inst("dmb ish");
+    __ write_insts_dispatch_via(vtos, YuhuInterpreter::_normal_table.table_for(vtos));
+    return entry;
+}

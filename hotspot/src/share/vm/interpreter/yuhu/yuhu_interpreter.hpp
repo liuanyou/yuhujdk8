@@ -95,6 +95,7 @@ protected:
     static address    _native_entry_end;
     static YuhuEntryPoint _return_entry[number_of_return_entries];    // entry points to return to from a call
     static YuhuEntryPoint _deopt_entry[number_of_deopt_entries];      // entry points to return to from a deoptimization
+    static YuhuEntryPoint _continuation_entry;
     static YuhuEntryPoint _safept_entry;
 
     static address _invoke_return_entry[number_of_return_addrs];           // for invokestatic, invokespecial, invokevirtual return entries

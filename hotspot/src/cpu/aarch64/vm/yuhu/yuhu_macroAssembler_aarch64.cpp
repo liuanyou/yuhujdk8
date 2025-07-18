@@ -848,6 +848,25 @@ address YuhuMacroAssembler::write_insts_final_call_VM(YuhuRegister oop_result, a
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_final_call_VM(YuhuRegister oop_result, address entry_point, YuhuRegister arg_1, YuhuRegister arg_2, YuhuRegister arg_3, bool check_exceptions) {
+    assert(arg_1 != x3, "smashed arg");
+    assert(arg_2 != x3, "smashed arg");
+    if (x3 != arg_3) {
+        write_inst_mov_reg(x3, arg_3);
+    }
+
+    assert(arg_1 != x2, "smashed arg");
+    if (x2 != arg_2) {
+        write_inst_mov_reg(x2, arg_2);
+    }
+
+    if (x1 != arg_1) {
+        write_inst_mov_reg(x1, arg_1);
+    }
+    write_insts_final_call_VM_helper(oop_result, entry_point, 3, check_exceptions);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_final_call_VM_helper(YuhuRegister oop_result, address entry_point, int number_of_arguments, bool check_exceptions) {
     write_insts_call_VM_base(oop_result, noreg, noreg, entry_point, number_of_arguments, check_exceptions);
     return current_pc();
@@ -935,6 +954,14 @@ address YuhuMacroAssembler::write_insts_final_call_VM_leaf_base(address entry_po
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0) {
+    if (arg_0 != x0) {
+        write_inst_mov_reg(x0, arg_0);
+    }
+    write_insts_call_VM_leaf_base(entry_point, 1);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1) {
     if (arg_0 != x0) {
         write_inst_mov_reg(x0, arg_0);
@@ -943,6 +970,20 @@ address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, 
         write_inst_mov_reg(x1, arg_1);
     }
     write_insts_call_VM_leaf_base(entry_point, 2);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1, YuhuRegister arg_2) {
+    if (arg_0 != x0) {
+        write_inst_mov_reg(x0, arg_0);
+    }
+    if (arg_1 != x1) {
+        write_inst_mov_reg(x1, arg_1);
+    }
+    if (arg_2 != x2) {
+        write_inst_mov_reg(x2, arg_2);
+    }
+    write_insts_call_VM_leaf_base(entry_point, 3);
     return current_pc();
 }
 
@@ -1454,5 +1495,152 @@ address YuhuMacroAssembler::write_insts_c2bool(YuhuRegister x) {
     //       only! (was bug)
     write_inst("tst %s, #%d", x, 0xff);
     write_inst_cset(x, YuhuMacroAssembler::ne);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_remove_activation(
+        TosState state,
+        bool throw_monitor_exception,
+        bool install_monitor_exception,
+        bool notify_jvmdi) {
+    // Note: Registers r3 xmm0 may be in use for the
+    // result check if synchronized method
+    YuhuLabel unlocked, unlock, no_unlock;
+
+    // get the value of _do_not_unlock_if_synchronized into r3
+//    const Address do_not_unlock_if_synchronized(rthread,
+//                                                in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+    write_inst("ldrb w3, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
+    write_inst("strb wzr, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset())); // reset the flag
+
+    // get method access flags
+    write_inst("ldr x1, [x29, #%d]", frame::interpreter_frame_method_offset * wordSize);
+    write_inst("ldr x2, [x1, #%d]", in_bytes(Method::access_flags_offset()));
+    write_inst("tst x2, #%d", JVM_ACC_SYNCHRONIZED);
+    write_inst_b(eq, unlocked);
+
+    // Don't unlock anything if the _do_not_unlock_if_synchronized flag
+    // is set.
+    write_inst_cbnz(x3, no_unlock);
+
+    // unlock monitor
+    write_insts_push(state); // save result
+
+    // BasicObjectLock will be first in list, since this is a
+    // synchronized method. However, need to check that the object has
+    // not been unlocked by an explicit monitorexit bytecode.
+//    const Address monitor(rfp, frame::interpreter_frame_initial_sp_offset *
+//                               wordSize - (int) sizeof(BasicObjectLock));
+    // We use c_rarg1 so that if we go slow path it will be the correct
+    // register for unlock_object to pass to VM directly
+    write_inst("add x1, x29, #%d", frame::interpreter_frame_initial_sp_offset *
+                                   wordSize - (int) sizeof(BasicObjectLock)); // lea(c_rarg1, monitor); // address of first monitor
+
+    write_inst("ldr x0, [x1, #%d]", BasicObjectLock::obj_offset_in_bytes());
+    write_inst_cbnz(x0, unlock);
+
+    write_insts_pop(state);
+    if (throw_monitor_exception) {
+        // Entry already unlocked, need to throw exception
+        write_insts_final_call_VM(noreg, CAST_FROM_FN_PTR(address,
+                                        InterpreterRuntime::throw_illegal_monitor_state_exception));
+        write_insts_stop("should not reach here");
+    } else {
+        // Monitor already unlocked during a stack unroll. If requested,
+        // install an illegal_monitor_state_exception.  Continue with
+        // stack unrolling.
+        if (install_monitor_exception) {
+            write_insts_final_call_VM(noreg, CAST_FROM_FN_PTR(address,
+                                            InterpreterRuntime::new_illegal_monitor_state_exception));
+        }
+        write_inst_b(unlocked);
+    }
+
+    pin_label(unlock);
+    write_insts_unlock_object(x1);
+    write_insts_pop(state);
+
+    // Check that for block-structured locking (i.e., that all locked
+    // objects has been unlocked)
+    pin_label(unlocked);
+
+    // r0: Might contain return value
+
+    // Check that all monitors are unlocked
+    {
+        YuhuLabel loop, exception, entry, restart;
+        const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
+//        const Address monitor_block_top(
+//                rfp, frame::interpreter_frame_monitor_block_top_offset * wordSize);
+//        const Address monitor_block_bot(
+//                rfp, frame::interpreter_frame_initial_sp_offset * wordSize);
+
+        pin_label(restart);
+        // We use c_rarg1 so that if we go slow path it will be the correct
+        // register for unlock_object to pass to VM directly
+        write_inst("ldr x1, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize); // points to current entry, starting
+        // with top-most entry
+        write_inst("add x19, x29, #%d", frame::interpreter_frame_initial_sp_offset * wordSize); // lea(r19, monitor_block_bot);  // points to word before bottom of
+        // monitor block
+        write_inst_b(entry);
+
+        // Entry already locked, need to throw exception
+        pin_label(exception);
+
+        if (throw_monitor_exception) {
+            // Throw exception
+            write_insts_final_call_VM(noreg,
+                                    CAST_FROM_FN_PTR(address, InterpreterRuntime::
+                                            throw_illegal_monitor_state_exception));
+            write_insts_stop("should not reach here");
+        } else {
+            // Stack unrolling. Unlock object and install illegal_monitor_exception.
+            // Unlock does not block, so don't have to worry about the frame.
+            // We don't have to preserve c_rarg1 since we are going to throw an exception.
+
+            write_insts_push(state);
+            write_insts_unlock_object(x1);
+            write_insts_pop(state);
+
+            if (install_monitor_exception) {
+                write_insts_final_call_VM(noreg, CAST_FROM_FN_PTR(address,
+                                                InterpreterRuntime::
+                                                        new_illegal_monitor_state_exception));
+            }
+
+            write_inst_b(restart);
+        }
+
+        pin_label(loop);
+        // check if current entry is used
+        write_inst("ldr x8, [x1, #%d]", BasicObjectLock::obj_offset_in_bytes());
+        write_inst_cbnz(x8, exception);
+
+        write_inst("add x1, x1, #%d", entry_size); // otherwise advance to next entry
+        pin_label(entry);
+        write_inst("cmp x1, x19"); // check if bottom reached
+        write_inst_b(ne, loop); // if not at bottom then check this entry
+    }
+
+    pin_label(no_unlock);
+
+    // TODO
+    // jvmti support
+//    if (notify_jvmdi) {
+//        notify_method_exit(state, NotifyJVMTI);    // preserve TOSCA
+//    } else {
+//        notify_method_exit(state, SkipNotifyJVMTI); // preserve TOSCA
+//    }
+
+    // remove activation
+    // get sender esp
+    write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_sender_sp_offset * wordSize);
+    // remove frame anchor
+    write_insts_leave();
+    // If we're returning to interpreted code we will shortly be
+    // adjusting SP to allow some space for ESP.  If we're returning to
+    // compiled code the saved sender SP was saved in sender_sp, so this
+    // restores it.
+    write_inst("and sp, x20, #-16");
     return current_pc();
 }
