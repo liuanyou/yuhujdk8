@@ -23,10 +23,10 @@ address YuhuInterpreterGenerator::generate_return_entry_for(TosState state, int 
     __ write_insts_restore_bcp();
     __ write_insts_restore_locals();
     __ write_insts_restore_constant_pool_cache();
-    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    __ write_insts_get_method(__ x12);
 
     // Pop N words from the stack
-    __ write_insts_get_cache_and_index_at_bcp(YuhuMacroAssembler::x1, YuhuMacroAssembler::x2, 1, index_size);
+    __ write_insts_get_cache_and_index_at_bcp(__ x1, __ x2, 1, index_size);
     __ write_inst("ldr x1, [x1, #%d]", in_bytes(ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::flags_offset()));
     __ write_inst("and x1, x1, #%d", ConstantPoolCacheEntry::parameter_size_mask);
 
@@ -51,12 +51,12 @@ address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int s
     __ write_insts_restore_bcp();
     __ write_insts_restore_locals();
     __ write_insts_restore_constant_pool_cache();
-    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    __ write_insts_get_method(__ x12);
     __ write_insts_get_dispatch();
 
     // Calculate stack limit
     __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
-    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(YuhuMacroAssembler::x8), in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(__ x8), in_bytes(ConstMethod::max_stack_offset()));
     __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
                                      + (EnableInvokeDynamic ? 2 : 0));
     __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
@@ -72,8 +72,8 @@ address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int s
     {
         YuhuLabel L;
         __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
-        __ write_inst_cbz(YuhuMacroAssembler::x8, L);
-        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+        __ write_inst_cbz(__ x8, L);
+        __ write_insts_final_call_VM(__ noreg,
                    CAST_FROM_FN_PTR(address,
                                     InterpreterRuntime::throw_pending_exception));
         __ write_insts_stop("should not reach here");
@@ -309,11 +309,11 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
     {
         YuhuLabel exit, loop;
         __ write_inst("ands xzr, x3, x3");
-        __ write_inst_b(YuhuMacroAssembler::le, exit); // do nothing if r3 <= 0
+        __ write_inst_b(__ le, exit); // do nothing if r3 <= 0
         __ pin_label(loop);
         __ write_inst("str xzr, [x8], #%d", wordSize);
         __ write_inst("sub x3, x3, 1"); // until everything initialized
-        __ write_inst_cbnz(YuhuMacroAssembler::x3, loop);
+        __ write_inst_cbnz(__ x3, loop);
         __ pin_label(exit);
     }
 
@@ -329,14 +329,14 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
   {
     YuhuLabel L;
     __ write_inst("tst x0, #%d", JVM_ACC_NATIVE);
-    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_inst_b(__ eq, L);
     __ write_insts_stop("tried to execute native method as non-native");
     __ pin_label(L);
   }
  {
     YuhuLabel L;
     __ write_inst("tst x0, #%d", JVM_ACC_ABSTRACT);
-    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_inst_b(__ eq, L);
     __ write_insts_stop("tried to execute abstract method in interpreter");
     __ pin_label(L);
   }
@@ -388,7 +388,7 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
       YuhuLabel L;
       __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
       __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
-      __ write_inst_b(YuhuMacroAssembler::eq, L);
+      __ write_inst_b(__ eq, L);
       __ write_insts_stop("method needs synchronization");
       __ pin_label(L);
     }
@@ -403,7 +403,7 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
 //                 frame::interpreter_frame_monitor_block_top_offset * wordSize);
     __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
     __ write_inst("cmp x20, x8");
-    __ write_inst_b(YuhuMacroAssembler::eq, L);
+    __ write_inst_b(__ eq, L);
     __ write_insts_stop("broken stack frame setup in interpreter");
     __ pin_label(L);
   }
@@ -481,14 +481,14 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     {
         YuhuLabel L;
         __ write_inst("tst x0, #%d", JVM_ACC_NATIVE);
-        __ write_inst_b(YuhuMacroAssembler::ne, L);
+        __ write_inst_b(__ ne, L);
         __ write_insts_stop("tried to execute non-native method as native");
         __ pin_label(L);
     }
     {
         YuhuLabel L;
         __ write_inst("tst x0, #%d", JVM_ACC_ABSTRACT);
-        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_inst_b(__ eq, L);
         __ write_insts_stop("tried to execute abstract method in interpreter");
         __ pin_label(L);
     }
@@ -502,7 +502,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
 //    const Address do_not_unlock_if_synchronized(rthread,
 //                                                in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x9, true);
+    __ write_insts_mov_imm64(__ x9, true);
     __ write_inst("strb w9, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
 
     // TODO
@@ -532,7 +532,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
             YuhuLabel L;
             __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
             __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
-            __ write_inst_b(YuhuMacroAssembler::eq, L);
+            __ write_inst_b(__ eq, L);
             __ write_insts_stop("method needs synchronization");
             __ pin_label(L);
         }
@@ -547,7 +547,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 //                                        frame::interpreter_frame_monitor_block_top_offset * wordSize);
         __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
         __ write_inst("cmp x20, x8");
-        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_inst_b(__ eq, L);
         __ write_insts_stop("broken stack frame setup in interpreter");
         __ pin_label(L);
     }
@@ -558,8 +558,8 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 //    __ notify_method_entry();
 
     // work registers
-    const YuhuMacroAssembler::YuhuRegister t = YuhuMacroAssembler::x17;
-    const YuhuMacroAssembler::YuhuRegister result_handler = YuhuMacroAssembler::x19;
+    const YuhuMacroAssembler::YuhuRegister t = __ x17;
+    const YuhuMacroAssembler::YuhuRegister result_handler = __ x19;
 
     // allocate space for parameters
     __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
@@ -567,15 +567,15 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     __ write_inst("sub x8, x20, %s, uxtx #%d", t, Interpreter::logStackElementSize);
     __ write_inst("and sp, x8, #-16");
-    __ write_inst_mov_reg(YuhuMacroAssembler::x20, YuhuMacroAssembler::x8);
+    __ write_inst_mov_reg(__ x20, __ x8);
 
     // get signature handler
     {
         YuhuLabel L;
         __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::signature_handler_offset()));
         __ write_inst_cbnz(t, L);
-        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
-                   YuhuMacroAssembler::x12);
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
+                   __ x12);
         __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::signature_handler_offset()));
         __ pin_label(L);
     }
@@ -593,19 +593,19 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // each time here.  The slow-path generator can do a GC on return,
     // so we must reload it after the call.
     __ write_inst_blr(t);
-    __ write_insts_get_method(YuhuMacroAssembler::x12);        // slow path can do a GC, reload rmethod
+    __ write_insts_get_method(__ x12);        // slow path can do a GC, reload rmethod
 
 
     // result handler is in r0
     // set result handler
-    __ write_inst_mov_reg(result_handler, YuhuMacroAssembler::x0);
+    __ write_inst_mov_reg(result_handler, __ x0);
     // pass mirror handle if static call
     {
         YuhuLabel L;
         const int mirror_offset = in_bytes(Klass::java_mirror_offset());
         __ write_inst("ldr %s, [x12, #%d]", __ w_reg(t), in_bytes(Method::access_flags_offset()));
         __ write_inst("tst %s, #%d", t, JVM_ACC_STATIC);
-        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_inst_b(__ eq, L);
         // get mirror
         __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
         __ write_inst("ldr %s, [%s, #%d]", t, t, in_bytes(ConstMethod::constants_offset()));
@@ -623,13 +623,13 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         YuhuLabel L;
         __ write_inst("ldr x10, [x12, #%d]", in_bytes(Method::native_function_offset()));
         address unsatisfied = (SharedRuntime::native_method_throw_unsatisfied_link_error_entry());
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) unsatisfied);
+        __ write_insts_mov_imm64(__ x9, (uint64_t) unsatisfied);
         __ write_inst("ldr x9, [x9]");
         __ write_inst("cmp x10, x9");
-        __ write_inst_b(YuhuMacroAssembler::ne, L);
-        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
-                   YuhuMacroAssembler::x12);
-        __ write_insts_get_method(YuhuMacroAssembler::x12);
+        __ write_inst_b(__ ne, L);
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::prepare_native_call),
+                   __ x12);
+        __ write_insts_get_method(__ x12);
         __ write_inst("ldr x10, [x12, #%d]", in_bytes(Method::native_function_offset()));
         __ pin_label(L);
     }
@@ -641,7 +641,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // the call to the native method: this will allow the debugger to
     // generate an accurate stack trace.
     YuhuLabel native_return;
-    __ write_insts_set_last_java_frame(YuhuMacroAssembler::x20, YuhuMacroAssembler::x29, native_return, YuhuMacroAssembler::x8);
+    __ write_insts_set_last_java_frame(__ x20, __ x29, native_return, __ x8);
 
     // change thread state
 #ifdef ASSERT
@@ -649,22 +649,22 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         YuhuLabel L;
         __ write_inst("ldr %s, [x28, #%d]", __ w_reg(t), in_bytes(JavaThread::thread_state_offset()));
         __ write_inst("cmp %s, #%d", t, _thread_in_Java);
-        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_inst_b(__ eq, L);
         __ write_insts_stop("Wrong thread state in native stub");
         __ pin_label(L);
     }
 #endif
 
     // Change state to native
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native);
+    __ write_insts_mov_imm64(__ x8, _thread_in_native);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
 
     // Call the native method.
-    __ write_inst_blr(YuhuMacroAssembler::x10);
+    __ write_inst_blr(__ x10);
     __ pin_label(native_return);
     __ write_inst("isb");
-    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    __ write_insts_get_method(__ x12);
     // result potentially in r0 or v0
 
     // make room for the pushes we're about to do
@@ -679,9 +679,9 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     __ write_insts_push(ltos);
 
     // change thread state
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_native_trans);
+    __ write_insts_mov_imm64(__ x8, _thread_in_native_trans);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
 
     if (os::is_MP()) {
         if (UseMembar) {
@@ -701,15 +701,15 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         YuhuLabel Continue;
         {
             uint64_t offset;
-            __ write_insts_adrp(YuhuMacroAssembler::x9, SafepointSynchronize::address_of_state(), offset);
-            __ write_inst("ldr %s, [x9, #%d]", __ w_reg(YuhuMacroAssembler::x9), offset);
+            __ write_insts_adrp(__ x9, SafepointSynchronize::address_of_state(), offset);
+            __ write_inst("ldr %s, [x9, #%d]", __ w_reg(__ x9), offset);
         }
         assert(SafepointSynchronize::_not_synchronized == 0,
                "SafepointSynchronize::_not_synchronized");
         YuhuLabel L;
-        __ write_inst_cbnz(YuhuMacroAssembler::x9, L);
-        __ write_inst("ldr %s, [x28, #%d]", __ w_reg(YuhuMacroAssembler::x9), in_bytes(JavaThread::suspend_flags_offset()));
-        __ write_inst_cbz(YuhuMacroAssembler::x9, Continue);
+        __ write_inst_cbnz(__ x9, L);
+        __ write_inst("ldr %s, [x28, #%d]", __ w_reg(__ x9), in_bytes(JavaThread::suspend_flags_offset()));
+        __ write_inst_cbz(__ x9, Continue);
         __ pin_label(L);
 
         // Don't use call_VM as it will see a possible pending exception
@@ -720,19 +720,19 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         // runtime call by hand.
         //
         __ write_inst("mov x0, x28");
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) CAST_FROM_FN_PTR(address, JavaThread::check_special_condition_for_native_trans));
-        __ write_inst_blr(YuhuMacroAssembler::x9);
+        __ write_insts_mov_imm64(__ x9, (uint64_t) CAST_FROM_FN_PTR(address, JavaThread::check_special_condition_for_native_trans));
+        __ write_inst_blr(__ x9);
         __ write_inst("isb");
-        __ write_insts_get_method(YuhuMacroAssembler::x12);
+        __ write_insts_get_method(__ x12);
         // TODO
 //        __ reinit_heapbase();
         __ pin_label(Continue);
     }
 
     // change thread state
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, _thread_in_Java);
+    __ write_insts_mov_imm64(__ x8, _thread_in_Java);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
 
     // reset_last_Java_frame
     __ write_insts_reset_last_java_frame(true);
@@ -748,20 +748,20 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         YuhuLabel no_oop, not_weak, store_result;
         __ write_inst_adr(t, AbstractInterpreter::result_handler(T_OBJECT));
         __ write_inst_regs("cmp %s, %s", t, result_handler);
-        __ write_inst_b(YuhuMacroAssembler::ne, no_oop);
+        __ write_inst_b(__ ne, no_oop);
         // Unbox oop result, e.g. JNIHandles::resolve result.
         __ write_insts_pop(ltos);
-        __ write_inst_cbz(YuhuMacroAssembler::x0, store_result); // Use NULL as-is.
+        __ write_inst_cbz(__ x0, store_result); // Use NULL as-is.
 //    STATIC_ASSERT(JNIHandles::weak_tag_mask == 1u);
-        __ write_inst_tbz(YuhuMacroAssembler::x0, 0, not_weak); // Test for jweak tag.
+        __ write_inst_tbz(__ x0, 0, not_weak); // Test for jweak tag.
         // Resolve jweak.
 //    __ ldr(r0, Address(r0, -JNIHandles::weak_tag_value));
 #if INCLUDE_ALL_GCS
         if (UseG1GC) {
             __ write_insts_enter(); // Barrier may call runtime.
-            __ write_insts_g1_write_barrier_pre(YuhuMacroAssembler::noreg /* obj */,
-                                    YuhuMacroAssembler::x0 /* pre_val */,
-                                    YuhuMacroAssembler::x28 /* thread */,
+            __ write_insts_g1_write_barrier_pre(__ noreg /* obj */,
+                                    __ x0 /* pre_val */,
+                                    __ x28 /* thread */,
                                     t /* tmp */,
                                     true /* tosca_live */,
                                     true /* expand_call */);
@@ -773,7 +773,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         // Resolve (untagged) jobject.
         __ write_inst("ldr x0, [x0]");
         __ pin_label(store_result);
-        __ write_inst("str x0, [%s, #%d]", YuhuMacroAssembler::x29, frame::interpreter_frame_oop_temp_offset*wordSize);
+        __ write_inst("str x0, [%s, #%d]", __ x29, frame::interpreter_frame_oop_temp_offset*wordSize);
         // keep stack depth as expected by pushing oop which will eventually be discarded
         __ write_insts_push(ltos);
         __ pin_label(no_oop);
@@ -782,14 +782,14 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     {
         YuhuLabel no_reguard;
         __ write_inst("add x8, x28, #%d", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
-        __ write_inst_regs("ldrb %s, [%s]", __ w_reg(YuhuMacroAssembler::x8), YuhuMacroAssembler::x8);
+        __ write_inst_regs("ldrb %s, [%s]", __ w_reg(__ x8), __ x8);
         __ write_inst("cmp x8, #%d", JavaThread::stack_guard_yellow_disabled);
-        __ write_inst_b(YuhuMacroAssembler::ne, no_reguard);
+        __ write_inst_b(__ ne, no_reguard);
 
         __ write_insts_pusha(); // XXX only save smashed registers
-        __ write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x28);
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) CAST_FROM_FN_PTR(address, SharedRuntime::reguard_yellow_pages));
-        __ write_inst_blr(YuhuMacroAssembler::x9);
+        __ write_inst_mov_reg(__ x0, __ x28);
+        __ write_insts_mov_imm64(__ x9, (uint64_t) CAST_FROM_FN_PTR(address, SharedRuntime::reguard_yellow_pages));
+        __ write_inst_blr(__ x9);
         __ write_insts_popa(); // XXX only restore smashed registers
         __ pin_label(no_reguard);
     }
@@ -797,7 +797,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // The method register is junk from after the thread_in_native transition
     // until here.  Also can't call_VM until the bcp has been
     // restored.  Need bcp for throwing exception below so get it now.
-    __ write_insts_get_method(YuhuMacroAssembler::x12);
+    __ write_insts_get_method(__ x12);
 
     // restore bcp to have legal interpreter frame, i.e., bci == 0 <=>
     // rbcp == code_base()
@@ -807,12 +807,12 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     {
         YuhuLabel L;
         __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
-        __ write_inst_cbz(YuhuMacroAssembler::x8, L);
+        __ write_inst_cbz(__ x8, L);
         // Note: At some point we may want to unify this with the code
         // used in call_VM_base(); i.e., we should use the
         // StubRoutines::forward_exception code. For now this doesn't work
         // here because the rsp is not correctly set at this point.
-        __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+        __ write_insts_final_call_VM(__ noreg,
                                    CAST_FROM_FN_PTR(address,
                                                     InterpreterRuntime::throw_pending_exception));
         __ write_insts_stop("should not reach here");
@@ -824,7 +824,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         YuhuLabel L;
         __ write_inst("ldr %s, [x12, #%d]", __ w_reg(t), in_bytes(Method::access_flags_offset()));
         __ write_inst("tst %s, #%d", t, JVM_ACC_SYNCHRONIZED);
-        __ write_inst_b(YuhuMacroAssembler::eq, L);
+        __ write_inst_b(__ eq, L);
         // the code below should be shared with interpreter macro
         // assembler implementation
         {
@@ -843,13 +843,13 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
             __ write_inst_cbnz(t, unlock);
 
             // Entry already unlocked, need to throw exception
-            __ write_insts_final_call_VM(YuhuMacroAssembler::noreg,
+            __ write_insts_final_call_VM(__ noreg,
                                        CAST_FROM_FN_PTR(address,
                                                         InterpreterRuntime::throw_illegal_monitor_state_exception));
             __ write_insts_stop("should not reach here");
 
             __ pin_label(unlock);
-            __ write_insts_unlock_object(YuhuMacroAssembler::x1);
+            __ write_insts_unlock_object(__ x1);
         }
         __ pin_label(L);
     }
@@ -907,17 +907,17 @@ address YuhuInterpreterGenerator::generate_empty_entry(void) {
         uint64_t offset;
         assert(SafepointSynchronize::_not_synchronized == 0,
                "SafepointSynchronize::_not_synchronized");
-        __ write_insts_adrp(YuhuMacroAssembler::x9, SafepointSynchronize::address_of_state(), offset);
+        __ write_insts_adrp(__ x9, SafepointSynchronize::address_of_state(), offset);
         __ write_inst("ldr w9, [x9, #%d]", offset);
-        __ write_inst_cbnz(YuhuMacroAssembler::x9, slow_path);
+        __ write_inst_cbnz(__ x9, slow_path);
     }
 
     // do nothing for empty methods (do not even increment invocation counter)
     // Code: _return
     // _return
     // return w/o popping parameters
-    __ write_inst_mov_reg(YuhuMacroAssembler::sp, YuhuMacroAssembler::x13); // Restore caller's SP
-    __ write_inst_br(YuhuMacroAssembler::lr);
+    __ write_inst_mov_reg(__ sp, __ x13); // Restore caller's SP
+    __ write_inst_br(__ lr);
 
     __ pin_label(slow_path);
     (void) generate_normal_entry(false);
@@ -942,7 +942,7 @@ address YuhuInterpreterGenerator::generate_abstract_entry(void) {
     __ write_insts_restore_locals();   // make sure locals pointer is correct as well (was destroyed)
 
     // throw exception
-    __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, CAST_FROM_FN_PTR(address,
+    __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address,
                                        InterpreterRuntime::throw_AbstractMethodError));
     // the call_VM checks for exception, so we should never return here.
     __ write_insts_stop("should not reach here");
@@ -974,7 +974,7 @@ address YuhuInterpreterGenerator::generate_math_entry(YuhuInterpreter::MethodKin
     // retaddr in lr
 
     address entry_point = NULL;
-    YuhuMacroAssembler::YuhuRegister continuation = YuhuMacroAssembler::lr;
+    YuhuMacroAssembler::YuhuRegister continuation = __ lr;
     switch (kind) {
         case YuhuInterpreter::java_lang_math_abs:
             entry_point = __ current_pc();
@@ -998,13 +998,13 @@ address YuhuInterpreterGenerator::generate_math_entry(YuhuInterpreter::MethodKin
             __ write_inst("ldr d0, [x20]");
             __ write_inst("mov sp, x13");
             __ write_inst("mov x19, lr");
-            continuation = YuhuMacroAssembler::x19;  // The first callee-saved register
+            continuation = __ x19;  // The first callee-saved register
             generate_transcendental_entry(kind, 1);
             break;
         case YuhuInterpreter::java_lang_math_pow :
             entry_point = __ current_pc();
             __ write_inst("mov x19, lr");
-            continuation = YuhuMacroAssembler::x19;
+            continuation = __ x19;
             __ write_inst("ldr d0, [x20, #%d]", 2 * Interpreter::stackElementSize);
             __ write_inst("ldr d1, [x20]");
             __ write_inst("mov sp, x13");
@@ -1047,8 +1047,8 @@ void YuhuInterpreterGenerator::generate_transcendental_entry(YuhuInterpreter::Me
         default:
             ShouldNotReachHere();
     }
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t) fn);
-    __ write_inst_blr(YuhuMacroAssembler::x8);
+    __ write_insts_mov_imm64(__ x8, (uint64_t) fn);
+    __ write_inst_blr(__ x8);
 }
 
 address YuhuInterpreterGenerator::generate_Reference_get_entry(void) {
@@ -1088,7 +1088,7 @@ address YuhuInterpreterGenerator::generate_Reference_get_entry(void) {
 
     if (UseG1GC) {
         YuhuLabel slow_path;
-        const YuhuMacroAssembler::YuhuRegister local_0 = YuhuMacroAssembler::x0;
+        const YuhuMacroAssembler::YuhuRegister local_0 = __ x0;
         // Check if local 0 != NULL
         // If the receiver is null then it is OK to jump to the slow path.
         __ write_inst("ldr %s, [x20, #%d]", local_0, 0);
@@ -1102,10 +1102,10 @@ address YuhuInterpreterGenerator::generate_Reference_get_entry(void) {
         // Generate the G1 pre-barrier code to log the value of
         // the referent field in an SATB buffer.
         __ write_insts_enter(); // g1_write may call runtime
-        __ write_insts_g1_write_barrier_pre(YuhuMacroAssembler::noreg /* obj */,
+        __ write_insts_g1_write_barrier_pre(__ noreg /* obj */,
                                 local_0 /* pre_val */,
-                                YuhuMacroAssembler::x28 /* thread */,
-                                YuhuMacroAssembler::x9 /* tmp */,
+                                __ x28 /* thread */,
+                                __ x9 /* tmp */,
                                 true /* tosca_live */,
                                 true /* expand_call */);
         __ write_insts_leave();
@@ -1138,18 +1138,18 @@ address YuhuInterpreterGenerator::generate_CRC32_update_entry() {
         // If we need a safepoint check, generate full interpreter entry.
 //        ExternalAddress state(SafepointSynchronize::address_of_state());
         uint64_t offset;
-        __ write_insts_adrp(YuhuMacroAssembler::x8, SafepointSynchronize::address_of_state(), offset);
+        __ write_insts_adrp(__ x8, SafepointSynchronize::address_of_state(), offset);
         __ write_inst("ldr x8, [x8, #%d]", offset);
         assert(SafepointSynchronize::_not_synchronized == 0, "rewrite this code");
-        __ write_inst_cbnz(YuhuMacroAssembler::x8, slow_path);
+        __ write_inst_cbnz(__ x8, slow_path);
 
         // We don't generate local frame and don't align stack because
         // we call stub code and there is no safepoint on this path.
 
         // Load parameters
-        const YuhuMacroAssembler::YuhuRegister crc = YuhuMacroAssembler::x0;  // crc
-        const YuhuMacroAssembler::YuhuRegister val = YuhuMacroAssembler::x1;  // source java byte value
-        const YuhuMacroAssembler::YuhuRegister tbl = YuhuMacroAssembler::x2;  // scratch
+        const YuhuMacroAssembler::YuhuRegister crc = __ x0;  // crc
+        const YuhuMacroAssembler::YuhuRegister val = __ x1;  // source java byte value
+        const YuhuMacroAssembler::YuhuRegister tbl = __ x2;  // scratch
 
         // Arguments are reversed on java expression stack
         __ write_inst("ldr %s, [x20, #%d]", __ w_reg(val), 0); // byte value
@@ -1158,7 +1158,7 @@ address YuhuInterpreterGenerator::generate_CRC32_update_entry() {
         __ write_insts_adrp(tbl, StubRoutines::crc_table_addr(), offset);
         __ write_inst("add %s, %s, #%d", tbl, tbl, offset);
 
-        __ write_inst_regs("orn %s, %s, %s", __ w_reg(crc), __ w_reg(YuhuMacroAssembler::xzr), __ w_reg(crc)); // ~crc
+        __ write_inst_regs("orn %s, %s, %s", __ w_reg(crc), __ w_reg(__ xzr), __ w_reg(crc)); // ~crc
 
         __ write_insts_update_byte_crc32(crc, val, tbl); // ~crc
 
@@ -1188,18 +1188,18 @@ address YuhuInterpreterGenerator::generate_CRC32_updateBytes_entry(YuhuInterpret
         // If we need a safepoint check, generate full interpreter entry.
 //        ExternalAddress state(SafepointSynchronize::address_of_state());
         uint64_t offset;
-        __ write_insts_adrp(YuhuMacroAssembler::x8, SafepointSynchronize::address_of_state(), offset);
+        __ write_insts_adrp(__ x8, SafepointSynchronize::address_of_state(), offset);
         __ write_inst("ldr w8, [x8, #%d]", offset);
         assert(SafepointSynchronize::_not_synchronized == 0, "rewrite this code");
-        __ write_inst_cbnz(YuhuMacroAssembler::x8, slow_path);
+        __ write_inst_cbnz(__ x8, slow_path);
 
         // We don't generate local frame and don't align stack because
         // we call stub code and there is no safepoint on this path.
 
         // Load parameters
-        const YuhuMacroAssembler::YuhuRegister crc = YuhuMacroAssembler::x0;  // crc
-        const YuhuMacroAssembler::YuhuRegister buf = YuhuMacroAssembler::x1;  // source java byte array address
-        const YuhuMacroAssembler::YuhuRegister len = YuhuMacroAssembler::x2;  // length
+        const YuhuMacroAssembler::YuhuRegister crc = __ x0;  // crc
+        const YuhuMacroAssembler::YuhuRegister buf = __ x1;  // source java byte array address
+        const YuhuMacroAssembler::YuhuRegister len = __ x2;  // length
         const YuhuMacroAssembler::YuhuRegister off = len;      // offset (never overlaps with 'len')
 
         // Arguments are reversed on java expression stack
@@ -1238,7 +1238,7 @@ void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {
     // initialize fixed part of activation frame
     if (native_call) {
         __ write_inst("sub x20, sp, #%d", 12 * wordSize);
-        __ write_inst_mov_reg(YuhuMacroAssembler::x22, YuhuMacroAssembler::xzr);
+        __ write_inst_mov_reg(__ x22, __ xzr);
         __ write_inst("stp x20, xzr, [sp, #%d]!", -12 * wordSize);
         // add 2 zero-initialized slots for native calls
         __ write_inst("stp xzr, xzr, [sp, #%d]", 10 * wordSize);
@@ -1309,7 +1309,7 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
     // because it is a macro that will expand to some number of MOV
     // instructions and a register operation.
     __ write_inst("subs x8, x3, #%d", (page_size - overhead_size) / Interpreter::stackElementSize);
-    __ write_inst_b(YuhuMacroAssembler::ls, after_frame_check);
+    __ write_inst_b(__ ls, after_frame_check);
 
     // compute rsp as if this were going to be the last frame on
     // the stack before the red zone
@@ -1318,7 +1318,7 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
 //    const Address stack_size(rthread, Thread::stack_size_offset());
 
     // locals + overhead, in bytes
-    __ write_insts_mov_imm64(YuhuMacroAssembler::x0, overhead_size);
+    __ write_insts_mov_imm64(__ x0, overhead_size);
     __ write_inst("add x0, x0, x3, lsl #%d", Interpreter::logStackElementSize); // 2 slots per parameter.
 
     __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::stack_base_offset()));
@@ -1328,12 +1328,12 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
     YuhuLabel stack_base_okay, stack_size_okay;
     // verify that thread stack base is non-zero
     // cbnz x8, #8
-    __ write_inst_cbnz(YuhuMacroAssembler::x8, stack_base_okay);
+    __ write_inst_cbnz(__ x8, stack_base_okay);
     __ write_insts_stop("stack base is zero");
     // verify that thread stack size is non-zero
     __ pin_label(stack_base_okay);
     // cbnz x9, #8
-    __ write_inst_cbnz(YuhuMacroAssembler::x9, stack_size_okay);
+    __ write_inst_cbnz(__ x9, stack_size_okay);
     __ write_insts_stop("stack size is zero");
     __ pin_label(stack_size_okay);
 #endif
@@ -1351,7 +1351,7 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
 
     // check against the current stack bottom
     __ write_inst("cmp sp, x0");
-    __ write_inst_b(YuhuMacroAssembler::hi, after_frame_check);
+    __ write_inst_b(__ hi, after_frame_check);
 
     // Remove the incoming args, peeling the machine SP back to where it
     // was in the caller.  This is not strictly necessary, but unless we
@@ -1397,7 +1397,7 @@ void YuhuInterpreterGenerator::lock_method(void) {
         YuhuLabel L;
         __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
         __ write_inst("tst x0, #%d", JVM_ACC_SYNCHRONIZED);
-        __ write_inst_b(YuhuMacroAssembler::ne, L);
+        __ write_inst_b(__ ne, L);
         __ write_insts_stop("method doesn't need synchronization");
         __ pin_label(L);
     }
@@ -1411,7 +1411,7 @@ void YuhuInterpreterGenerator::lock_method(void) {
         __ write_inst("tst x0, #%d", JVM_ACC_STATIC);
         // get receiver (assume this is frequent case)
         __ write_inst("ldr x0, [x24, #%d]", Interpreter::local_offset_in_bytes(0));
-        __ write_inst_b(YuhuMacroAssembler::eq, done);
+        __ write_inst_b(__ eq, done);
         __ write_inst("ldr x0, [x12, #%d]", in_bytes(Method::const_offset()));
         __ write_inst("ldr x0, [x0, #%d]", in_bytes(ConstMethod::constants_offset()));
         __ write_inst("ldr x0, [x0, #%d]", ConstantPool::pool_holder_offset_in_bytes());
@@ -1420,7 +1420,7 @@ void YuhuInterpreterGenerator::lock_method(void) {
 #ifdef ASSERT
         {
             YuhuLabel L;
-            __ write_inst_cbnz(YuhuMacroAssembler::x0, L);
+            __ write_inst_cbnz(__ x0, L);
             __ write_insts_stop("synchronization object is NULL");
             __ pin_label(L);
         }
@@ -1432,23 +1432,23 @@ void YuhuInterpreterGenerator::lock_method(void) {
     // add space for monitor & lock
     __ write_inst("sub sp, sp, #%d", entry_size); // add space for a monitor entry
     __ write_inst("sub x20, x20, #%d", entry_size);
-    __ write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x20);
+    __ write_inst_mov_reg(__ x8, __ x20);
     __ write_inst("str x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize); // set new monitor block top
     // store object
     __ write_inst("str x0, [x20, #%d]", BasicObjectLock::obj_offset_in_bytes());
-    __ write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x20); // object address
-    __ write_insts_lock_object(YuhuMacroAssembler::x1);
+    __ write_inst_mov_reg(__ x1, __ x20); // object address
+    __ write_insts_lock_object(__ x1);
 }
 
 address YuhuInterpreterGenerator::generate_result_handler_for(
         BasicType type) {
     address entry = __ current_pc();
     switch (type) {
-        case T_BOOLEAN: __ write_insts_c2bool(YuhuMacroAssembler::x0);          break;
-        case T_CHAR   : __ write_inst_regs("uxth %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
-        case T_BYTE   : __ write_inst_regs("sxtb %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
-        case T_SHORT  : __ write_inst_regs("sxth %s, %s", __ w_reg(YuhuMacroAssembler::x0), __ w_reg(YuhuMacroAssembler::x0));        break;
-        case T_INT    : __ write_inst_regs("uxtw %s, %s", YuhuMacroAssembler::x0, __ w_reg(YuhuMacroAssembler::x0));        break;  // FIXME: We almost certainly don't need this
+        case T_BOOLEAN: __ write_insts_c2bool(__ x0);          break;
+        case T_CHAR   : __ write_inst_regs("uxth %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
+        case T_BYTE   : __ write_inst_regs("sxtb %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
+        case T_SHORT  : __ write_inst_regs("sxth %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
+        case T_INT    : __ write_inst_regs("uxtw %s, %s", __ x0, __ w_reg(__ x0));        break;  // FIXME: We almost certainly don't need this
         case T_LONG   : /* nothing to do */        break;
         case T_VOID   : /* nothing to do */        break;
         case T_FLOAT  : /* nothing to do */        break;
@@ -1457,7 +1457,7 @@ address YuhuInterpreterGenerator::generate_result_handler_for(
             // retrieve result from frame
             __ write_inst("ldr x0, [x29, #%d]", frame::interpreter_frame_oop_temp_offset*wordSize);
             // and verify it
-            __ write_insts_verify_oop(YuhuMacroAssembler::x0, "broken oop");
+            __ write_insts_verify_oop(__ x0, "broken oop");
             break;
         default       : ShouldNotReachHere();
     }
@@ -1478,7 +1478,7 @@ address YuhuInterpreterGenerator::generate_safept_entry_for(
         address runtime_entry) {
     address entry = __ current_pc();
     __ write_insts_push(state);
-    __ write_insts_final_call_VM(YuhuMacroAssembler::noreg, runtime_entry);
+    __ write_insts_final_call_VM(__ noreg, runtime_entry);
     __ write_inst("dmb ish");
     __ write_insts_dispatch_via(vtos, YuhuInterpreter::_normal_table.table_for(vtos));
     return entry;

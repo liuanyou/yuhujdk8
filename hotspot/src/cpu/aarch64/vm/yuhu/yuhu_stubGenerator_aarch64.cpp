@@ -78,7 +78,7 @@ private:
         // jump to label parameters_done
         YuhuLabel parameters_done;
         // cbz w6, #20
-        __ write_inst_cbz(YuhuMacroAssembler::w6, parameters_done);
+        __ write_inst_cbz(__ w6, parameters_done);
         // -- label loop_start
         address loop_start = __ current_pc();
         // load parameter and move pointer forward + 8 bytes
@@ -90,7 +90,7 @@ private:
         // b.gt loop_start
         // jump to label loop_start
         // b.gt #-12
-        __ write_inst_b(YuhuMacroAssembler::gt, loop_start);
+        __ write_inst_b(__ gt, loop_start);
         // -- label parameters_done
         __ pin_label(parameters_done);
         /* call java method */
@@ -110,48 +110,48 @@ private:
         // jump to check T_LONG
         YuhuLabel check_long;
         // b.ne #12
-        __ write_inst_b(YuhuMacroAssembler::ne, check_long);
+        __ write_inst_b(__ ne, check_long);
         // handle T_OBJECT
         __ write_inst( "str x0, [x3]");
         // jump to label exit
         // b.al #56
-        __ write_inst_b(YuhuMacroAssembler::al, exit);
+        __ write_inst_b(__ al, exit);
         // check result type is T_LONG
         __ pin_label(check_long);
         __ write_inst( "cmp x2, #%d", T_LONG);
         // jump to check T_FLOAT
         YuhuLabel check_float;
         // b.ne #12
-        __ write_inst_b(YuhuMacroAssembler::ne, check_float);
+        __ write_inst_b(__ ne, check_float);
         // handle T_LONG
         __ write_inst( "str x0, [x3]");
         // jump to label exit
         // b.al #40
-        __ write_inst_b(YuhuMacroAssembler::al, exit);
+        __ write_inst_b(__ al, exit);
         // check result type is T_FLOAT
         __ pin_label(check_float);
         __ write_inst( "cmp x2, #%d", T_FLOAT);
         // jump to check T_DOUBLE
         YuhuLabel check_double;
         // b.ne #12
-        __ write_inst_b(YuhuMacroAssembler::ne, check_double);
+        __ write_inst_b(__ ne, check_double);
         // handle T_FLOAT
         __ write_inst( "str s0, [x3]");
         // jump to label exit
         // b.al #24
-        __ write_inst_b(YuhuMacroAssembler::al, exit);
+        __ write_inst_b(__ al, exit);
         // check result type is T_DOUBLE
         __ pin_label(check_double);
         __ write_inst( "cmp x2, #%d", T_DOUBLE);
         // jump to handle result is T_INT
         YuhuLabel check_int;
         // b.ne #12
-        __ write_inst_b(YuhuMacroAssembler::ne, check_int);
+        __ write_inst_b(__ ne, check_int);
         // handle T_DOUBLE
         __ write_inst( "str d0, [x3]");
         // jump to label exit
         // b.al #8
-        __ write_inst_b(YuhuMacroAssembler::al, exit);
+        __ write_inst_b(__ al, exit);
         // the result is T_INT for the rest of scenarios, and use 32-bytes register
         // x3 holds result address
         __ pin_label(check_int);
@@ -195,11 +195,11 @@ private:
         __ write_inst( "str x0, [x28, #0x8]");
         /* save file */
         address imm64 = (address) __FILE__;
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t)imm64);
+        __ write_insts_mov_imm64(__ x8, (uint64_t)imm64);
         __ write_inst( "str x8, [x28, #0x10]");
         /* save line */
         int imm32 = (int) __LINE__;
-        __ write_insts_mov_imm32(YuhuMacroAssembler::w8, (uint32_t)imm32);
+        __ write_insts_mov_imm32(__ w8, (uint32_t)imm32);
         __ write_inst( "str w8, [x28, #0x18]");
         /* return to VM */
         __ write_inst_b(YuhuStubRoutines::_call_stub_return_address);
@@ -222,28 +222,28 @@ private:
         __ write_inst("stp x3, x2, [sp, #-0x10]!");
 
         // __ incrementl(ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x2, (uint64_t)(address) YuhuStubRoutines::verify_oop_count_addr()); // __ lea(c_rarg2, ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
+        __ write_insts_mov_imm64(__ x2, (uint64_t)(address) YuhuStubRoutines::verify_oop_count_addr()); // __ lea(c_rarg2, ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
         __ write_inst("ldr x3, [x2]");
         __ write_inst("add x3, x3, 1");
         __ write_inst("str x3, [x2]");
 
         // object is in r0
         // make sure object is 'reasonable'
-        __ write_inst_cbz(YuhuMacroAssembler::x0, exit); // if obj is NULL it is OK
+        __ write_inst_cbz(__ x0, exit); // if obj is NULL it is OK
 
         // Check if the oop is in the right area of memory
-        __ write_insts_mov_ptr(YuhuMacroAssembler::x3, (intptr_t) Universe::verify_oop_mask());
+        __ write_insts_mov_ptr(__ x3, (intptr_t) Universe::verify_oop_mask());
         __ write_inst("and x2, x0, x3");
-        __ write_insts_mov_ptr(YuhuMacroAssembler::x3, (intptr_t) Universe::verify_oop_bits());
+        __ write_insts_mov_ptr(__ x3, (intptr_t) Universe::verify_oop_bits());
 
         // Compare c_rarg2 and c_rarg3.  We don't use a compare
         // instruction here because the flags register is live.
         __ write_inst("eor x2, x2, x3");
-        __ write_inst_cbnz(YuhuMacroAssembler::x2, error);
+        __ write_inst_cbnz(__ x2, error);
 
         // make sure klass is 'reasonable', which is not zero.
-        __ write_insts_load_klass(YuhuMacroAssembler::x0, YuhuMacroAssembler::x0);  // get klass
-        __ write_inst_cbz(YuhuMacroAssembler::x0, error);      // if klass is NULL it is broken
+        __ write_insts_load_klass(__ x0, __ x0);  // get klass
+        __ write_inst_cbz(__ x0, error);      // if klass is NULL it is broken
 
         // return if everything seems ok
         __ pin_label(exit);
@@ -255,17 +255,17 @@ private:
         __ pin_label(error);
         __ write_inst( "ldp x3, x2, [sp], #0x10");
 
-        __ write_insts_pushrange(YuhuMacroAssembler::x0, YuhuMacroAssembler::x29, YuhuMacroAssembler::sp);
+        __ write_insts_pushrange(__ x0, __ x29, __ sp);
 
         // debug(char* msg, int64_t pc, int64_t regs[])
-        __ write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x8); // pass address of error message
-        __ write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::lr); // pass return address
-        __ write_inst_mov_reg(YuhuMacroAssembler::x2, YuhuMacroAssembler::sp); // pass address of regs on stack
+        __ write_inst_mov_reg(__ x0, __ x8); // pass address of error message
+        __ write_inst_mov_reg(__ x1, __ lr); // pass return address
+        __ write_inst_mov_reg(__ x2, __ sp); // pass address of regs on stack
 #ifndef PRODUCT
         assert(frame::arg_reg_save_area_bytes == 0, "not expecting frame reg save area");
 #endif
 //        BLOCK_COMMENT("call MacroAssembler::debug");
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t) CAST_FROM_FN_PTR(address, MacroAssembler::debug64));
+        __ write_insts_mov_imm64(__ x8, (uint64_t) CAST_FROM_FN_PTR(address, MacroAssembler::debug64));
         __ write_inst("blr x8");
 
         return start;
@@ -289,7 +289,7 @@ private:
         {
             YuhuLabel L;
             __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
-            __ write_inst_cbnz(YuhuMacroAssembler::x8, L);
+            __ write_inst_cbnz(__ x8, L);
             __ write_insts_stop("YuhuStubRoutines::forward exception: no pending exception (1)");
             __ pin_label(L);
         }
@@ -310,17 +310,17 @@ private:
 
         __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
                                          SharedRuntime::exception_handler_for_return_address),
-                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x1);
+                        __ x28, __ x1);
         // we should not really care that lr is no longer the callee
         // address. we saved the value the handler needs in r19 so we can
         // just copy it to r3. however, the C2 handler will push its own
         // frame and then calls into the VM and the VM code asserts that
         // the PC for the frame above the handler belongs to a compiled
         // Java method. So, we restore lr here to satisfy that assert.
-        __ write_inst_mov_reg(YuhuMacroAssembler::x30, YuhuMacroAssembler::x19);
+        __ write_inst_mov_reg(__ x30, __ x19);
         // setup r0 & r3 & clear pending exception
-        __ write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x19);
-        __ write_inst_mov_reg(YuhuMacroAssembler::x19, YuhuMacroAssembler::x0);
+        __ write_inst_mov_reg(__ x3, __ x19);
+        __ write_inst_mov_reg(__ x19, __ x0);
         __ write_inst("ldr x0, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
         __ write_inst("str xzr, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
 
@@ -328,7 +328,7 @@ private:
         // make sure exception is set
         {
             YuhuLabel L;
-            __ write_inst_cbnz(YuhuMacroAssembler::x0, L);
+            __ write_inst_cbnz(__ x0, L);
             __ write_insts_stop("YuhuStubRoutines::forward exception: no pending exception (2)");
             __ pin_label(L);
         }
@@ -338,8 +338,8 @@ private:
         // r0: exception
         // r3: throwing pc
         // r19: exception handler
-        __ write_insts_verify_oop(YuhuMacroAssembler::x0, "broken oop");
-        __ write_inst_br(YuhuMacroAssembler::x19);
+        __ write_insts_verify_oop(__ x0, "broken oop");
+        __ write_inst_br(__ x19);
 
         return start;
     }
@@ -389,21 +389,21 @@ private:
 
         // Set up last_Java_sp and last_Java_fp
         address the_pc = __ current_pc();
-        __ write_insts_set_last_java_frame(YuhuMacroAssembler::sp,
-                                           YuhuMacroAssembler::x29, (address) NULL, YuhuMacroAssembler::x8);
+        __ write_insts_set_last_java_frame(__ sp,
+                                           __ x29, (address) NULL, __ x8);
 
         // Call runtime
-        if (arg1 != YuhuMacroAssembler::noreg) {
+        if (arg1 != __ noreg) {
 //            assert(arg2 != c_rarg1, "clobbered");
-            assert(arg2 != YuhuMacroAssembler::x1, "clobbered");
-            __ write_inst_mov_reg(YuhuMacroAssembler::x1, arg1);
+            assert(arg2 != __ x1, "clobbered");
+            __ write_inst_mov_reg(__ x1, arg1);
         }
-        if (arg2 != YuhuMacroAssembler::noreg) {
-            __ write_inst_mov_reg(YuhuMacroAssembler::x2, arg2);
+        if (arg2 != __ noreg) {
+            __ write_inst_mov_reg(__ x2, arg2);
         }
-        __ write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x28);
+        __ write_inst_mov_reg(__ x0, __ x28);
 //        BLOCK_COMMENT("call runtime_entry");
-        __ write_insts_mov_imm64(YuhuMacroAssembler::x8, (uint64_t) runtime_entry);
+        __ write_insts_mov_imm64(__ x8, (uint64_t) runtime_entry);
         __ write_inst("blr x8");
 
         // Generate oop map
@@ -420,7 +420,7 @@ private:
 #ifdef ASSERT
         YuhuLabel L;
         __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
-        __ write_inst_cbnz(YuhuMacroAssembler::x8, L);
+        __ write_inst_cbnz(__ x8, L);
         __ write_insts_stop("should not reach here");
         __ pin_label(L);
 #endif // ASSERT
