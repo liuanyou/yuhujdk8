@@ -134,11 +134,11 @@ void YuhuInterpreterGenerator::generate_all() {
                 );
     }
 
-//    { CodeletMark cm(_masm, "exception handling");
-//        // (Note: this is not safepoint safe because thread may return to compiled code)
-//        generate_throw_exception();
-//    }
-//
+    { YuhuCodeletMark cm(_masm, "yuhu exception handling");
+        // (Note: this is not safepoint safe because thread may return to compiled code)
+        generate_throw_exception();
+    }
+
 //    { CodeletMark cm(_masm, "throw exception entrypoints");
 //        Interpreter::_throw_ArrayIndexOutOfBoundsException_entry = generate_ArrayIndexOutOfBounds_handler("java/lang/ArrayIndexOutOfBoundsException");
 //        Interpreter::_throw_ArrayStoreException_entry            = generate_klass_exception_handler("java/lang/ArrayStoreException"                 );

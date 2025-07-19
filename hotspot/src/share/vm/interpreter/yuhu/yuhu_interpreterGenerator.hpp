@@ -24,6 +24,7 @@ protected:
     address generate_result_handler_for(BasicType type);
     address generate_continuation_for(TosState state);
     address generate_safept_entry_for(TosState state, address runtime_entry);
+    void    generate_throw_exception();
 
     void generate_and_dispatch (YuhuTemplate* t, TosState tos_out = ilgl);
     void set_vtos_entry_points (YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);

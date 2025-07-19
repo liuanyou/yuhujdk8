@@ -110,6 +110,13 @@ protected:
     // method entry points
     static address    _entry_table[number_of_method_entries];     // entry points for a given method
     static address    _native_abi_to_tosca[number_of_result_handlers];  // for native method result handlers
+
+    static address    _rethrow_exception_entry;                   // rethrows an activation in previous frame
+    static address    _throw_exception_entry;
+#ifdef HOTSWAP
+    static address    _remove_activation_preserving_args_entry;   // continuation address when current frame is being popped
+#endif // HOTSWAP
+    static address    _remove_activation_entry;                   // continuation address if an exception is not handled by current frame
 public:
     static StubQueue* code() { return _code; }
     static void initialize();

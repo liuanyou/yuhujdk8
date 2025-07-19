@@ -25,6 +25,11 @@ address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
 address    YuhuInterpreter::_entry_table            [YuhuInterpreter::number_of_method_entries];
 address    YuhuInterpreter::_native_abi_to_tosca[number_of_result_handlers];
 
+address YuhuInterpreter::_rethrow_exception_entry = NULL;
+address YuhuInterpreter::_throw_exception_entry = NULL;
+address YuhuInterpreter::_remove_activation_preserving_args_entry    = NULL;
+address YuhuInterpreter::_remove_activation_entry = NULL;
+
 YuhuEntryPoint::YuhuEntryPoint() {
     assert(number_of_states == 9, "check the code below");
     _entry[btos] = NULL;

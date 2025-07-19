@@ -1483,3 +1483,217 @@ address YuhuInterpreterGenerator::generate_safept_entry_for(
     __ write_insts_dispatch_via(vtos, YuhuInterpreter::_normal_table.table_for(vtos));
     return entry;
 }
+
+void YuhuInterpreterGenerator::generate_throw_exception() {
+    // Entry point in previous activation (i.e., if the caller was
+    // interpreted)
+    YuhuInterpreter::_rethrow_exception_entry = __ current_pc();
+    // Restore sp to interpreter_frame_last_sp even though we are going
+    // to empty the expression stack for the exception processing.
+    __ write_inst("str xzr [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    // r0: exception
+    // r3: return address/pc that threw exception
+    __ write_insts_restore_bcp();    // rbcp points to call/send
+    __ write_insts_restore_locals();
+    __ write_insts_restore_constant_pool_cache();
+    // TODO
+//    __ reinit_heapbase();  // restore rheapbase as heapbase.
+    __ write_insts_get_dispatch();
+
+    // Entry point for exceptions thrown within interpreter code
+    YuhuInterpreter::_throw_exception_entry = __ current_pc();
+    // If we came here via a NullPointerException on the receiver of a
+    // method, rmethod may be corrupt.
+    __ write_insts_get_method(__ x12);
+    // expression stack is undefined here
+    // r0: exception
+    // rbcp: exception bcp
+    __ write_insts_verify_oop(__ x0, "broken oop");
+    __ write_inst_mov_reg(__ x1, __ x0);
+
+    // expression stack must be empty before entering the VM in case of
+    // an exception
+    __ write_insts_empty_expression_stack();
+    // find exception handler address and preserve exception oop
+    __ write_insts_final_call_VM(__ x3,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::exception_handler_for_exception),
+               __ x1);
+
+    // Calculate stack limit
+    __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(__ x8), in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
+                                     + (EnableInvokeDynamic ? 2 : 0) + 2);
+    __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
+    __ write_inst("sub x8, x9, x8, uxtx #3");
+    __ write_inst("and sp, x8, #-16");
+
+    // r0: exception handler entry point
+    // r3: preserved exception oop
+    // rbcp: bcp for exception handler
+    __ write_inst_push_ptr(__ x3); // push exception which is now the only value on the stack
+    __ write_inst_br(__ x0); // jump to exception handler (may be _remove_activation_entry!)
+
+    // If the exception is not handled in the current frame the frame is
+    // removed and the exception is rethrown (i.e. exception
+    // continuation is _rethrow_exception).
+    //
+    // Note: At this point the bci is still the bxi for the instruction
+    // which caused the exception and the expression stack is
+    // empty. Thus, for any VM calls at this point, GC will find a legal
+    // oop map (with empty expression stack).
+
+    //
+    // JVMTI PopFrame support
+    //
+
+    YuhuInterpreter::_remove_activation_preserving_args_entry = __ pc();
+    __ write_insts_empty_expression_stack();
+    // Set the popframe_processing bit in pending_popframe_condition
+    // indicating that we are currently handling popframe, so that
+    // call_VMs that may happen later do not trigger new popframe
+    // handling cycles.
+    __ write_inst("ldr w3, [x28, #%d]", in_bytes(JavaThread::popframe_condition_offset()));
+    __ write_inst("orr x3, x3, #%d", JavaThread::popframe_processing_bit);
+    __ write_inst("str w3, [x28, #%d]", in_bytes(JavaThread::popframe_condition_offset()));
+
+    {
+        // Check to see whether we are returning to a deoptimized frame.
+        // (The PopFrame call ensures that the caller of the popped frame is
+        // either interpreted or compiled and deoptimizes it if compiled.)
+        // In this case, we can't call dispatch_next() after the frame is
+        // popped, but instead must save the incoming arguments and restore
+        // them after deoptimization has occurred.
+        //
+        // Note that we don't compare the return PC against the
+        // deoptimization blob's unpack entry because of the presence of
+        // adapter frames in C2.
+        YuhuLabel caller_not_deoptimized;
+        __ write_inst("ldr x1, [x29, #%d]", frame::return_addr_offset * wordSize);
+        __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                               InterpreterRuntime::interpreter_contains), __ x1);
+        __ write_inst_cbnz(__ x0, caller_not_deoptimized);
+
+        // Compute size of arguments for saving when returning to
+        // deoptimized caller
+        __ write_insts_get_method(__ x0);
+        __ write_inst("ldr x0, [x0, #%d]", in_bytes(Method::const_offset()));
+        __ write_inst("ldrh w0, [x0, #%d]", in_bytes(ConstMethod::
+                                                     size_of_parameters_offset()));
+        __ write_inst("lsl x0, x0, #%d", Interpreter::logStackElementSize);
+        __ write_insts_restore_locals(); // XXX do we need this?
+        __ write_inst("sub x24, x24, x0");
+        __ write_inst("add x24, x24, #%d", wordSize);
+        // Save these arguments
+        __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                               Deoptimization::
+                                                       popframe_preserve_args),
+                              __ x28, __ x0, __ x24);
+
+        __ write_insts_remove_activation(vtos,
+                /* throw_monitor_exception */ false,
+                /* install_monitor_exception */ false,
+                /* notify_jvmdi */ false);
+
+        // Inform deoptimization that it is responsible for restoring
+        // these arguments
+        __ write_insts_mov_imm64(__ x8, JavaThread::popframe_force_deopt_reexecution_bit);
+        __ write_inst("str w8, [x28, #%d]", in_bytes(JavaThread::popframe_condition_offset()));
+
+        // Continue in deoptimization handler
+        __ write_inst("ret");
+
+        __ pin_label(caller_not_deoptimized);
+    }
+
+    __ write_insts_remove_activation(vtos,
+            /* throw_monitor_exception */ false,
+            /* install_monitor_exception */ false,
+            /* notify_jvmdi */ false);
+
+    // Restore the last_sp and null it out
+    __ write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+
+    __ write_insts_restore_bcp();
+    __ write_insts_restore_locals();
+    __ write_insts_restore_constant_pool_cache();
+    __ write_insts_get_method(__ x12);
+    __ write_insts_get_dispatch();
+
+    // The method data pointer was incremented already during
+    // call profiling. We have to restore the mdp for the current bcp.
+    // TODO
+//    if (ProfileInterpreter) {
+//        __ set_method_data_pointer_for_bcp();
+//    }
+
+    // Clear the popframe condition flag
+    __ write_inst("str wzr, [x28, #%d]", in_bytes(JavaThread::popframe_condition_offset()));
+    assert(JavaThread::popframe_inactive == 0, "fix popframe_inactive");
+
+#if INCLUDE_JVMTI
+    if (EnableInvokeDynamic) {
+        YuhuLabel L_done;
+
+        __ write_inst("ldrb w8, [x22, #0]");
+        __ write_inst("cmp x8, #%d", Bytecodes::_invokestatic);
+        __ write_inst_b(__ ne, L_done);
+
+        // The member name argument must be restored if _invokestatic is re-executed after a PopFrame call.
+        // Detect such a case in the InterpreterRuntime function and return the member name argument, or NULL.
+
+        __ write_inst("ldr x0, [x24, #0]");
+        __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::member_name_arg_or_null), __ x0, __ x12, __ x22);
+
+        __ write_inst_cbz(__ x0, L_done);
+
+        __ write_inst("str x0, [x20, #0]");
+        __ pin_label(L_done);
+    }
+#endif // INCLUDE_JVMTI
+
+    // Restore machine SP
+    __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh w8, [x8, #%d]", in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
+                                     + (EnableInvokeDynamic ? 2 : 0));
+    __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
+    __ write_inst("sub x8, x9, w8, uxtw #3");
+    __ write_inst("and sp, x8, #-16");
+
+    __ write_insts_dispatch_next(vtos);
+    // end of PopFrame support
+
+    YuhuInterpreter::_remove_activation_entry = __ current_pc();
+
+    // preserve exception over this code sequence
+    __ write_inst_pop_ptr(__ x0);
+    __ write_inst("str x0, [x28, #%d]", in_bytes(JavaThread::vm_result_offset()));
+    // remove the activation (without doing throws on illegalMonitorExceptions)
+    __ write_insts_remove_activation(vtos, false, true, false);
+    // restore exception
+    __ write_insts_get_vm_result(__ x0, __ x28);
+
+    // In between activations - previous activation type unknown yet
+    // compute continuation point - the continuation point expects the
+    // following registers set up:
+    //
+    // r0: exception
+    // lr: return address/pc that threw exception
+    // esp: expression stack of caller
+    // rfp: fp of caller
+    __ write_inst("stp x0, lr, [sp, #%d]!", -2 * wordSize); // save exception & return address
+    __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                           SharedRuntime::exception_handler_for_return_address),
+                          __ x28, __ lr);
+    __ write_inst_mov_reg(__ x1, __ x0); // save exception handler
+    __ write_inst("ldp x0, lr, [sp], #%d", 2 * wordSize); // restore exception & return address
+    // We might be returning to a deopt handler that expects r3 to
+    // contain the exception pc
+    __ write_inst_mov_reg(__ x3, __ lr);
+    // Note that an "issuing PC" is actually the next PC after the call
+    __ write_inst_br(__ x1); // jump to exception
+    // handler of caller
+}
