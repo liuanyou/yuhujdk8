@@ -69,7 +69,7 @@ public:
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi, le, eq
+        gt, ne, al, ls, hi, le, eq, hs
     };
 private:
     const char* reg_name(YuhuRegister reg) {
@@ -99,7 +99,7 @@ private:
     }
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
-                "gt", "ne", "al", "ls", "hi", "le", "eq"
+                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs"
         };
 
         // check array index

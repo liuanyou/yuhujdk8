@@ -1216,7 +1216,7 @@ address YuhuMacroAssembler::write_insts_cmpxchgptr(YuhuRegister oldv, YuhuRegist
 address YuhuMacroAssembler::write_insts_atomic_incw(YuhuRegister counter_addr, YuhuRegister tmp, YuhuRegister tmp2) {
     if (UseLSE) {
         write_insts_mov_imm32(tmp, 1);
-        write_inst_regs("ldadd %s, %s, [%s]", w_reg(tmp), w_reg(xzr), counter_addr);
+        write_inst_regs("ldadd %s, %s, [%s]", w_reg(tmp), wzr, counter_addr);
         return current_pc();
     }
     YuhuLabel retry_load;
@@ -1485,7 +1485,7 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
         // we have to change the following assembler code to calculate the
         // plain index.
         assert(ConstantPool::decode_invokedynamic_index(~123) == 123, "else change next line");
-        write_inst_regs("eon %s, %s, %s", w_reg(index), w_reg(index), w_reg(xzr)); // convert to plain index
+        write_inst_regs("eon %s, %s, %s", w_reg(index), w_reg(index), wzr); // convert to plain index
     } else if (index_size == sizeof(u1)) {
         write_inst("ldrb %s, [x22, #%d]", w_reg(index), bcp_offset);
     } else {

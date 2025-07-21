@@ -117,6 +117,13 @@ protected:
     static address    _remove_activation_preserving_args_entry;   // continuation address when current frame is being popped
 #endif // HOTSWAP
     static address    _remove_activation_entry;                   // continuation address if an exception is not handled by current frame
+
+    static address    _throw_ArrayIndexOutOfBoundsException_entry;
+    static address    _throw_ArrayStoreException_entry;
+    static address    _throw_ArithmeticException_entry;
+    static address    _throw_ClassCastException_entry;
+    static address    _throw_NullPointerException_entry;
+    static address    _throw_StackOverflowError_entry;
 public:
     static StubQueue* code() { return _code; }
     static void initialize();

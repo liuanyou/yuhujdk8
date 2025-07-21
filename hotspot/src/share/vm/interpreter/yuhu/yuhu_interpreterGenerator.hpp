@@ -26,6 +26,18 @@ protected:
     address generate_safept_entry_for(TosState state, address runtime_entry);
     void    generate_throw_exception();
 
+    address generate_exception_handler_common(const char* name, const char* message, bool pass_oop);
+
+    address generate_ArrayIndexOutOfBounds_handler(const char* name);
+    address generate_klass_exception_handler(const char* name) {
+        return generate_exception_handler_common(name, NULL, true);
+    }
+    address generate_exception_handler(const char* name, const char* message) {
+        return generate_exception_handler_common(name, message, false);
+    }
+    address generate_ClassCastException_handler();
+    address generate_StackOverflowError_handler();
+
     void generate_and_dispatch (YuhuTemplate* t, TosState tos_out = ilgl);
     void set_vtos_entry_points (YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);
     void set_short_entry_points(YuhuTemplate* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);

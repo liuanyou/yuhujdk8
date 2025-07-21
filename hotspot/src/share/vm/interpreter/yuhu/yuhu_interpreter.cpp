@@ -30,6 +30,13 @@ address YuhuInterpreter::_throw_exception_entry = NULL;
 address YuhuInterpreter::_remove_activation_preserving_args_entry    = NULL;
 address YuhuInterpreter::_remove_activation_entry = NULL;
 
+address    YuhuInterpreter::_throw_ArrayIndexOutOfBoundsException_entry = NULL;
+address    YuhuInterpreter::_throw_ArrayStoreException_entry = NULL;
+address    YuhuInterpreter::_throw_ArithmeticException_entry = NULL;
+address    YuhuInterpreter::_throw_ClassCastException_entry = NULL;
+address    YuhuInterpreter::_throw_NullPointerException_entry = NULL;
+address    YuhuInterpreter::_throw_StackOverflowError_entry = NULL;
+
 YuhuEntryPoint::YuhuEntryPoint() {
     assert(number_of_states == 9, "check the code below");
     _entry[btos] = NULL;

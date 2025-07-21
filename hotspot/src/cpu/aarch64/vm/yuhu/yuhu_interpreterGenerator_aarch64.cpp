@@ -56,7 +56,7 @@ address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int s
 
     // Calculate stack limit
     __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
-    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(__ x8), in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w8, in_bytes(ConstMethod::max_stack_offset()));
     __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
                                      + (EnableInvokeDynamic ? 2 : 0));
     __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
@@ -658,7 +658,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // Change state to native
     __ write_insts_mov_imm64(__ x8, _thread_in_native);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     // Call the native method.
     __ write_inst_blr(__ x10);
@@ -681,7 +681,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // change thread state
     __ write_insts_mov_imm64(__ x8, _thread_in_native_trans);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     if (os::is_MP()) {
         if (UseMembar) {
@@ -702,13 +702,13 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         {
             uint64_t offset;
             __ write_insts_adrp(__ x9, SafepointSynchronize::address_of_state(), offset);
-            __ write_inst("ldr %s, [x9, #%d]", __ w_reg(__ x9), offset);
+            __ write_inst("ldr %s, [x9, #%d]", __ w9, offset);
         }
         assert(SafepointSynchronize::_not_synchronized == 0,
                "SafepointSynchronize::_not_synchronized");
         YuhuLabel L;
         __ write_inst_cbnz(__ x9, L);
-        __ write_inst("ldr %s, [x28, #%d]", __ w_reg(__ x9), in_bytes(JavaThread::suspend_flags_offset()));
+        __ write_inst("ldr %s, [x28, #%d]", __ w9, in_bytes(JavaThread::suspend_flags_offset()));
         __ write_inst_cbz(__ x9, Continue);
         __ pin_label(L);
 
@@ -732,7 +732,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     // change thread state
     __ write_insts_mov_imm64(__ x8, _thread_in_Java);
     __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
-    __ write_inst_regs("stlr %s, [%s]", __ w_reg(__ x8), __ x9);
+    __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     // reset_last_Java_frame
     __ write_insts_reset_last_java_frame(true);
@@ -782,7 +782,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     {
         YuhuLabel no_reguard;
         __ write_inst("add x8, x28, #%d", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
-        __ write_inst_regs("ldrb %s, [%s]", __ w_reg(__ x8), __ x8);
+        __ write_inst_regs("ldrb %s, [%s]", __ w8, __ x8);
         __ write_inst("cmp x8, #%d", JavaThread::stack_guard_yellow_disabled);
         __ write_inst_b(__ ne, no_reguard);
 
@@ -1158,7 +1158,7 @@ address YuhuInterpreterGenerator::generate_CRC32_update_entry() {
         __ write_insts_adrp(tbl, StubRoutines::crc_table_addr(), offset);
         __ write_inst("add %s, %s, #%d", tbl, tbl, offset);
 
-        __ write_inst_regs("orn %s, %s, %s", __ w_reg(crc), __ w_reg(__ xzr), __ w_reg(crc)); // ~crc
+        __ write_inst_regs("orn %s, %s, %s", __ w_reg(crc), __ wzr, __ w_reg(crc)); // ~crc
 
         __ write_insts_update_byte_crc32(crc, val, tbl); // ~crc
 
@@ -1445,10 +1445,10 @@ address YuhuInterpreterGenerator::generate_result_handler_for(
     address entry = __ current_pc();
     switch (type) {
         case T_BOOLEAN: __ write_insts_c2bool(__ x0);          break;
-        case T_CHAR   : __ write_inst_regs("uxth %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
-        case T_BYTE   : __ write_inst_regs("sxtb %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
-        case T_SHORT  : __ write_inst_regs("sxth %s, %s", __ w_reg(__ x0), __ w_reg(__ x0));        break;
-        case T_INT    : __ write_inst_regs("uxtw %s, %s", __ x0, __ w_reg(__ x0));        break;  // FIXME: We almost certainly don't need this
+        case T_CHAR   : __ write_inst_regs("uxth %s, %s", __ w0, __ w0);        break;
+        case T_BYTE   : __ write_inst_regs("sxtb %s, %s", __ w0, __ w0);        break;
+        case T_SHORT  : __ write_inst_regs("sxth %s, %s", __ w0, __ w0);        break;
+        case T_INT    : __ write_inst_regs("uxtw %s, %s", __ x0, __ w0);        break;  // FIXME: We almost certainly don't need this
         case T_LONG   : /* nothing to do */        break;
         case T_VOID   : /* nothing to do */        break;
         case T_FLOAT  : /* nothing to do */        break;
@@ -1522,7 +1522,7 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
 
     // Calculate stack limit
     __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
-    __ write_inst("ldrh %s, [x8, #%d]", __ w_reg(__ x8), in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w8, in_bytes(ConstMethod::max_stack_offset()));
     __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
                                      + (EnableInvokeDynamic ? 2 : 0) + 2);
     __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
@@ -1696,4 +1696,105 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
     // Note that an "issuing PC" is actually the next PC after the call
     __ write_inst_br(__ x1); // jump to exception
     // handler of caller
+}
+
+address YuhuInterpreterGenerator::generate_ArrayIndexOutOfBounds_handler(
+        const char* name) {
+    address entry = __ current_pc();
+    // expression stack must be empty before entering the VM if an
+    // exception happened
+    __ write_insts_empty_expression_stack();
+    // setup parameters
+    // ??? convention: expect aberrant index in register r1
+    __ write_inst("mov w2, w1");
+    __ write_insts_mov_imm64(__ x1, (uint64_t)(address)name);
+    __ write_insts_final_call_VM(__ noreg,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::
+                                        throw_ArrayIndexOutOfBoundsException),
+               __ x1, __ x2);
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_exception_handler_common(
+        const char* name, const char* message, bool pass_oop) {
+    assert(!pass_oop || message == NULL, "either oop or message but not both");
+    address entry = __ current_pc();
+    if (pass_oop) {
+        // object is at TOS
+        __ write_inst_pop(__ x2);
+    }
+    // expression stack must be empty before entering the VM if an
+    // exception happened
+    __ write_insts_empty_expression_stack();
+    // setup parameters
+    __ write_insts_mov_imm64(__ x1, (uint64_t)(address)name); // __ lea(c_rarg1, Address((address)name));
+    if (pass_oop) {
+        __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address,
+                                        InterpreterRuntime::
+                                                create_klass_exception),
+                   __ x1, __ x2);
+    } else {
+        // kind of lame ExternalAddress can't take NULL because
+        // external_word_Relocation will assert.
+        if (message != NULL) {
+            __ write_insts_mov_imm64(__ x2, (uint64_t)(address)message); // __ lea(c_rarg2, Address((address)message));
+        } else {
+            __ write_insts_mov_imm64(__ x2, (uint64_t)NULL_WORD);
+        }
+        __ write_insts_final_call_VM(__ x0,
+                   CAST_FROM_FN_PTR(address, InterpreterRuntime::create_exception),
+                   __ x1, __ x2);
+    }
+    // throw exception
+    __ write_inst_b(address(Interpreter::throw_exception_entry()));
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_ClassCastException_handler() {
+    address entry = __ current_pc();
+
+    // object is at TOS
+    __ write_inst_pop(__ x1);
+
+    // expression stack must be empty before entering the VM if an
+    // exception happened
+    __ write_insts_empty_expression_stack();
+
+    __ write_insts_final_call_VM(__ noreg,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::
+                                        throw_ClassCastException),
+               __ x1);
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_StackOverflowError_handler() {
+    address entry = __ current_pc();
+
+#ifdef ASSERT
+    {
+        YuhuLabel L;
+        __ write_inst("ldr x8, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset *
+                                            wordSize);
+        __ write_inst("mov x9, sp");
+        __ write_inst("cmp x8, x9"); // maximal rsp for current rfp (stack
+        // grows negative)
+        __ write_inst_b(__ hs, L); // check if frame is complete
+        __ write_insts_stop ("interpreter frame not set up");
+        __ pin_label(L);
+    }
+#endif // ASSERT
+    // Restore bcp under the assumption that the current frame is still
+    // interpreted
+    __ write_insts_restore_bcp();
+
+    // expression stack must be empty before entering the VM if an
+    // exception happened
+    __ write_insts_empty_expression_stack();
+    // throw exception
+    __ write_insts_final_call_VM(__ noreg,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::throw_StackOverflowError));
+    return entry;
 }
