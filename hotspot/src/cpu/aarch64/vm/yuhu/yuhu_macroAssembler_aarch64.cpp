@@ -327,6 +327,14 @@ address YuhuMacroAssembler::write_inst_push_d(YuhuFloatRegister r) {
     return write_inst("str %s, [x20, #%d]!", r, 2 * -wordSize);
 }
 
+address YuhuMacroAssembler::write_inst_push(YuhuRegister src) {
+    return write_inst("str %s, [x20, #%d]!", src, -1 * wordSize);
+}
+
+address YuhuMacroAssembler::write_inst_pop(YuhuRegister dst) {
+    return write_inst("ldr %s, [x20], #%d", dst, 1 * wordSize);
+}
+
 address YuhuMacroAssembler::write_inst_cset(YuhuRegister reg, YuhuCond cond) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "cset %s, %s", reg_name(reg), cond_name(cond));
@@ -374,16 +382,6 @@ address YuhuMacroAssembler::write_insts_pusha() {
     write_inst("stp x26, x27, [sp, #0xd0]");
     write_inst("stp x28, x29, [sp, #0xe0]");
     write_inst("stp x30, xzr, [sp, #0xf0]");
-    return current_pc();
-}
-
-address YuhuMacroAssembler::write_insts_pushrange(YuhuRegister start, YuhuRegister end, YuhuRegister stack) {
-    write_inst("str %s, [%s, #-%d]!", start, stack, (end - start + 1) * wordSize);
-    if (end > start) {
-        for (int i = start + 1; i <= end; i++) {
-            write_inst("str %s, [%s, #%d]", (YuhuRegister) (start+1), stack, (i - start) * wordSize);
-        }
-    }
     return current_pc();
 }
 
@@ -690,6 +688,7 @@ address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, TosState st
 address YuhuMacroAssembler::write_insts_load_klass(YuhuRegister dst, YuhuRegister src) {
     if (UseCompressedClassPointers) {
         write_insts_stop("unimplemented");
+        // TODO
 //        ldrw(dst, Address(src, oopDesc::klass_offset_in_bytes()));
 //        decode_klass_not_null(dst);
     } else {
@@ -1269,6 +1268,13 @@ address YuhuMacroAssembler::write_insts_push(TosState state) {
     return current_pc();
 }
 
+void YuhuMacroAssembler::write_insts_push(YuhuRegSet regs, YuhuRegister stack) {
+    if (regs.bits()) write_insts_push(regs.bits(), stack);
+}
+void YuhuMacroAssembler::write_insts_pop(YuhuRegSet regs, YuhuRegister stack) {
+    if (regs.bits()) write_insts_pop(regs.bits(), stack);
+}
+
 int YuhuMacroAssembler::write_insts_push(unsigned int bitset, YuhuRegister stack) {
     int words_pushed = 0;
 
@@ -1642,5 +1648,19 @@ address YuhuMacroAssembler::write_insts_remove_activation(
     // compiled code the saved sender SP was saved in sender_sp, so this
     // restores it.
     write_inst("and sp, x20, #-16");
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_get_thread(YuhuRegister dst) {
+    YuhuRegSet saved_regs = YuhuRegSet::range(x0, x17) + YuhuRegSet::range(x19, x20) + lr - dst;
+    write_insts_push(saved_regs, sp);
+    write_insts_mov_imm64(x0, ThreadLocalStorage::thread_index());
+    write_insts_mov_imm64(x19, (uint64_t) CAST_FROM_FN_PTR(address, pthread_getspecific));
+    write_inst_blr(x19);
+    if (dst != x0) {
+        write_inst_mov_reg(dst, x0);
+    }
+    // restore pushed registers
+    write_insts_pop(saved_regs, sp);
     return current_pc();
 }

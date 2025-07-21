@@ -19,6 +19,7 @@
 #include <keystone/keystone.h>
 
 class YuhuLabel;
+class YuhuRegSet;
 
 class YuhuMacroAssembler: public MacroAssembler {
 private:
@@ -131,9 +132,13 @@ public:
         assert(reg >= x0 && reg <= xzr, "Unknown register");
         return (YuhuRegister) (reg - (xzr - wzr));
     }
-    uint64_t bit(YuhuRegister reg, bool should_set = true) const {
+    static uint64_t bit(YuhuRegister reg, bool should_set = true) {
         assert(reg >= x0 && reg <= x30, "Unknown register");
-        return should_set ? 1 << (int) (reg - x0) : 0;
+        return should_set ? 1 << encoding(reg) : 0;
+    }
+    static int encoding(YuhuRegister reg) {
+        assert(reg >= x0 && reg <= x30, "Unknown register");
+        return (int) (reg - x0);
     }
 public:
     YuhuMacroAssembler(CodeBuffer* code) : MacroAssembler(code) {
@@ -211,11 +216,13 @@ public:
     address write_inst_pop_l(YuhuRegister r = x0);
     address write_inst_pop_f(YuhuFloatRegister r = s0);
     address write_inst_pop_d(YuhuFloatRegister r = d0);
+    address write_inst_pop(YuhuRegister dst);
     address write_inst_push_ptr(YuhuRegister r = x0);
     address write_inst_push_i(YuhuRegister r = x0);
     address write_inst_push_l(YuhuRegister r = x0);
     address write_inst_push_f(YuhuFloatRegister r = s0);
     address write_inst_push_d(YuhuFloatRegister r = d0);
+    address write_inst_push(YuhuRegister src);
 
     address write_inst_cset(YuhuRegister reg, YuhuCond cond);
 
@@ -231,8 +238,6 @@ public:
      * @return
      */
     address write_insts_pusha();
-
-    address write_insts_pushrange(YuhuRegister start, YuhuRegister end, YuhuRegister stack);
 
     address write_insts_popa();
 
@@ -335,6 +340,9 @@ public:
     address write_insts_pop(TosState state); // transition vtos -> state
     address write_insts_push(TosState state); // transition state -> vtos
 
+    void write_insts_push(YuhuRegSet regs, YuhuRegister stack);
+    void write_insts_pop(YuhuRegSet regs, YuhuRegister stack);
+
     int write_insts_push(unsigned int bitset, YuhuRegister stack);
     int write_insts_pop(unsigned int bitset, YuhuRegister stack);
 
@@ -371,6 +379,8 @@ public:
                            bool throw_monitor_exception = true,
                            bool install_monitor_exception = true,
                            bool notify_jvmdi = true);
+
+    address write_insts_get_thread(YuhuRegister thread);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
@@ -452,6 +462,61 @@ public:
     YuhuLabel() {
         init();
     }
+};
+
+// A set of registers
+class YuhuRegSet {
+    uint32_t _bitset;
+
+    YuhuRegSet(uint32_t bitset) : _bitset(bitset) { }
+
+public:
+
+    YuhuRegSet() : _bitset(0) { }
+
+    YuhuRegSet(YuhuMacroAssembler::YuhuRegister r1) : _bitset(YuhuMacroAssembler::bit(r1)) { }
+
+    YuhuRegSet operator+(const YuhuRegSet aSet) const {
+        YuhuRegSet result(_bitset | aSet._bitset);
+        return result;
+    }
+
+    YuhuRegSet operator-(const YuhuRegSet aSet) const {
+        YuhuRegSet result(_bitset & ~aSet._bitset);
+        return result;
+    }
+
+    YuhuRegSet &operator+=(const YuhuRegSet aSet) {
+        *this = *this + aSet;
+        return *this;
+    }
+
+    static YuhuRegSet of(YuhuMacroAssembler::YuhuRegister r1) {
+        return YuhuRegSet(r1);
+    }
+
+    static YuhuRegSet of(YuhuMacroAssembler::YuhuRegister r1, YuhuMacroAssembler::YuhuRegister r2) {
+        return of(r1) + r2;
+    }
+
+    static YuhuRegSet of(YuhuMacroAssembler::YuhuRegister r1, YuhuMacroAssembler::YuhuRegister r2, YuhuMacroAssembler::YuhuRegister r3) {
+        return of(r1, r2) + r3;
+    }
+
+    static YuhuRegSet of(YuhuMacroAssembler::YuhuRegister r1, YuhuMacroAssembler::YuhuRegister r2, YuhuMacroAssembler::YuhuRegister r3, YuhuMacroAssembler::YuhuRegister r4) {
+        return of(r1, r2, r3) + r4;
+    }
+
+    static YuhuRegSet range(YuhuMacroAssembler::YuhuRegister start, YuhuMacroAssembler::YuhuRegister end) {
+        uint32_t bits = ~0;
+        bits <<= YuhuMacroAssembler::encoding(start);
+        bits <<= 31 - YuhuMacroAssembler::encoding(end);
+        bits >>= 31 - YuhuMacroAssembler::encoding(end);
+
+        return YuhuRegSet(bits);
+    }
+
+    uint32_t bits() const { return _bitset; }
 };
 
 #endif //JDK8_YUHU_MACROASSEMBLER_HPP
