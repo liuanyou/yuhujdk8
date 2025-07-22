@@ -131,6 +131,9 @@ void yuhuInterpreter_init() {
 
 void YuhuInterpreter::initialize() {
     if (_code != NULL) return;
+
+    YuhuTemplateTable::initialize();
+
     {
         ResourceMark rm;
         TraceTime timer("yuhuInterpreter generation", TraceStartupTime);

@@ -64,6 +64,19 @@ private:
     static BarrierSet *_bs;                    // Cache the barrier set.
 public:
     static YuhuMacroAssembler *_masm;       // the assembler used when generating templates
+private:
+    // debugging of TemplateGenerator
+    static void transition(TosState tos_in, TosState tos_out);// checks if in/out states expected by template generator correspond to table entries
+
+    // initialization helpers
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(            ), char filler );
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg     ), int arg     );
+
+    // bytecodes
+    static void nop();
+public:
+    static void initialize();
+
     static YuhuTemplate* template_for     (Bytecodes::Code code)  { Bytecodes::check     (code); return &_template_table     [code]; }
     static YuhuTemplate* template_for_wide(Bytecodes::Code code)  { Bytecodes::wide_check(code); return &_template_table_wide[code]; }
 };
