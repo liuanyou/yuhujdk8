@@ -140,6 +140,12 @@ address YuhuMacroAssembler::write_inst_mov_reg(YuhuRegister reg1, YuhuRegister r
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_fmov_reg(YuhuFloatRegister reg1, YuhuRegister reg2) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "fmov %s, %s", f_reg_name(reg1), reg_name(reg2));
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_br(YuhuRegister reg) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "br %s", reg_name(reg));
@@ -339,6 +345,21 @@ address YuhuMacroAssembler::write_inst_cset(YuhuRegister reg, YuhuCond cond) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "cset %s, %s", reg_name(reg), cond_name(cond));
     return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_insts_load_unsigned_short(YuhuRegister dst, YuhuRegister src, int imm32) {
+    return write_inst("ldrh %s, [%s, #%d]", dst, src, imm32);
+}
+
+address YuhuMacroAssembler::write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32) {
+    return write_inst("ldrb %s, [%s, #%d]", dst, src, imm32);
+}
+
+address YuhuMacroAssembler::write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset) {
+    assert(bcp_offset >= 0, "bcp is still pointing to start of bytecode");
+    write_inst("ldrh %s, [%s, #%d]", reg, x22, bcp_offset);
+    write_inst_regs("rev16 %s, %s", reg, reg);
+    return current_pc();
 }
 
 address YuhuMacroAssembler::write_insts_enter() {
@@ -1477,7 +1498,7 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
                                                        size_t index_size) {
     assert(bcp_offset > 0, "bcp is still pointing to start of bytecode");
     if (index_size == sizeof(u2)) {
-        write_inst("ldrh %s, [x22, #%d]", w_reg(index), bcp_offset);
+        write_insts_load_unsigned_short(w_reg(index), x22, bcp_offset);
     } else if (index_size == sizeof(u4)) {
         assert(EnableInvokeDynamic, "giant index used only for JSR 292");
         write_inst("ldr %s, [x22, #%d]", w_reg(index), bcp_offset);
@@ -1487,7 +1508,7 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
         assert(ConstantPool::decode_invokedynamic_index(~123) == 123, "else change next line");
         write_inst_regs("eon %s, %s, %s", w_reg(index), w_reg(index), wzr); // convert to plain index
     } else if (index_size == sizeof(u1)) {
-        write_inst("ldrb %s, [x22, #%d]", w_reg(index), bcp_offset);
+        write_insts_load_unsigned_byte(w_reg(index), x22, bcp_offset);
     } else {
         ShouldNotReachHere();
     }

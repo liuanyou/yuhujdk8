@@ -175,6 +175,8 @@ public:
 
     address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
 
+    address write_inst_fmov_reg(YuhuFloatRegister reg1, YuhuRegister reg2);
+
     address write_inst_br(YuhuRegister reg);
 
     address write_inst_blr(YuhuRegister reg);
@@ -225,6 +227,10 @@ public:
     address write_inst_push(YuhuRegister src);
 
     address write_inst_cset(YuhuRegister reg, YuhuCond cond);
+
+    address write_insts_load_unsigned_short(YuhuRegister dst, YuhuRegister src, int imm32);
+    address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32);
+    address write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset);
 
     address write_insts_enter();
 
@@ -333,10 +339,6 @@ public:
         return write_insts_atomic_incw(tmp1, tmp2, tmp3);
     }
 
-    address write_insts_get_method(YuhuRegister reg) {
-        return write_inst("ldr %s, [x29, #%d]", reg, frame::interpreter_frame_method_offset * wordSize);
-    }
-
     address write_insts_pop(TosState state); // transition vtos -> state
     address write_insts_push(TosState state); // transition state -> vtos
 
@@ -381,6 +383,29 @@ public:
                            bool notify_jvmdi = true);
 
     address write_insts_get_thread(YuhuRegister thread);
+
+    address write_insts_get_method(YuhuRegister reg) {
+        write_inst("ldr %s, [x29, #%d]", reg, frame::interpreter_frame_method_offset * wordSize);
+        return current_pc();
+    }
+
+    address write_insts_get_const(YuhuRegister reg) {
+        write_insts_get_method(reg);
+        write_inst("ldr %s, [%s, #%d]", reg, reg, in_bytes(Method::const_offset()));
+        return current_pc();
+    }
+
+    address write_insts_get_constant_pool(YuhuRegister reg) {
+        write_insts_get_const(reg);
+        write_inst("ldr %s, [%s, #%d]", reg, reg, in_bytes(ConstMethod::constants_offset()));
+        return current_pc();
+    }
+
+    address write_insts_get_cpool_and_tags(YuhuRegister cpool, YuhuRegister tags) {
+        write_insts_get_constant_pool(cpool);
+        write_inst("ldr %s, [%s, #%d]", tags, cpool, ConstantPool::tags_offset_in_bytes());
+        return current_pc();
+    }
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
