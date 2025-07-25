@@ -134,6 +134,15 @@ address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuReg
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_imms(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm1, int imm2) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), imm1, imm2);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "mov %s, %s", reg_name(reg1), reg_name(reg2));
@@ -1493,6 +1502,25 @@ address YuhuMacroAssembler::write_insts_get_cache_and_index_at_bcp(YuhuRegister 
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_get_cache_and_index_and_bytecode_at_bcp(YuhuRegister cache,
+                                                                        YuhuRegister index,
+                                                                        YuhuRegister bytecode,
+                                                                        int byte_no,
+                                                                        int bcp_offset,
+                                                                        size_t index_size) {
+    write_insts_get_cache_and_index_at_bcp(cache, index, bcp_offset, index_size);
+    // We use a 32-bit load here since the layout of 64-bit words on
+    // little-endian machines allow us that.
+    // n.b. unlike x86 cache already includes the index offset
+    write_inst("add %s, %s, #%d", bytecode, cache, in_bytes(ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::indices_offset())); // lea(bytecode, Address(cache,
+//                          ConstantPoolCache::base_offset()
+//                          + ConstantPoolCacheEntry::indices_offset()));
+    write_inst("ldar %s, [%s]", w_reg(bytecode), bytecode);
+    const int shift_count = (1 + byte_no) * BitsPerByte;
+    write_inst_imms("ubfx %s, %s, #%d, #%d", bytecode, bytecode, shift_count, BitsPerByte);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister index,
                                                        int bcp_offset,
                                                        size_t index_size) {
@@ -1683,5 +1711,18 @@ address YuhuMacroAssembler::write_insts_get_thread(YuhuRegister dst) {
     }
     // restore pushed registers
     write_insts_pop(saved_regs, sp);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_null_check(YuhuRegister reg, int offset) {
+    if (needs_explicit_null_check(offset)) {
+        // provoke OS NULL exception if reg = NULL by
+        // accessing M[reg] w/o changing any registers
+        // NOTE: this is plenty to provoke a segv
+        write_inst("ldr xzr, [%s, #%d]", reg, 0);
+    } else {
+        // nothing to do, (later) access of M[reg + offset]
+        // will provoke OS NULL exception if reg = NULL
+    }
     return current_pc();
 }

@@ -69,7 +69,7 @@ public:
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi, le, eq, hs
+        gt, ne, al, ls, hi, le, eq, hs, lo
     };
 private:
     const char* reg_name(YuhuRegister reg) {
@@ -99,7 +99,7 @@ private:
     }
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
-                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs"
+                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo"
         };
 
         // check array index
@@ -172,6 +172,8 @@ public:
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
+
+    address write_inst_imms(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm1, int imm2);
 
     address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
 
@@ -373,6 +375,8 @@ public:
 
     address write_insts_get_cache_and_index_at_bcp(YuhuRegister cache, YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
 
+    address write_insts_get_cache_and_index_and_bytecode_at_bcp(YuhuRegister cache, YuhuRegister index, YuhuRegister bytecode, int byte_no, int bcp_offset, size_t index_size = sizeof(u2));
+
     address write_insts_get_cache_index_at_bcp(YuhuRegister index, int bcp_offset, size_t index_size = sizeof(u2));
 
     address write_insts_c2bool(YuhuRegister x);
@@ -406,6 +410,8 @@ public:
         write_inst("ldr %s, [%s, #%d]", tags, cpool, ConstantPool::tags_offset_in_bytes());
         return current_pc();
     }
+
+    address write_insts_null_check(YuhuRegister reg, int offset = -1);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
