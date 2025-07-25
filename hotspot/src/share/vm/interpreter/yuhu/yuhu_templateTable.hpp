@@ -105,6 +105,13 @@ private:
     static void aload(int n);
 
     static void iaload();
+    static void laload();
+    static void faload();
+    static void daload();
+    static void aaload();
+    static void baload();
+    static void caload();
+    static void saload();
 
 public:
     static void initialize();
