@@ -52,6 +52,7 @@ public:
 
 class YuhuInterpreter : AllStatic {
 friend class YuhuInterpreterGenerator;
+friend class YuhuTemplateTable;
 public:
     enum MethodKind {
         zerolocals,                                                 // method needs locals initialization
@@ -131,6 +132,15 @@ public:
     static address*   dispatch_table()                            { return _active_table.table_for(); }
     static int        distance_from_dispatch_table(TosState state){ return _active_table.distance_from(state); }
     static int        BasicType_as_index(BasicType type);         // computes index into result_handler_by_index table
+
+    const static int stackElementWords   = 1;
+    const static int stackElementSize    = stackElementWords * wordSize;
+    const static int logStackElementSize = LogBytesPerWord;
+
+    // Local values relative to locals[n]
+    static int  local_offset_in_bytes(int n) {
+        return ((frame::interpreter_frame_expression_stack_direction() * n) * stackElementSize);
+    }
 
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"

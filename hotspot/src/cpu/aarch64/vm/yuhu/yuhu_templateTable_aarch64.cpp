@@ -191,3 +191,286 @@ void YuhuTemplateTable::ldc2_w()
 
     __ pin_label(Done);
 }
+
+void YuhuTemplateTable::iload()
+{
+    transition(vtos, itos);
+    if (RewriteFrequentPairs) {
+        YuhuLabel rewrite, done;
+        YuhuMacroAssembler::YuhuRegister bc = __ x4;
+
+        // get next bytecode
+        __ write_insts_load_unsigned_byte(__ w1, __ x22, Bytecodes::length_for(Bytecodes::_iload));
+
+        // if _iload, wait to rewrite to iload2.  We only want to rewrite the
+        // last two iloads in a pair.  Comparing against fast_iload means that
+        // the next bytecode is neither an iload or a caload, and therefore
+        // an iload pair.
+        __ write_inst("cmp w1, #%d", Bytecodes::_iload);
+        __ write_inst_b(__ eq, done);
+
+        // if _fast_iload rewrite to _fast_iload2
+        __ write_inst("cmp w1, #%d", Bytecodes::_fast_iload);
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_iload2);
+        __ write_inst_b(__ eq, rewrite);
+
+        // if _caload rewrite to _fast_icaload
+        __ write_inst("cmp w1, #%d", Bytecodes::_caload);
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_icaload);
+        __ write_inst_b(__ eq, rewrite);
+
+        // else rewrite to _fast_iload
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_iload);
+
+        // rewrite
+        // bc: new bytecode
+        __ pin_label(rewrite);
+        patch_bytecode(Bytecodes::_iload, bc, __ x1, false);
+        __ pin_label(done);
+
+    }
+
+    // do iload, get the local value into tos
+    locals_index(__ x1);
+    __ write_inst("ldr x0, [x24, x1, lsl #3]");
+}
+
+void YuhuTemplateTable::lload()
+{
+    transition(vtos, ltos);
+    __ write_inst("ldrb w1, [x22, #%s]", 1);
+    __ write_inst("sub x1, x24, w1, uxtw #%d", LogBytesPerWord);
+    __ write_inst("ldr x0, [x1, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+}
+
+void YuhuTemplateTable::fload()
+{
+    transition(vtos, ftos);
+    locals_index(__ x1);
+    // n.b. we use ldrd here because this is a 64 bit slot
+    // this is comparable to the iload case
+    __ write_inst("ldr d0, [x24, x1, lsl #3]");
+}
+
+void YuhuTemplateTable::dload()
+{
+    transition(vtos, dtos);
+    __ write_inst("ldrb w1, [x22, #%d]", 1);
+    __ write_inst("sub x1, x24, w1, uxtw #%d", LogBytesPerWord);
+    __ write_inst("ldr d0, [x1, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+}
+
+void YuhuTemplateTable::aload()
+{
+    transition(vtos, atos);
+    locals_index(__ x1);
+    __ write_inst("ldr x0, [x24, x1, lsl #3]");
+}
+
+void YuhuTemplateTable::iload(int n)
+{
+    transition(vtos, itos);
+    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::lload(int n)
+{
+    transition(vtos, ltos);
+    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n + 1));
+}
+
+void YuhuTemplateTable::fload(int n)
+{
+    transition(vtos, ftos);
+    __ write_inst("ldr s0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::dload(int n)
+{
+    transition(vtos, dtos);
+    __ write_inst("ldr d0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n + 1));
+}
+
+void YuhuTemplateTable::aload_0()
+{
+    // According to bytecode histograms, the pairs:
+    //
+    // _aload_0, _fast_igetfield
+    // _aload_0, _fast_agetfield
+    // _aload_0, _fast_fgetfield
+    //
+    // occur frequently. If RewriteFrequentPairs is set, the (slow)
+    // _aload_0 bytecode checks if the next bytecode is either
+    // _fast_igetfield, _fast_agetfield or _fast_fgetfield and then
+    // rewrites the current bytecode into a pair bytecode; otherwise it
+    // rewrites the current bytecode into _fast_aload_0 that doesn't do
+    // the pair check anymore.
+    //
+    // Note: If the next bytecode is _getfield, the rewrite must be
+    //       delayed, otherwise we may miss an opportunity for a pair.
+    //
+    // Also rewrite frequent pairs
+    //   aload_0, aload_1
+    //   aload_0, iload_1
+    // These bytecodes with a small amount of code are most profitable
+    // to rewrite
+    if (RewriteFrequentPairs) {
+        YuhuLabel rewrite, done;
+        const YuhuMacroAssembler::YuhuRegister bc = __ x4;
+
+        // get next bytecode
+        __ write_insts_load_unsigned_byte(__ w1, __ x22, Bytecodes::length_for(Bytecodes::_aload_0));
+
+        // do actual aload_0
+        aload(0);
+
+        // if _getfield then wait with rewrite
+        __ write_inst("cmp w1, #%d", Bytecodes::Bytecodes::_getfield);
+        __ write_inst_b(__ eq, done);
+
+        // if _igetfield then reqrite to _fast_iaccess_0
+        assert(Bytecodes::java_code(Bytecodes::_fast_iaccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
+        __ write_inst("cmp w1, #%d", Bytecodes::_fast_igetfield);
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_iaccess_0);
+        __ write_inst_b(__ eq, rewrite);
+
+        // if _agetfield then reqrite to _fast_aaccess_0
+        assert(Bytecodes::java_code(Bytecodes::_fast_aaccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
+        __ write_inst("cmp w1, #%d", Bytecodes::_fast_agetfield);
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_aaccess_0);
+        __ write_inst_b(__ eq, rewrite);
+
+        // if _fgetfield then reqrite to _fast_faccess_0
+        assert(Bytecodes::java_code(Bytecodes::_fast_faccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
+        __ write_inst("cmp w1, #%d", Bytecodes::_fast_fgetfield);
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::_fast_faccess_0);
+        __ write_inst_b(__ eq, rewrite);
+
+        // else rewrite to _fast_aload0
+        assert(Bytecodes::java_code(Bytecodes::_fast_aload_0) == Bytecodes::_aload_0, "fix bytecode definition");
+        __ write_insts_mov_imm32(__ w_reg(bc), Bytecodes::Bytecodes::_fast_aload_0);
+
+        // rewrite
+        // bc: new bytecode
+        __ pin_label(rewrite);
+        patch_bytecode(Bytecodes::_aload_0, bc, __ x1, false);
+
+        __ pin_label(done);
+    } else {
+        aload(0);
+    }
+}
+
+void YuhuTemplateTable::aload(int n)
+{
+    transition(vtos, atos);
+    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::iaload()
+{
+    transition(itos, itos);
+    __ write_inst("mov x1, x0");
+    __ write_inst_pop_ptr(__ x0);
+    // r0: array
+    // r1: index
+    index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
+    __ write_inst("add x1, x0, w1, uxtw #2"); // __ lea(r1, Address(r0, r1, Address::uxtw(2)));
+    __ write_inst("ldr w0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_INT));
+}
+
+void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,
+                                   YuhuMacroAssembler::YuhuRegister temp_reg, bool load_bc_into_bc_reg/*=true*/,
+                                   int byte_no)
+{
+    if (!RewriteBytecodes)  return;
+    YuhuLabel L_patch_done;
+
+    switch (bc) {
+        case Bytecodes::_fast_aputfield:
+        case Bytecodes::_fast_bputfield:
+//  case Bytecodes::_fast_zputfield:
+        case Bytecodes::_fast_cputfield:
+        case Bytecodes::_fast_dputfield:
+        case Bytecodes::_fast_fputfield:
+        case Bytecodes::_fast_iputfield:
+        case Bytecodes::_fast_lputfield:
+        case Bytecodes::_fast_sputfield:
+        {
+            // We skip bytecode quickening for putfield instructions when
+            // the put_code written to the constant pool cache is zero.
+            // This is required so that every execution of this instruction
+            // calls out to InterpreterRuntime::resolve_get_put to do
+            // additional, required work.
+            assert(byte_no == f1_byte || byte_no == f2_byte, "byte_no out of range");
+            assert(load_bc_into_bc_reg, "we use bc_reg as temp");
+            __ write_insts_get_cache_and_index_and_bytecode_at_bcp(temp_reg, bc_reg, temp_reg, byte_no, 1);
+            __ write_insts_mov_imm32(__ w_reg(bc_reg), bc);
+            __ write_inst("cmp %s, #%d", __ w_reg(temp_reg), (unsigned) 0);
+            __ write_inst_b(__ eq, L_patch_done); // don't patch
+        }
+            break;
+        default:
+            assert(byte_no == -1, "sanity");
+            // the pair bytecodes have already done the load.
+            if (load_bc_into_bc_reg) {
+                __ write_insts_mov_imm32(__ w_reg(bc_reg), bc);
+            }
+    }
+
+    if (JvmtiExport::can_post_breakpoint()) {
+        YuhuLabel L_fast_patch;
+        // if a breakpoint is present we can't rewrite the stream directly
+        __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), __ x22, 0);
+        __ write_inst("cmp %s, #%d", __ w_reg(temp_reg), Bytecodes::_breakpoint);
+        __ write_inst_b(__ ne, L_fast_patch);
+        // Let breakpoint table handling rewrite to quicker bytecode
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::set_original_bytecode_at), __ x12, __ x22, bc_reg);
+        __ write_inst_b(L_patch_done);
+        __ pin_label(L_fast_patch);
+    }
+
+#ifdef ASSERT
+    YuhuLabel L_okay;
+    __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), __ x22, 0);
+    __ write_inst("cmp %s, #%d", __ w_reg(temp_reg), (int) Bytecodes::java_code(bc));
+    __ write_inst_b(__ eq, L_okay);
+    __ write_inst_regs("cmp %s, %s", temp_reg, bc_reg);
+    __ write_inst_b(__ eq, L_okay);
+    __ write_insts_stop("patching the wrong bytecode");
+    __ pin_label(L_okay);
+#endif
+
+    // patch bytecode
+    __ write_inst("strb %s, [x22, #%d]", __ w_reg(bc_reg), 0);
+    __ pin_label(L_patch_done);
+}
+
+void YuhuTemplateTable::locals_index(YuhuMacroAssembler::YuhuRegister reg, int offset)
+{
+    __ write_inst("ldrb %s, [x22, #%d]", __ w_reg(reg), offset);
+    __ write_inst_regs("neg %s, %s", reg, reg);
+}
+
+void YuhuTemplateTable::index_check(YuhuMacroAssembler::YuhuRegister array, YuhuMacroAssembler::YuhuRegister index)
+{
+    // destroys r1, rscratch1
+    // check array
+    __ write_insts_null_check(array, arrayOopDesc::length_offset_in_bytes());
+    // sign extend index for use by indexed load
+    // __ movl2ptr(index, index);
+    // check index
+    YuhuMacroAssembler::YuhuRegister length = __ x8;
+    __ write_inst("ldr %s, [%s, #%d]", __ w_reg(length), array, arrayOopDesc::length_offset_in_bytes());
+    __ write_inst_regs("cmp %s, %s", __ w_reg(index), __ w_reg(length));
+    if (index != __ x1) {
+        // ??? convention: move aberrant index into r1 for exception message
+        assert(__ x1 != array, "different registers");
+        __ write_inst_mov_reg(__ x1, index);
+    }
+    YuhuLabel ok;
+    __ write_inst_b(__ lo, ok);
+    __ write_insts_mov_imm64(__ x8, (uint64_t)YuhuInterpreter::_throw_ArrayIndexOutOfBoundsException_entry);
+    __ write_inst_br(__ x8);
+    __ pin_label(ok);
+}

@@ -68,6 +68,10 @@ private:
     // debugging of TemplateGenerator
     static void transition(TosState tos_in, TosState tos_out);// checks if in/out states expected by template generator correspond to table entries
 
+    static void patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,
+                               YuhuMacroAssembler::YuhuRegister temp_reg, bool load_bc_into_bc_reg = true, int byte_no = -1);
+    static void locals_index(YuhuMacroAssembler::YuhuRegister reg, int offset = 1);
+
     // initialization helpers
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(            ), char filler );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg     ), int arg     );
@@ -86,10 +90,30 @@ private:
     static void sipush();
     static void ldc(bool wide);
     static void ldc2_w();
+
+    static void iload();
+    static void lload();
+    static void fload();
+    static void dload();
+    static void aload();
+
+    static void iload(int n);
+    static void lload(int n);
+    static void fload(int n);
+    static void dload(int n);
+    static void aload_0();
+    static void aload(int n);
+
+    static void iaload();
+
 public:
     static void initialize();
 
     static YuhuTemplate* template_for     (Bytecodes::Code code)  { Bytecodes::check     (code); return &_template_table     [code]; }
     static YuhuTemplate* template_for_wide(Bytecodes::Code code)  { Bytecodes::wide_check(code); return &_template_table_wide[code]; }
+
+#ifdef TARGET_ARCH_MODEL_aarch64
+# include "yuhu_templateTable_aarch64.hpp"
+#endif
 };
 #endif //JDK8_YUHU_TEMPLATETABLE_HPP
