@@ -71,9 +71,21 @@ private:
     // initialization helpers
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(            ), char filler );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg     ), int arg     );
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(bool arg    ), bool arg    );
 
     // bytecodes
     static void nop();
+
+    static void aconst_null();
+    static void iconst(int value);
+    static void lconst(int value);
+    static void fconst(int value);
+    static void dconst(int value);
+
+    static void bipush();
+    static void sipush();
+    static void ldc(bool wide);
+    static void ldc2_w();
 public:
     static void initialize();
 

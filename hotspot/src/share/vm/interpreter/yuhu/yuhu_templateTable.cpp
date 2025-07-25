@@ -47,6 +47,10 @@ void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosSta
     def(code, flags, in, out, (YuhuTemplate::generator)gen, 0);
 }
 
+void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(bool arg    ), bool arg) {
+    def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)arg);
+}
+
 void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg), int arg) {
     // should factor out these constants
     const int ubcp = 1 << YuhuTemplate::uses_bcp_bit;
@@ -84,26 +88,26 @@ void YuhuTemplateTable::initialize() {
     //                                    interpr. templates
     // Java spec bytecodes                ubcp|disp|clvm|iswd  in    out   generator             argument
     def(Bytecodes::_nop                 , ____|____|____|____, vtos, vtos, nop                 ,  _           );
-//    def(Bytecodes::_aconst_null         , ____|____|____|____, vtos, atos, aconst_null         ,  _           );
-//    def(Bytecodes::_iconst_m1           , ____|____|____|____, vtos, itos, iconst              , -1           );
-//    def(Bytecodes::_iconst_0            , ____|____|____|____, vtos, itos, iconst              ,  0           );
-//    def(Bytecodes::_iconst_1            , ____|____|____|____, vtos, itos, iconst              ,  1           );
-//    def(Bytecodes::_iconst_2            , ____|____|____|____, vtos, itos, iconst              ,  2           );
-//    def(Bytecodes::_iconst_3            , ____|____|____|____, vtos, itos, iconst              ,  3           );
-//    def(Bytecodes::_iconst_4            , ____|____|____|____, vtos, itos, iconst              ,  4           );
-//    def(Bytecodes::_iconst_5            , ____|____|____|____, vtos, itos, iconst              ,  5           );
-//    def(Bytecodes::_lconst_0            , ____|____|____|____, vtos, ltos, lconst              ,  0           );
-//    def(Bytecodes::_lconst_1            , ____|____|____|____, vtos, ltos, lconst              ,  1           );
-//    def(Bytecodes::_fconst_0            , ____|____|____|____, vtos, ftos, fconst              ,  0           );
-//    def(Bytecodes::_fconst_1            , ____|____|____|____, vtos, ftos, fconst              ,  1           );
-//    def(Bytecodes::_fconst_2            , ____|____|____|____, vtos, ftos, fconst              ,  2           );
-//    def(Bytecodes::_dconst_0            , ____|____|____|____, vtos, dtos, dconst              ,  0           );
-//    def(Bytecodes::_dconst_1            , ____|____|____|____, vtos, dtos, dconst              ,  1           );
-//    def(Bytecodes::_bipush              , ubcp|____|____|____, vtos, itos, bipush              ,  _           );
-//    def(Bytecodes::_sipush              , ubcp|____|____|____, vtos, itos, sipush              ,  _           );
-//    def(Bytecodes::_ldc                 , ubcp|____|clvm|____, vtos, vtos, ldc                 ,  false       );
-//    def(Bytecodes::_ldc_w               , ubcp|____|clvm|____, vtos, vtos, ldc                 ,  true        );
-//    def(Bytecodes::_ldc2_w              , ubcp|____|____|____, vtos, vtos, ldc2_w              ,  _           );
+    def(Bytecodes::_aconst_null         , ____|____|____|____, vtos, atos, aconst_null         ,  _           );
+    def(Bytecodes::_iconst_m1           , ____|____|____|____, vtos, itos, iconst              , -1           );
+    def(Bytecodes::_iconst_0            , ____|____|____|____, vtos, itos, iconst              ,  0           );
+    def(Bytecodes::_iconst_1            , ____|____|____|____, vtos, itos, iconst              ,  1           );
+    def(Bytecodes::_iconst_2            , ____|____|____|____, vtos, itos, iconst              ,  2           );
+    def(Bytecodes::_iconst_3            , ____|____|____|____, vtos, itos, iconst              ,  3           );
+    def(Bytecodes::_iconst_4            , ____|____|____|____, vtos, itos, iconst              ,  4           );
+    def(Bytecodes::_iconst_5            , ____|____|____|____, vtos, itos, iconst              ,  5           );
+    def(Bytecodes::_lconst_0            , ____|____|____|____, vtos, ltos, lconst              ,  0           );
+    def(Bytecodes::_lconst_1            , ____|____|____|____, vtos, ltos, lconst              ,  1           );
+    def(Bytecodes::_fconst_0            , ____|____|____|____, vtos, ftos, fconst              ,  0           );
+    def(Bytecodes::_fconst_1            , ____|____|____|____, vtos, ftos, fconst              ,  1           );
+    def(Bytecodes::_fconst_2            , ____|____|____|____, vtos, ftos, fconst              ,  2           );
+    def(Bytecodes::_dconst_0            , ____|____|____|____, vtos, dtos, dconst              ,  0           );
+    def(Bytecodes::_dconst_1            , ____|____|____|____, vtos, dtos, dconst              ,  1           );
+    def(Bytecodes::_bipush              , ubcp|____|____|____, vtos, itos, bipush              ,  _           );
+    def(Bytecodes::_sipush              , ubcp|____|____|____, vtos, itos, sipush              ,  _           );
+    def(Bytecodes::_ldc                 , ubcp|____|clvm|____, vtos, vtos, ldc                 ,  false       );
+    def(Bytecodes::_ldc_w               , ubcp|____|clvm|____, vtos, vtos, ldc                 ,  true        );
+    def(Bytecodes::_ldc2_w              , ubcp|____|____|____, vtos, vtos, ldc2_w              ,  _           );
 //    def(Bytecodes::_iload               , ubcp|____|clvm|____, vtos, itos, iload               ,  _           );
 //    def(Bytecodes::_lload               , ubcp|____|____|____, vtos, ltos, lload               ,  _           );
 //    def(Bytecodes::_fload               , ubcp|____|____|____, vtos, ftos, fload               ,  _           );
