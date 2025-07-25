@@ -234,6 +234,9 @@ public:
     address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32);
     address write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset);
 
+    address write_insts_load_signed_byte(YuhuRegister dst, YuhuRegister src, int imm32);
+    address write_insts_load_signed_short(YuhuRegister dst, YuhuRegister src, int imm32);
+
     address write_insts_enter();
 
     address write_insts_leave();

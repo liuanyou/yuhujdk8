@@ -371,6 +371,16 @@ address YuhuMacroAssembler::write_insts_get_unsigned_2_byte_index_at_bcp(YuhuReg
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_load_signed_byte(YuhuRegister dst, YuhuRegister src, int imm32) {
+    write_inst("ldrsb %s, [%s, #%d]", dst, src, imm32);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_load_signed_short(YuhuRegister dst, YuhuRegister src, int imm32) {
+    write_inst("ldrsh %s, [%s, #%d]", dst, src, imm32);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_enter() {
     write_inst("stp x29, x30, [sp, #-0x10]!");
     write_inst("mov x29, sp");
