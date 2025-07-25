@@ -464,6 +464,80 @@ void YuhuTemplateTable::saload()
     __ write_insts_load_unsigned_short(__ w0, __ x1, arrayOopDesc::base_offset_in_bytes(T_SHORT));
 }
 
+void YuhuTemplateTable::istore()
+{
+    transition(itos, vtos);
+    locals_index(__ x1);
+    // FIXME: We're being very pernickerty here storing a jint in a
+    // local with strw, which costs an extra instruction over what we'd
+    // be able to do with a simple str.  We should just store the whole
+    // word.
+    __ write_inst("add x8, x24, x1, lsl #3"); // __ lea(rscratch1, iaddress(r1));
+    __ write_inst("str w0, [x8]");
+}
+
+void YuhuTemplateTable::lstore()
+{
+    transition(ltos, vtos);
+    locals_index(__ x1);
+    __ write_inst("add x8, x24, x1, lsl #3");
+    __ write_inst("str x0, [x8, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+}
+
+void YuhuTemplateTable::fstore() {
+    transition(ftos, vtos);
+    locals_index(__ x1);
+    __ write_inst("add x8, x24, x1, lsl #3"); // __ lea(rscratch1, iaddress(r1));
+    __ write_inst("str s0, [x8]");
+}
+
+void YuhuTemplateTable::dstore() {
+    transition(dtos, vtos);
+    locals_index(__ x1);
+    __ write_inst("add x8, x24, x1, lsl #3");
+    __ write_inst("str d0, [x8, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+}
+
+void YuhuTemplateTable::astore()
+{
+    transition(vtos, vtos);
+    __ write_inst_pop_ptr(__ x0);
+    locals_index(__ x1);
+    __ write_inst("add x8, x24, x1, lsl #3");
+    __ write_inst("str x0, [x8]");
+}
+
+void YuhuTemplateTable::istore(int n)
+{
+    transition(itos, vtos);
+    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::lstore(int n)
+{
+    transition(ltos, vtos);
+    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n+1));
+}
+
+void YuhuTemplateTable::fstore(int n)
+{
+    transition(ftos, vtos);
+    __ write_inst("str s0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::dstore(int n)
+{
+    transition(dtos, vtos);
+    __ write_inst("str d0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n+1));
+}
+
+void YuhuTemplateTable::astore(int n)
+{
+    transition(vtos, vtos);
+    __ write_inst_pop_ptr(__ x0);
+    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
 void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,
                                    YuhuMacroAssembler::YuhuRegister temp_reg, bool load_bc_into_bc_reg/*=true*/,
                                    int byte_no)

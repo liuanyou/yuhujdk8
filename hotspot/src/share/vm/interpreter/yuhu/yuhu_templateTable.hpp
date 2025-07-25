@@ -113,6 +113,18 @@ private:
     static void caload();
     static void saload();
 
+    static void istore();
+    static void lstore();
+    static void fstore();
+    static void dstore();
+    static void astore();
+
+    static void istore(int n);
+    static void lstore(int n);
+    static void fstore(int n);
+    static void dstore(int n);
+    static void astore(int n);
+
 public:
     static void initialize();
 
