@@ -646,6 +646,49 @@ void YuhuTemplateTable::aastore() {
     __ write_inst("add x20, x20, #%d", 3 * YuhuInterpreter::stackElementSize);
 }
 
+void YuhuTemplateTable::bastore()
+{
+    transition(itos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // r0: value
+    // r1: index
+    // r3: array
+    index_check(__ x3, __ x1); // prefer index in r1
+
+    // Need to check whether array is boolean or byte
+    // since both types share the bastore bytecode.
+    __ write_insts_load_klass(__ x2, __ x3);
+    __ write_inst("ldr w2, [x2, #%d]", in_bytes(Klass::layout_helper_offset()));
+    int diffbit = Klass::layout_helper_boolean_diffbit();
+    __ write_inst("and w8, w2, #%d", diffbit);
+    YuhuLabel L_skip;
+    __ write_inst_cbz(__ w8, L_skip);
+    __ write_inst("and w0, w0, #%d", 1); // if it is a T_BOOLEAN array, mask the stored value to 0/1
+    __ pin_label(L_skip);
+
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(0)));
+    __ write_inst("strb w0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_BYTE));
+}
+
+void YuhuTemplateTable::castore()
+{
+    transition(itos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // r0: value
+    // r1: index
+    // r3: array
+    index_check(__ x3, __ x1); // prefer index in r1
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(1)));
+    __ write_inst("strh w0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_CHAR));
+}
+
+void YuhuTemplateTable::sastore()
+{
+    castore();
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
