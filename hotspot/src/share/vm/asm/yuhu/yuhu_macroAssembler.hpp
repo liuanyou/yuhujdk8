@@ -20,6 +20,7 @@
 
 class YuhuLabel;
 class YuhuRegSet;
+class YuhuAddress;
 
 class YuhuMacroAssembler: public MacroAssembler {
 private:
@@ -71,6 +72,9 @@ public:
     enum YuhuCond {
         gt, ne, al, ls, hi, le, eq, hs, lo
     };
+    enum YuhuOperation {
+        uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
+    };
 private:
     const char* reg_name(YuhuRegister reg) {
         static const char* register_names[] = {
@@ -97,6 +101,7 @@ private:
         assert((int)reg >= 0 && (int)reg < (int)count, "Unknown register");
         return register_names[(int)reg];
     }
+
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
                 "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo"
@@ -126,6 +131,17 @@ private:
         size_t count = sizeof(register_names)/sizeof(register_names[0]);
         assert((int)reg >= 0 && (int)reg < (int)count, "Unknown register");
         return register_names[(int)reg];
+    }
+
+    const char* op_name(YuhuOperation op) {
+        static const char* op_names[] = {
+                "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
+        };
+
+        // check array index
+        size_t count = sizeof(op_names)/sizeof(op_names[0]);
+        assert((int)op >=0 && (int)op < (int)count, "Unknown op");
+        return op_names[(int)op];
     }
 public:
     YuhuRegister w_reg(YuhuRegister reg) {
@@ -169,11 +185,17 @@ public:
 
     address write_inst(const char* assembly_format, int imm32);
 
+    address write_inst(const char* assembly_format, YuhuRegister reg, YuhuAddress addr);
+
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
 
     address write_inst_imms(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm1, int imm2);
+
+    address write_inst_add(YuhuRegister reg, YuhuRegister base, YuhuRegister index, YuhuOperation op, int shift);
+
+    address write_inst_str(YuhuRegister reg, YuhuAddress addr);
 
     address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
 
@@ -229,6 +251,8 @@ public:
     address write_inst_push(YuhuRegister src);
 
     address write_inst_cset(YuhuRegister reg, YuhuCond cond);
+
+    address write_inst_csel(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
 
     address write_insts_load_unsigned_short(YuhuRegister dst, YuhuRegister src, int imm32);
     address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32);
@@ -360,6 +384,12 @@ public:
                                              bool tosca_live,
                                              bool expand_call);
 
+    address write_insts_g1_write_barrier_post(YuhuRegister store_addr,
+                                              YuhuRegister new_val,
+                                              YuhuRegister thread,
+                                              YuhuRegister tmp,
+                                              YuhuRegister tmp2);
+
     address write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset);
 
     address write_insts_empty_expression_stack() {
@@ -415,6 +445,59 @@ public:
     }
 
     address write_insts_null_check(YuhuRegister reg, int offset = -1);
+
+    // Generate a subtype check: branch to ok_is_subtype if sub_klass is
+    // a subtype of super_klass.
+    address write_insts_gen_subtype_check(YuhuRegister sub_klass, YuhuLabel &ok_is_subtype );
+
+    // Simplified, combined version, good for typical uses.
+    // Falls through on failure.
+    address write_insts_check_klass_subtype(YuhuRegister sub_klass,
+                             YuhuRegister super_klass,
+                             YuhuRegister temp_reg,
+                             YuhuLabel& L_success);
+
+    address write_insts_check_klass_subtype_fast_path(YuhuRegister sub_klass,
+                                       YuhuRegister super_klass,
+                                       YuhuRegister temp_reg,
+                                       YuhuLabel* L_success,
+                                       YuhuLabel* L_failure,
+                                       YuhuLabel* L_slow_path,
+                                       YuhuRegister super_check_offset_r = noreg,
+                                       intptr_t super_check_offset_c = -1);
+
+    // The rest of the type check; must be wired to a corresponding fast path.
+    // It does not repeat the fast path logic, so don't use it standalone.
+    // The temp_reg and temp2_reg can be noreg, if no temps are available.
+    // Updates the sub's secondary super cache as necessary.
+    // If set_cond_codes, condition codes will be Z on success, NZ on failure.
+    address write_insts_check_klass_subtype_slow_path(YuhuRegister sub_klass,
+                                       YuhuRegister super_klass,
+                                       YuhuRegister temp_reg,
+                                       YuhuRegister temp2_reg,
+                                       YuhuLabel* L_success,
+                                       YuhuLabel* L_failure,
+                                       bool set_cond_codes = false);
+
+    address write_insts_repne_scan(YuhuRegister addr, YuhuRegister value, YuhuRegister count,
+                    YuhuRegister scratch);
+
+    address write_insts_lea(YuhuRegister reg, YuhuAddress addr);
+
+    address write_insts_encode_heap_oop(YuhuRegister d, YuhuRegister s);
+    address write_insts_encode_heap_oop(YuhuRegister r) { return write_insts_encode_heap_oop(r, r); }
+
+    address write_insts_store_heap_oop(YuhuAddress dst, YuhuRegister src);
+
+    address write_insts_store_heap_oop_null(YuhuAddress dst);
+
+    address write_insts_load_byte_map_base(YuhuRegister reg);
+
+    address write_insts_store_check(YuhuRegister obj);
+    address write_insts_store_check(YuhuRegister obj, YuhuAddress dst);
+
+    address write_insts_store_check_part_1(YuhuRegister obj);
+    address write_insts_store_check_part_2(YuhuRegister obj);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
@@ -551,6 +634,121 @@ public:
     }
 
     uint32_t bits() const { return _bitset; }
+};
+
+class YuhuPrePost {
+    int _offset;
+    YuhuMacroAssembler::YuhuRegister _r;
+public:
+    YuhuPrePost(YuhuMacroAssembler::YuhuRegister reg, int o) : _r(reg), _offset(o) { }
+    int offset() { return _offset; }
+    YuhuMacroAssembler::YuhuRegister reg() { return _r; }
+};
+
+class YuhuPre : public YuhuPrePost {
+public:
+    YuhuPre(YuhuMacroAssembler::YuhuRegister reg, int o) : YuhuPrePost(reg, o) { }
+};
+
+class YuhuPost : public YuhuPrePost {
+public:
+    YuhuPost(YuhuMacroAssembler::YuhuRegister reg, int o) : YuhuPrePost(reg, o) { }
+};
+
+class YuhuAddress VALUE_OBJ_CLASS_SPEC {
+public:
+    enum mode { no_mode, base_plus_offset, pre, post, pcrel,
+                base_plus_offset_reg, literal };
+
+    class extend {
+        int _shift;
+        YuhuMacroAssembler::YuhuOperation _op;
+    public:
+        extend() { }
+        extend(int s, YuhuMacroAssembler::YuhuOperation op) : _shift(s), _op(op) { }
+        int shift() const { return _shift; }
+        YuhuMacroAssembler::YuhuOperation op() const { return _op; }
+    };
+    class uxtw : public extend {
+        public:
+        uxtw(int shift = -1): extend(shift, YuhuMacroAssembler::uxtw) { }
+    };
+    class lsl : public extend {
+        public:
+        lsl(int shift = -1): extend(shift, YuhuMacroAssembler::uxtx) { }
+    };
+    class sxtw : public extend {
+        public:
+        sxtw(int shift = -1): extend(shift, YuhuMacroAssembler::sxtw) { }
+    };
+    class sxtx : public extend {
+        public:
+        sxtx(int shift = -1): extend(shift, YuhuMacroAssembler::sxtx) { }
+    };
+private:
+    YuhuMacroAssembler::YuhuRegister _base;
+    YuhuMacroAssembler::YuhuRegister _index;
+    int64_t _offset;
+    enum mode _mode;
+    extend _ext;
+
+    bool _is_lval;
+
+    address          _target;
+public:
+    YuhuAddress()
+    : _mode(no_mode) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r)
+    : _mode(base_plus_offset), _base(r), _offset(0), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, int o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, long o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, long long o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, unsigned int o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, unsigned long o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, unsigned long long o)
+    : _mode(base_plus_offset), _base(r), _offset(o), _index(YuhuMacroAssembler::noreg), _target(0) { }
+#ifdef ASSERT
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, ByteSize disp)
+    : _mode(base_plus_offset), _base(r), _offset(in_bytes(disp)),
+    _index(YuhuMacroAssembler::noreg), _target(0) { }
+#endif
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister r, YuhuMacroAssembler::YuhuRegister r1, extend ext = lsl())
+    : _mode(base_plus_offset_reg), _base(r), _index(r1),
+    _ext(ext), _offset(0), _target(0) { }
+    YuhuAddress(YuhuPre p)
+    : _mode(pre), _base(p.reg()), _offset(p.offset()) { }
+    YuhuAddress(YuhuPost p)
+    : _mode(post), _base(p.reg()), _offset(p.offset()), _target(0) { }
+    YuhuAddress(address target)
+    : _mode(literal), _is_lval(false), _target(target)  { }
+
+    YuhuMacroAssembler::YuhuRegister base() const {
+        guarantee((_mode == base_plus_offset | _mode == base_plus_offset_reg
+                   | _mode == post),
+                  "wrong mode");
+        return _base;
+    }
+    int64_t offset() const {
+        return _offset;
+    }
+    YuhuMacroAssembler::YuhuRegister index() const {
+        return _index;
+    }
+    extend ext() const {
+        return _ext;
+    }
+    mode getMode() const {
+        return _mode;
+    }
+    bool uses(YuhuMacroAssembler::YuhuRegister reg) const { return _base == reg || _index == reg; }
+    address target() const { return _target; }
+
+    void lea(YuhuMacroAssembler *, YuhuMacroAssembler::YuhuRegister) const;
 };
 
 #endif //JDK8_YUHU_MACROASSEMBLER_HPP

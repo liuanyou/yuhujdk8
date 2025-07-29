@@ -17,6 +17,8 @@
 #include "runtime/biasedLocking.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/thread.inline.hpp"
+#include "gc_implementation/g1/g1SATBCardTableModRefBS.hpp"
+#include "gc_implementation/g1/heapRegion.hpp"
 
 address YuhuMacroAssembler::target(YuhuLabel& L, address branch_pc) {
     if (L.is_bound()) {
@@ -116,6 +118,31 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, int imm32) {
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, YuhuAddress addr) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::base_plus_offset_reg:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), reg_name(addr.base()),
+                     reg_name(addr.index()), op_name(addr.ext().op()), MAX(addr.ext().shift(), 0));
+            break;
+        case YuhuAddress::pre:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::post:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2) {
     char buffer[50];
     #pragma clang diagnostic push
@@ -141,6 +168,29 @@ address YuhuMacroAssembler::write_inst_imms(const char* assembly_format, YuhuReg
     snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), imm1, imm2);
     #pragma clang diagnostic pop
     return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_add(YuhuRegister reg, YuhuRegister base, YuhuRegister index, YuhuOperation op, int shift) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "add %s, %s, %s, %s #%d",
+             reg_name(reg), reg_name(base), reg_name(index), op_name(op), shift);
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_str(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("str %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("str %s, [%s, %s, %s #%d", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("str %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("str %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
 }
 
 address YuhuMacroAssembler::write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2) {
@@ -353,6 +403,12 @@ address YuhuMacroAssembler::write_inst_pop(YuhuRegister dst) {
 address YuhuMacroAssembler::write_inst_cset(YuhuRegister reg, YuhuCond cond) {
     char buffer[50];
     snprintf(buffer, sizeof(buffer), "cset %s, %s", reg_name(reg), cond_name(cond));
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_csel(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "csel %s, %s, %s, %s", reg_name(reg1), reg_name(reg2), reg_name(reg3), cond_name(cond));
     return write_inst(machine_code(buffer));
 }
 
@@ -1476,6 +1532,89 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_pre(YuhuRegister obj,
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_g1_write_barrier_post(YuhuRegister store_addr,
+                                                              YuhuRegister new_val,
+                                                              YuhuRegister thread,
+                                                              YuhuRegister tmp,
+                                                              YuhuRegister tmp2) {
+#ifdef _LP64
+    assert(thread == x28, "must be");
+#endif // _LP64
+//    assert_different_registers(store_addr, new_val, thread, tmp, tmp2,
+//                               rscratch1);
+    assert(store_addr != noreg && new_val != noreg && tmp != noreg
+           && tmp2 != noreg, "expecting a register");
+
+//    Address queue_index(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
+//                                         PtrQueue::byte_offset_of_index()));
+//    Address buffer(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
+//                                    PtrQueue::byte_offset_of_buf()));
+
+    BarrierSet* bs = Universe::heap()->barrier_set();
+    CardTableModRefBS* ct = (CardTableModRefBS*)bs;
+    assert(sizeof(*ct->byte_map_base) == sizeof(jbyte), "adjust this code");
+
+    YuhuLabel done;
+    YuhuLabel runtime;
+
+    // Does store cross heap regions?
+
+    write_inst_regs("eor %s, %s, %s", tmp, store_addr, new_val);
+    write_inst("lsr %s, %s, #%d", tmp, tmp, HeapRegion::LogOfHRGrainBytes);
+    write_inst_cbz(tmp, done);
+
+    // crosses regions, storing NULL?
+
+    write_inst_cbz(new_val, done);
+
+    // storing region crossing non-NULL, is card already dirty?
+
+    ExternalAddress cardtable((address) ct->byte_map_base);
+    assert(sizeof(*ct->byte_map_base) == sizeof(jbyte), "adjust this code");
+    const YuhuRegister card_addr = tmp;
+
+    write_inst("lsr %s, %s, #%d", card_addr, store_addr, CardTableModRefBS::card_shift);
+
+    // get the address of the card
+    write_insts_load_byte_map_base(tmp2);
+    write_inst_regs("add %s, %s, %s", card_addr, card_addr, tmp2);
+    write_inst_regs("ldrb %s, [%s]", w_reg(tmp2), card_addr);
+    write_inst("cmp %s, #%d", w_reg(tmp2), (int)G1SATBCardTableModRefBS::g1_young_card_val());
+    write_inst_b(eq, done);
+
+    assert((int)CardTableModRefBS::dirty_card_val() == 0, "must be 0");
+
+    write_inst("membar ish");
+
+    write_inst_regs("ldrb %s, [%s]", w_reg(tmp2), card_addr);
+    write_inst_cbz(w_reg(tmp2), done);
+
+    // storing a region crossing, non-NULL oop, card is clean.
+    // dirty card and log.
+    write_inst_regs("strb %s, [%s]", wzr, card_addr);
+
+    write_inst("ldr x8, [%s, #%d]", thread, in_bytes(JavaThread::dirty_card_queue_offset() +
+                                                     PtrQueue::byte_offset_of_index()));
+    write_inst_cbz(x8, runtime);
+    write_inst("sub x8, x8, #%d", wordSize);
+    write_inst("str x8, [%s, #%d]", thread, in_bytes(JavaThread::dirty_card_queue_offset() +
+                                                     PtrQueue::byte_offset_of_index()));
+
+    write_inst("ldr %s, [%s, #%d]", tmp2, thread, in_bytes(JavaThread::dirty_card_queue_offset() +
+                                                           PtrQueue::byte_offset_of_buf()));
+    write_inst_regs("str %s, [%s, x8]", card_addr, tmp2);
+    write_inst_b(done);
+
+    pin_label(runtime);
+    // save the live input values
+    write_insts_push(bit(store_addr, true) | bit(new_val, true), sp);
+    write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post), card_addr, thread);
+    write_insts_pop(bit(store_addr, true) | bit(new_val, true), sp);
+
+    pin_label(done);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset) {
     // TODO
 //    if (UseCompressedOops) {
@@ -1736,3 +1875,381 @@ address YuhuMacroAssembler::write_insts_null_check(YuhuRegister reg, int offset)
     }
     return current_pc();
 }
+
+address YuhuMacroAssembler::write_insts_gen_subtype_check(YuhuRegister Rsub_klass,
+                                                  YuhuLabel& ok_is_subtype) {
+    assert(Rsub_klass != x0, "r0 holds superklass");
+    assert(Rsub_klass != x2, "r2 holds 2ndary super array length");
+    assert(Rsub_klass != x5, "r5 holds 2ndary super array scan ptr");
+
+    // Profile the not-null value's klass.
+    // TODO
+//    profile_typecheck(r2, Rsub_klass, r5); // blows r2, reloads r5
+
+    // Do the check.
+    write_insts_check_klass_subtype(Rsub_klass, x0, x2, ok_is_subtype); // blows r2
+
+    // Profile the failure of the check.
+    // TODO
+//    profile_typecheck_failed(r2); // blows r2
+
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_check_klass_subtype(YuhuRegister sub_klass,
+                                         YuhuRegister super_klass,
+                                         YuhuRegister temp_reg,
+                                         YuhuLabel& L_success) {
+    YuhuLabel L_failure;
+    write_insts_check_klass_subtype_fast_path(sub_klass, super_klass, temp_reg,        &L_success, &L_failure, NULL);
+    write_insts_check_klass_subtype_slow_path(sub_klass, super_klass, temp_reg, noreg, &L_success, NULL);
+    pin_label(L_failure);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_check_klass_subtype_fast_path(YuhuRegister sub_klass,
+                                                   YuhuRegister super_klass,
+                                                   YuhuRegister temp_reg,
+                                                   YuhuLabel* L_success,
+                                                   YuhuLabel* L_failure,
+                                                   YuhuLabel* L_slow_path,
+                                                   YuhuRegister super_check_offset_r,
+                                                   intptr_t super_check_offset_c) {
+//    assert_different_registers(sub_klass, super_klass, temp_reg);
+    bool must_load_sco = (super_check_offset_c == -1);
+    if (super_check_offset_r != noreg) {
+//        assert_different_registers(sub_klass, super_klass,
+//                                   super_check_offset.as_register());
+    } else if (must_load_sco) {
+        assert(temp_reg != noreg, "supply either a temp or a register offset");
+    }
+
+    YuhuLabel L_fallthrough;
+    int label_nulls = 0;
+    if (L_success == NULL)   { L_success   = &L_fallthrough; label_nulls++; }
+    if (L_failure == NULL)   { L_failure   = &L_fallthrough; label_nulls++; }
+    if (L_slow_path == NULL) { L_slow_path = &L_fallthrough; label_nulls++; }
+    assert(label_nulls <= 1, "at most one NULL in the batch");
+
+    int sc_offset = in_bytes(Klass::secondary_super_cache_offset());
+    int sco_offset = in_bytes(Klass::super_check_offset_offset());
+//    Address super_check_offset_addr(super_klass, sco_offset);
+
+    // Hacked jmp, which may only be used just before L_fallthrough.
+#define final_jmp(label)                                                \
+  if (&(label) == &L_fallthrough) { /*do nothing*/ }                    \
+  else                            write_inst_b(label)                /*omit semi*/
+
+    // If the pointers are equal, we are done (e.g., String[] elements).
+    // This self-check enables sharing of secondary supertype arrays among
+    // non-primary types such as array-of-interface.  Otherwise, each such
+    // type would need its own customized SSA.
+    // We move this check to the front of the fast path because many
+    // type checks are in fact trivially successful in this manner,
+    // so we get a nicely predicted branch right at the start of the check.
+    write_inst_regs("cmp %s, %s", sub_klass, super_klass);
+    write_inst_b(eq, *L_success);
+
+    // Check the supertype display:
+    if (must_load_sco) {
+        // Positive movl does right thing on LP64.
+        write_inst("ldr %s, [%s, #%d]", w_reg(temp_reg), super_klass, sco_offset);
+        super_check_offset_r = temp_reg;
+    }
+//    Address super_check_addr(sub_klass, super_check_offset);
+    if (super_check_offset_r != noreg) {
+        write_inst_regs("ldr x8, [%s, %s]", sub_klass, super_check_offset_r);
+    } else if (super_check_offset_c != -1) {
+        write_inst("ldr x8, [%s, #%d]", sub_klass, super_check_offset_c);
+    }
+    write_inst("cmp %s, %s", super_klass, x8);  // load displayed supertype
+
+    // This check has worked decisively for primary supers.
+    // Secondary supers are sought in the super_cache ('super_cache_addr').
+    // (Secondary supers are interfaces and very deeply nested subtypes.)
+    // This works in the same check above because of a tricky aliasing
+    // between the super_cache and the primary super display elements.
+    // (The 'super_check_addr' can address either, as the case requires.)
+    // Note that the cache is updated below if it does not help us find
+    // what we need immediately.
+    // So if it was a primary super, we can just fail immediately.
+    // Otherwise, it's the slow path for us (no success at this point).
+
+    if (super_check_offset_r != noreg) {
+        write_inst_b(eq, *L_success);
+        write_inst("cmp %s, #%d", super_check_offset_r, sc_offset);
+        if (L_failure == &L_fallthrough) {
+            write_inst_b(eq, *L_slow_path);
+        } else {
+            write_inst_b(ne, *L_failure);
+            final_jmp(*L_slow_path);
+        }
+    } else if (super_check_offset_c == sc_offset) {
+        // Need a slow path; fast failure is impossible.
+        if (L_slow_path == &L_fallthrough) {
+            write_inst_b(eq, *L_success);
+        } else {
+            write_inst_b(ne, *L_slow_path);
+            final_jmp(*L_success);
+        }
+    } else {
+        // No slow path; it's a fast decision.
+        if (L_failure == &L_fallthrough) {
+            write_inst_b(eq, *L_success);
+        } else {
+            write_inst_b(ne, *L_failure);
+            final_jmp(*L_success);
+        }
+    }
+
+    pin_label(L_fallthrough);
+
+#undef final_jmp
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_check_klass_subtype_slow_path(YuhuRegister sub_klass,
+                                                   YuhuRegister super_klass,
+                                                   YuhuRegister temp_reg,
+                                                   YuhuRegister temp2_reg,
+                                                   YuhuLabel* L_success,
+                                                   YuhuLabel* L_failure,
+                                                   bool set_cond_codes) {
+//    assert_different_registers(sub_klass, super_klass, temp_reg);
+//    if (temp2_reg != noreg)
+//        assert_different_registers(sub_klass, super_klass, temp_reg, temp2_reg, rscratch1);
+#define IS_A_TEMP(reg) ((reg) == temp_reg || (reg) == temp2_reg)
+
+    YuhuLabel L_fallthrough;
+    int label_nulls = 0;
+    if (L_success == NULL)   { L_success   = &L_fallthrough; label_nulls++; }
+    if (L_failure == NULL)   { L_failure   = &L_fallthrough; label_nulls++; }
+    assert(label_nulls <= 1, "at most one NULL in the batch");
+
+    // a couple of useful fields in sub_klass:
+    int ss_offset = in_bytes(Klass::secondary_supers_offset());
+    int sc_offset = in_bytes(Klass::secondary_super_cache_offset());
+//    Address secondary_supers_addr(sub_klass, ss_offset);
+//    Address super_cache_addr(     sub_klass, sc_offset);
+
+//    BLOCK_COMMENT("check_klass_subtype_slow_path");
+
+    // Do a linear scan of the secondary super-klass chain.
+    // This code is rarely used, so simplicity is a virtue here.
+    // The repne_scan instruction uses fixed registers, which we must spill.
+    // Don't worry too much about pre-existing connections with the input regs.
+
+    assert(sub_klass != x0, "killed reg"); // killed by mov(r0, super)
+    assert(sub_klass != x2, "killed reg"); // killed by lea(r2, &pst_counter)
+
+    YuhuRegSet pushed_registers;
+    if (!IS_A_TEMP(x2))    pushed_registers += x2;
+    if (!IS_A_TEMP(x5))    pushed_registers += x5;
+
+    if (super_klass != x0 || UseCompressedOops) {
+        if (!IS_A_TEMP(x0))   pushed_registers += x0;
+    }
+
+    write_insts_push(pushed_registers, sp);
+
+    // Get super_klass value into r0 (even if it was in r5 or r2).
+    if (super_klass != x0) {
+        write_inst_mov_reg(x0, super_klass);
+    }
+
+#ifndef PRODUCT
+    write_insts_mov_imm64(x9, (uint64_t)(address)&SharedRuntime::_partial_subtype_ctr);
+//    Address pst_counter_addr(rscratch2);
+    write_inst("ldr x8, [x9]");
+    write_inst("add x8, x8, #1");
+    write_inst("str x8, [x9]");
+#endif //PRODUCT
+
+    // We will consult the secondary-super array.
+    write_inst("ldr x5, [%s, #%d]", sub_klass, ss_offset);
+    // Load the array length.  (Positive movl does right thing on LP64.)
+    write_inst("ldr w2, [x5, #%d]", Array<Klass*>::length_offset_in_bytes());
+    // Skip to start of data.
+    write_inst("add x5, x5, #%d", Array<Klass*>::base_offset_in_bytes());
+
+    write_inst("cmp sp, xzr");  // Clear Z flag; SP is never zero
+    // Scan R2 words at [R5] for an occurrence of R0.
+    // Set NZ/Z based on last compare.
+    write_insts_repne_scan(x5, x0, x2, x8);
+
+    // Unspill the temp. registers:
+    write_insts_pop(pushed_registers, sp);
+
+    write_inst_b(ne, *L_failure);
+
+    // Success.  Cache the super we found and proceed in triumph.
+    write_inst("str %s, [%s, #%d]", super_klass, sub_klass, sc_offset);
+
+    if (L_success != &L_fallthrough) {
+        write_inst_b(*L_success);
+    }
+
+#undef IS_A_TEMP
+
+    pin_label(L_fallthrough);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_repne_scan(YuhuRegister addr, YuhuRegister value, YuhuRegister count,
+                                YuhuRegister scratch) {
+    YuhuLabel Lloop, Lexit;
+    write_inst_cbz(count, Lexit);
+    pin_label(Lloop);
+    write_inst("ldr %s, [%s], #%d", scratch, addr, wordSize);
+    write_inst_regs("cmp %s, %s", value, scratch);
+    write_inst_b(eq, Lexit);
+    write_inst_regs("sub %s, %s, #1", count, count);
+    write_inst_cbnz(count, Lloop);
+    pin_label(Lexit);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_lea(YuhuRegister reg, YuhuAddress addr) {
+    addr.lea(this, reg);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_encode_heap_oop(YuhuRegister d, YuhuRegister s) {
+    // TODO
+//#ifdef ASSERT
+//    verify_heapbase("MacroAssembler::encode_heap_oop: heap base corrupted?");
+//#endif
+    write_insts_verify_oop(s, "broken oop in encode_heap_oop");
+    if (Universe::narrow_oop_base() == NULL) {
+        if (Universe::narrow_oop_shift() != 0) {
+            assert (LogMinObjAlignmentInBytes == Universe::narrow_oop_shift(), "decode alg wrong");
+            write_inst("lsr %s, %s, #%d", d, s, LogMinObjAlignmentInBytes);
+        } else {
+            write_inst_mov_reg(d, s);
+        }
+    } else {
+        write_inst_regs("subs %s, %s, x27", d, s);
+        write_inst_csel(d, d, xzr, hs);
+        write_inst("lsr %s, %s, #%d", d, d, LogMinObjAlignmentInBytes);
+
+        /*  Old algorithm: is this any worse?
+        Label nonnull;
+        cbnz(r, nonnull);
+        sub(r, r, rheapbase);
+        bind(nonnull);
+        lsr(r, r, LogMinObjAlignmentInBytes);
+        */
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_heap_oop(YuhuAddress dst, YuhuRegister src) {
+    if (UseCompressedOops) {
+        assert(!dst.uses(src), "not enough registers");
+        write_insts_encode_heap_oop(src);
+        write_inst_str(w_reg(src), dst);
+    } else
+        write_inst_str(src, dst);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_heap_oop_null(YuhuAddress dst) {
+    if (UseCompressedOops) {
+        write_inst_str(wzr, dst);
+    } else
+        write_inst_str(xzr, dst);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_load_byte_map_base(YuhuRegister reg) {
+    jbyte *byte_map_base =
+            ((CardTableModRefBS*)(Universe::heap()->barrier_set()))->byte_map_base;
+
+    if (is_valid_AArch64_address((address)byte_map_base)) {
+        // Strictly speaking the byte_map_base isn't an address at all,
+        // and it might even be negative.
+        uint64_t offset;
+        write_insts_adrp(reg, (address)byte_map_base, offset);
+        // We expect offset to be zero with most collectors.
+        if (offset != 0) {
+            write_inst("add %s, %s, #%d", reg, reg, offset);
+        }
+    } else {
+        write_insts_mov_imm64(reg, (uint64_t)byte_map_base);
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_check(YuhuRegister obj) {
+    // Does a store check for the oop in register obj. The content of
+    // register obj is destroyed afterwards.
+    write_insts_store_check_part_1(obj);
+    write_insts_store_check_part_2(obj);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_check(YuhuRegister obj, YuhuAddress dst) {
+    return write_insts_store_check(obj);
+}
+
+address YuhuMacroAssembler::write_insts_store_check_part_1(YuhuRegister obj) {
+    BarrierSet* bs = Universe::heap()->barrier_set();
+    assert(bs->kind() == BarrierSet::CardTableModRef, "Wrong barrier set kind");
+    write_inst("lsr %s, %s, #%d", obj, obj, CardTableModRefBS::card_shift);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_check_part_2(YuhuRegister obj) {
+    BarrierSet* bs = Universe::heap()->barrier_set();
+    assert(bs->kind() == BarrierSet::CardTableModRef, "Wrong barrier set kind");
+    CardTableModRefBS* ct = (CardTableModRefBS*)bs;
+    assert(sizeof(*ct->byte_map_base) == sizeof(jbyte), "adjust this code");
+
+    // The calculation for byte_map_base is as follows:
+    // byte_map_base = _byte_map - (uintptr_t(low_bound) >> card_shift);
+    // So this essentially converts an address to a displacement and
+    // it will never need to be relocated.
+
+    // FIXME: It's not likely that disp will fit into an offset so we
+    // don't bother to check, but it could save an instruction.
+    intptr_t disp = (intptr_t) ct->byte_map_base;
+    write_insts_load_byte_map_base(x8);
+
+    if (UseConcMarkSweepGC && CMSPrecleaningEnabled) {
+        write_inst("membar ISHST");
+    }
+    write_inst_regs("strb wzr, [%s, %s]", obj, x8);
+    return current_pc();
+}
+
+#define __ as->
+
+void YuhuAddress::lea(YuhuMacroAssembler *as, YuhuMacroAssembler::YuhuRegister r) const {
+    // TODO
+//    Relocation* reloc = _rspec.reloc();
+//    relocInfo::relocType rtype = (relocInfo::relocType) reloc->type();
+
+    switch(_mode) {
+        case base_plus_offset: {
+            if (_offset == 0 && _base == r) // it's a nop
+                break;
+            if (_offset > 0)
+                __ write_inst("add %s, %s, #%d", r, _base, _offset);
+            else
+                __ write_inst("sub %s, %s, #%d", r, _base, -_offset);
+            break;
+        }
+        case base_plus_offset_reg: {
+            __ write_inst_add(r, _base, _index, _ext.op(), MAX(_ext.shift(), 0));
+            break;
+        }
+        case literal: {
+            __ write_insts_mov_imm64(r, (uint64_t)target());
+            break;
+        }
+        default:
+            ShouldNotReachHere();
+    }
+}
+
+#undef __
