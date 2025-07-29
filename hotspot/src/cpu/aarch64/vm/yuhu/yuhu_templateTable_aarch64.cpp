@@ -18,6 +18,13 @@
 
 #define __ _masm->
 
+// Forward declarations
+static void do_oop_store(YuhuMacroAssembler* _masm,
+                         YuhuAddress obj,
+                         YuhuMacroAssembler::YuhuRegister val,
+                         BarrierSet::Name barrier,
+                         bool precise);
+
 // Individual instructions
 
 void YuhuTemplateTable::nop() {
@@ -536,6 +543,183 @@ void YuhuTemplateTable::astore(int n)
     transition(vtos, vtos);
     __ write_inst_pop_ptr(__ x0);
     __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+void YuhuTemplateTable::iastore() {
+    transition(itos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // r0: value
+    // r1: index
+    // r3: array
+    index_check(__ x3, __ x1); // prefer index in r1
+    __ write_inst("add x8, x3, w1, uxtw #2"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(2)));
+    __ write_inst("str w0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_INT));
+}
+
+void YuhuTemplateTable::lastore() {
+    transition(ltos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // r0: value
+    // r1: index
+    // r3: array
+    index_check(__ x3, __ x1); // prefer index in r1
+    __ write_inst("add x8, x3, w1, uxtw #3"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(3)));
+    __ write_inst("str x0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_LONG));
+}
+
+void YuhuTemplateTable::fastore() {
+    transition(ftos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // v0: value
+    // r1:  index
+    // r3:  array
+    index_check(__ x3, __ x1); // prefer index in r1
+    __ write_inst("add x8, x3, w1, uxtw #2"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(2)));
+    __ write_inst("str s0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_FLOAT));
+}
+
+void YuhuTemplateTable::dastore() {
+    transition(dtos, vtos);
+    __ write_inst_pop_i(__ x1);
+    __ write_inst_pop_ptr(__ x3);
+    // v0: value
+    // r1:  index
+    // r3:  array
+    index_check(__ x3, __ x1); // prefer index in r1
+    __ write_inst("add x8, x3, w1, uxtw #3"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(3)));
+    __ write_inst("str d0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_DOUBLE));
+}
+
+void YuhuTemplateTable::aastore() {
+    YuhuLabel is_null, ok_is_subtype, done;
+    transition(vtos, vtos);
+    // stack: ..., array, index, value
+    __ write_inst("ldr x0, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(0)); // value
+    __ write_inst("ldr x2, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(1)); // index
+    __ write_inst("ldr x3, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(2)); // array
+
+    YuhuAddress element_address(__ x4, arrayOopDesc::base_offset_in_bytes(T_OBJECT));
+
+    index_check(__ x3, __ x2);     // kills r1
+    __ write_inst("add x4, x3, w2, uxtw #%d", UseCompressedOops? 2 : 3); // __ lea(r4, Address(r3, r2, Address::uxtw(UseCompressedOops? 2 : 3)));
+
+    // do array store check - check for NULL value first
+    __ write_inst_cbz(__ x0, is_null);
+
+    // Move subklass into r1
+    __ write_insts_load_klass(__ x1, __ x0);
+    // Move superklass into r0
+    __ write_insts_load_klass(__ x0, __ x3);
+    __ write_inst("ldr x0, [x0, #%d]", in_bytes(ObjArrayKlass::element_klass_offset()));
+    // Compress array + index*oopSize + 12 into a single register.  Frees r2.
+
+    // Generate subtype check.  Blows r2, r5
+    // Superklass in r0.  Subklass in r1.
+    __ write_insts_gen_subtype_check(__ x1, ok_is_subtype);
+
+    // Come here on failure
+    // object is at TOS
+    __ write_inst_b(YuhuInterpreter::_throw_ArrayStoreException_entry);
+
+    // Come here on success
+    __ pin_label(ok_is_subtype);
+
+    // Get the value we will store
+    __ write_inst("ldr x0, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(0));
+    // Now store using the appropriate barrier
+    do_oop_store(_masm, element_address, __ x0, _bs->kind(), true);
+    __ write_inst_b(done);
+
+    // Have a NULL in r0, r3=array, r2=index.  Store NULL at ary[idx]
+    __ pin_label(is_null);
+    // TODO
+//    __ profile_null_seen(r2);
+
+    // Store a NULL
+    do_oop_store(_masm, element_address, __ noreg, _bs->kind(), true);
+
+    // Pop stack arguments
+    __ pin_label(done);
+    __ write_inst("add x20, x20, #%d", 3 * YuhuInterpreter::stackElementSize);
+}
+
+static void do_oop_store(YuhuMacroAssembler* _masm,
+                         YuhuAddress obj,
+                         YuhuMacroAssembler::YuhuRegister val,
+                         BarrierSet::Name barrier,
+                         bool precise) {
+    assert(val == __ noreg || val == __ x0, "parameter is just for looks");
+    switch (barrier) {
+#if INCLUDE_ALL_GCS
+        case BarrierSet::G1SATBCT:
+        case BarrierSet::G1SATBCTLogging:
+        {
+            // flatten object address if needed
+            if (obj.index() == __ noreg && obj.offset() == 0) {
+                if (obj.base() != __ x3) {
+                    __ write_inst_mov_reg(__ x3, obj.base());
+                }
+            } else {
+                __ write_insts_lea(__ x3, obj);
+            }
+            __ write_insts_g1_write_barrier_pre(__ x3 /* obj */,
+                                    __ x1 /* pre_val */,
+                                    __ x28 /* thread */,
+                                    __ x10  /* tmp */,
+                                    val != __ noreg /* tosca_live */,
+                                    false /* expand_call */);
+            if (val == __ noreg) {
+                __ write_insts_store_heap_oop_null(YuhuAddress(__ x3, 0));
+            } else {
+                // G1 barrier needs uncompressed oop for region cross check.
+                YuhuMacroAssembler::YuhuRegister new_val = val;
+                if (UseCompressedOops) {
+                    new_val = __ x9;
+                    __ write_inst_mov_reg(new_val, val);
+                }
+                __ write_insts_store_heap_oop(YuhuAddress(__ x3, 0), val);
+                __ write_insts_g1_write_barrier_post(__ x3 /* store_adr */,
+                                         new_val /* new_val */,
+                                         __ x28 /* thread */,
+                                         __ x10 /* tmp */,
+                                         __ x1 /* tmp2 */);
+            }
+
+        }
+            break;
+#endif // INCLUDE_ALL_GCS
+        case BarrierSet::CardTableModRef:
+        case BarrierSet::CardTableExtension:
+        {
+            if (val == __ noreg) {
+                __ write_insts_store_heap_oop_null(obj);
+            } else {
+                __ write_insts_store_heap_oop(obj, val);
+                // flatten object address if needed
+                if (!precise || (obj.index() == __ noreg && obj.offset() == 0)) {
+                    __ write_insts_store_check(obj.base());
+                } else {
+                    __ write_insts_lea(__ x3, obj);
+                    __ write_insts_store_check(__ x3);
+                }
+            }
+        }
+            break;
+        case BarrierSet::ModRef:
+        case BarrierSet::Other:
+            if (val == __ noreg) {
+                __ write_insts_store_heap_oop_null(obj);
+            } else {
+                __ write_insts_store_heap_oop(obj, val);
+            }
+            break;
+        default      :
+            ShouldNotReachHere();
+
+    }
 }
 
 void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,

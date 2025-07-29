@@ -125,6 +125,15 @@ private:
     static void dstore(int n);
     static void astore(int n);
 
+    static void iastore();
+    static void lastore();
+    static void fastore();
+    static void dastore();
+    static void aastore();
+    static void bastore();
+    static void castore();
+    static void sastore();
+
 public:
     static void initialize();
 
