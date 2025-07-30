@@ -143,6 +143,31 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::base_plus_offset_reg:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), reg_name(addr.base()),
+                     reg_name(addr.index()), op_name(addr.ext().op()), MAX(addr.ext().shift(), 0));
+            break;
+        case YuhuAddress::pre:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::post:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), reg_name(addr.base()), addr.offset());
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+#pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2) {
     char buffer[50];
     #pragma clang diagnostic push
@@ -193,7 +218,39 @@ address YuhuMacroAssembler::write_inst_str(YuhuRegister reg, YuhuAddress addr) {
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_inst_str(YuhuFloatRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("str %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("str %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("str %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("str %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_inst_ldr(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldr %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldr %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldr %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldr %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldr(YuhuFloatRegister reg, YuhuAddress addr) {
     switch (addr.getMode()) {
         case YuhuAddress::base_plus_offset:
             return write_inst("ldr %s, [%s, #%d]", reg, addr);
@@ -515,6 +572,14 @@ address YuhuMacroAssembler::write_insts_load_signed_short(YuhuRegister dst, Yuhu
     return write_inst_ldrsh(dst, src);
 }
 
+address YuhuMacroAssembler::write_insts_load_signed_short32(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrsh(dst, src);
+}
+
+address YuhuMacroAssembler::write_insts_load_signed_byte32(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrsb(dst, src);
+}
+
 address YuhuMacroAssembler::write_insts_enter() {
     write_inst("stp x29, x30, [sp, #-0x10]!");
     write_inst("mov x29, sp");
@@ -632,7 +697,7 @@ address YuhuMacroAssembler::write_insts_dispatch_base(TosState state, address* t
 address YuhuMacroAssembler::write_insts_get_dispatch() {
     uint64_t offset;
     write_insts_adrp(x21, (address) YuhuInterpreter::dispatch_table(), offset);
-    write_inst("add x21, x21, #%d", offset); // lea(rdispatch, Address(rdispatch, offset));
+    write_insts_lea(x21, YuhuAddress(x21, offset));
     return current_pc();
 }
 
@@ -839,8 +904,7 @@ address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, const char*
 
     // call indirectly to solve generation ordering problem
 //    lea(rscratch2, ExternalAddress(StubRoutines::verify_oop_subroutine_entry_address()));
-    // here lea is equivalent to mov
-    write_insts_mov_imm64(YuhuMacroAssembler::x9, (uint64_t) YuhuStubRoutines::verify_oop_subroutine_entry_address());
+    write_insts_lea(x9, YuhuAddress(YuhuStubRoutines::verify_oop_subroutine_entry_address()));
 
     write_inst("ldr x9, [x9]");
     write_inst("blr x9");
@@ -913,7 +977,7 @@ address YuhuMacroAssembler::write_insts_lock_object(YuhuRegister lock_reg) {
             YuhuLabel fast;
             write_insts_cmpxchgptr(swap_reg, lock_reg, obj_reg, x8, fast, &fail);
             pin_label(fast);
-            write_insts_atomic_incw((address)BiasedLocking::fast_path_entry_count_addr(), x9, x8, tmp);
+            write_insts_atomic_incw(YuhuAddress((address)BiasedLocking::fast_path_entry_count_addr()), x9, x8, tmp);
             write_inst_b(done);
             pin_label(fail);
         } else {
@@ -940,7 +1004,7 @@ address YuhuMacroAssembler::write_insts_lock_object(YuhuRegister lock_reg) {
 
         if (PrintBiasedLockingStatistics) {
             write_inst_b(ne, slow_case);
-            write_insts_atomic_incw((address)BiasedLocking::fast_path_entry_count_addr(), x9, x8, tmp);
+            write_insts_atomic_incw(YuhuAddress((address)BiasedLocking::fast_path_entry_count_addr()), x9, x8, tmp);
         }
         write_inst_b(eq, done);
 
@@ -975,7 +1039,7 @@ address YuhuMacroAssembler::write_insts_unlock_object(YuhuRegister lock_reg)
 
         // Convert from BasicObjectLock structure to object and BasicLock
         // structure Store the BasicLock address into %r0
-        write_inst("ldr %s, [%s, #%d]", swap_reg, lock_reg, BasicObjectLock::lock_offset_in_bytes()); // lea(swap_reg, Address(lock_reg, BasicObjectLock::lock_offset_in_bytes()));
+        write_insts_lea(swap_reg, YuhuAddress(lock_reg, BasicObjectLock::lock_offset_in_bytes()));
 
         // Load oop into obj_reg(%c_rarg3)
         write_inst("ldr %s, [%s, #%d]", obj_reg, lock_reg, BasicObjectLock::obj_offset_in_bytes());
@@ -1213,7 +1277,7 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
     if (counters != NULL) {
         YuhuLabel around;
         write_inst_cbnz(tmp_reg, around);
-        write_insts_atomic_incw((address)counters->biased_lock_entry_count_addr(), tmp_reg, x8, x9);
+        write_insts_atomic_incw(YuhuAddress((address)counters->biased_lock_entry_count_addr()), tmp_reg, x8, x9);
         write_inst_b(done);
         pin_label(around);
     } else {
@@ -1265,7 +1329,7 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
         // interpreter runtime in the slow case.
         pin_label(here);
         if (counters != NULL) {
-            write_insts_atomic_incw((address)counters->anonymously_biased_lock_entry_count_addr(), tmp_reg, x8, x9);
+            write_insts_atomic_incw(YuhuAddress((address)counters->anonymously_biased_lock_entry_count_addr()), tmp_reg, x8, x9);
         }
     }
     write_inst_b(done);
@@ -1291,7 +1355,7 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
         // bias. The revocation will occur in the runtime in the slow case.
         pin_label(here);
         if (counters != NULL) {
-            write_insts_atomic_incw((address)counters->rebiased_lock_entry_count_addr(), tmp_reg, x8, x9);
+            write_insts_atomic_incw(YuhuAddress((address)counters->rebiased_lock_entry_count_addr()), tmp_reg, x8, x9);
         }
     }
     write_inst_b(done);
@@ -1318,7 +1382,7 @@ int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
         // the result of the above CAS, some thread must have succeeded in
         // removing the bias bit from the object's header.
         if (counters != NULL) {
-            write_insts_atomic_incw((address)counters->revoked_lock_entry_count_addr(), tmp_reg, x8, x9);
+            write_insts_atomic_incw(YuhuAddress((address)counters->revoked_lock_entry_count_addr()), tmp_reg, x8, x9);
         }
         pin_label(nope);
     }
@@ -1404,6 +1468,11 @@ address YuhuMacroAssembler::write_insts_atomic_incw(YuhuRegister counter_addr, Y
     write_inst_regs("stxr %s, %s, [%s]", w_reg(tmp2), w_reg(tmp), counter_addr);
     write_inst_cbnz(w_reg(tmp2), retry_load);
     return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_atomic_incw(YuhuAddress counter_addr, YuhuRegister tmp1, YuhuRegister tmp2, YuhuRegister tmp3) {
+    write_insts_lea(tmp1, counter_addr);
+    return write_insts_atomic_incw(tmp1, tmp2, tmp3);
 }
 
 address YuhuMacroAssembler::write_insts_pop(TosState state) {
@@ -1739,9 +1808,7 @@ address YuhuMacroAssembler::write_insts_get_cache_and_index_and_bytecode_at_bcp(
     // We use a 32-bit load here since the layout of 64-bit words on
     // little-endian machines allow us that.
     // n.b. unlike x86 cache already includes the index offset
-    write_inst("add %s, %s, #%d", bytecode, cache, in_bytes(ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::indices_offset())); // lea(bytecode, Address(cache,
-//                          ConstantPoolCache::base_offset()
-//                          + ConstantPoolCacheEntry::indices_offset()));
+    write_insts_lea(bytecode, YuhuAddress(cache, ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::indices_offset()));
     write_inst("ldar %s, [%s]", w_reg(bytecode), bytecode);
     const int shift_count = (1 + byte_no) * BitsPerByte;
     write_inst_imms("ubfx %s, %s, #%d, #%d", bytecode, bytecode, shift_count, BitsPerByte);
@@ -1811,12 +1878,11 @@ address YuhuMacroAssembler::write_insts_remove_activation(
     // BasicObjectLock will be first in list, since this is a
     // synchronized method. However, need to check that the object has
     // not been unlocked by an explicit monitorexit bytecode.
-//    const Address monitor(rfp, frame::interpreter_frame_initial_sp_offset *
-//                               wordSize - (int) sizeof(BasicObjectLock));
+    const YuhuAddress monitor(x29, frame::interpreter_frame_initial_sp_offset *
+                               wordSize - (int) sizeof(BasicObjectLock));
     // We use c_rarg1 so that if we go slow path it will be the correct
     // register for unlock_object to pass to VM directly
-    write_inst("add x1, x29, #%d", frame::interpreter_frame_initial_sp_offset *
-                                   wordSize - (int) sizeof(BasicObjectLock)); // lea(c_rarg1, monitor); // address of first monitor
+    write_insts_lea(x1, monitor); // address of first monitor
 
     write_inst("ldr x0, [x1, #%d]", BasicObjectLock::obj_offset_in_bytes());
     write_inst_cbnz(x0, unlock);
@@ -1854,15 +1920,15 @@ address YuhuMacroAssembler::write_insts_remove_activation(
         const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
 //        const Address monitor_block_top(
 //                rfp, frame::interpreter_frame_monitor_block_top_offset * wordSize);
-//        const Address monitor_block_bot(
-//                rfp, frame::interpreter_frame_initial_sp_offset * wordSize);
+        const YuhuAddress monitor_block_bot(
+                x29, frame::interpreter_frame_initial_sp_offset * wordSize);
 
         pin_label(restart);
         // We use c_rarg1 so that if we go slow path it will be the correct
         // register for unlock_object to pass to VM directly
         write_inst("ldr x1, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize); // points to current entry, starting
         // with top-most entry
-        write_inst("add x19, x29, #%d", frame::interpreter_frame_initial_sp_offset * wordSize); // lea(r19, monitor_block_bot);  // points to word before bottom of
+        write_insts_lea(x19, monitor_block_bot);  // points to word before bottom of
         // monitor block
         write_inst_b(entry);
 

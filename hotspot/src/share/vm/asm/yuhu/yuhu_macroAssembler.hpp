@@ -73,7 +73,7 @@ public:
         gt, ne, al, ls, hi, le, eq, hs, lo
     };
     enum YuhuOperation {
-        uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
+        lsl, uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
     };
 private:
     const char* reg_name(YuhuRegister reg) {
@@ -135,7 +135,7 @@ private:
 
     const char* op_name(YuhuOperation op) {
         static const char* op_names[] = {
-                "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
+                "ls", "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
         };
 
         // check array index
@@ -187,6 +187,8 @@ public:
 
     address write_inst(const char* assembly_format, YuhuRegister reg, YuhuAddress addr);
 
+    address write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr);
+
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
@@ -197,7 +199,11 @@ public:
 
     address write_inst_str(YuhuRegister reg, YuhuAddress addr);
 
+    address write_inst_str(YuhuFloatRegister reg, YuhuAddress addr);
+
     address write_inst_ldr(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldr(YuhuFloatRegister reg, YuhuAddress addr);
 
     address write_inst_ldrh(YuhuRegister reg, YuhuAddress addr);
 
@@ -270,6 +276,9 @@ public:
 
     address write_insts_load_signed_byte(YuhuRegister dst, YuhuAddress src);
     address write_insts_load_signed_short(YuhuRegister dst, YuhuAddress src);
+
+    address write_insts_load_signed_byte32(YuhuRegister dst, YuhuAddress src);
+    address write_insts_load_signed_short32(YuhuRegister dst, YuhuAddress src);
 
     address write_insts_enter();
 
@@ -373,10 +382,7 @@ public:
 
     address write_insts_atomic_incw(YuhuRegister counter_addr, YuhuRegister tmp, YuhuRegister tmp2);
 
-    address write_insts_atomic_incw(address counter_addr, YuhuRegister tmp1, YuhuRegister tmp2, YuhuRegister tmp3) {
-        write_insts_mov_imm64(tmp1, (uint64_t) counter_addr); // lea(tmp1, counter_addr);
-        return write_insts_atomic_incw(tmp1, tmp2, tmp3);
-    }
+    address write_insts_atomic_incw(YuhuAddress counter_addr, YuhuRegister tmp1, YuhuRegister tmp2, YuhuRegister tmp3);
 
     address write_insts_pop(TosState state); // transition vtos -> state
     address write_insts_push(TosState state); // transition state -> vtos
@@ -685,7 +691,7 @@ public:
     };
     class lsl : public extend {
         public:
-        lsl(int shift = -1): extend(shift, YuhuMacroAssembler::uxtx) { }
+        lsl(int shift = -1): extend(shift, YuhuMacroAssembler::lsl) { }
     };
     class sxtw : public extend {
         public:
