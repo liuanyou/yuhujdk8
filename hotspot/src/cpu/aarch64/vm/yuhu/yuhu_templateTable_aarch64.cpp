@@ -25,6 +25,73 @@ static void do_oop_store(YuhuMacroAssembler* _masm,
                          BarrierSet::Name barrier,
                          bool precise);
 
+static inline YuhuAddress iaddress(int n) {
+    return YuhuAddress(YuhuMacroAssembler::x24, YuhuInterpreter::local_offset_in_bytes(n));
+}
+
+static inline YuhuAddress laddress(int n) {
+    return iaddress(n + 1);
+}
+
+static inline YuhuAddress faddress(int n) {
+    return iaddress(n);
+}
+
+static inline YuhuAddress daddress(int n) {
+    return laddress(n);
+}
+
+//static inline YuhuAddress aaddress(int n) {
+//    return iaddress(n);
+//}
+
+static inline YuhuAddress iaddress(YuhuMacroAssembler::YuhuRegister r) {
+    return YuhuAddress(YuhuMacroAssembler::x24, r, YuhuAddress::lsl(3));
+}
+
+static inline YuhuAddress laddress(YuhuMacroAssembler::YuhuRegister r, YuhuMacroAssembler::YuhuRegister scratch,
+                               YuhuMacroAssembler* _masm) {
+    __ write_insts_lea(scratch, YuhuAddress(YuhuMacroAssembler::x24, r, YuhuAddress::lsl(3)));
+    return YuhuAddress(scratch, YuhuInterpreter::local_offset_in_bytes(1));
+}
+
+static inline YuhuAddress faddress(YuhuMacroAssembler::YuhuRegister r) {
+    return iaddress(r);
+}
+
+static inline YuhuAddress daddress(YuhuMacroAssembler::YuhuRegister r, YuhuMacroAssembler::YuhuRegister scratch,
+                               YuhuMacroAssembler* _masm) {
+    return laddress(r, scratch, _masm);
+}
+
+static inline YuhuAddress aaddress(YuhuMacroAssembler::YuhuRegister r) {
+    return iaddress(r);
+}
+
+static inline YuhuAddress at_tos   () {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(0));
+}
+
+static inline YuhuAddress at_tos_p1() {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(1));
+}
+
+static inline YuhuAddress at_tos_p2() {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(2));
+}
+
+//static inline YuhuAddress at_tos_p3() {
+//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(3));
+//}
+
+//static inline YuhuAddress at_tos_p4() {
+//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(4));
+//}
+
+//static inline YuhuAddress at_tos_p5() {
+//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(5));
+//}
+
 // Individual instructions
 
 void YuhuTemplateTable::nop() {
@@ -91,13 +158,13 @@ void YuhuTemplateTable::dconst(int value)
 void YuhuTemplateTable::bipush()
 {
     transition(vtos, itos);
-    __ write_inst("ldrsb w0, [x22, #%d]", 1);
+    __ write_insts_load_signed_byte32(__ w0, at_bcp(1));
 }
 
 void YuhuTemplateTable::sipush()
 {
     transition(vtos, itos);
-    __ write_inst("ldrh w0, [x22, #%d]", 1);
+    __ write_insts_load_unsigned_short(__ w0, at_bcp(1));
     __ write_inst("rev w0, w0");
     __ write_inst("asr w0, w0, #%d", 16);
 }
@@ -110,7 +177,7 @@ void YuhuTemplateTable::ldc(bool wide)
     if (wide) {
         __ write_insts_get_unsigned_2_byte_index_at_bcp(__ w1, 1);
     } else {
-        __ write_insts_load_unsigned_byte(__ w1, __ x22, 1);
+        __ write_insts_load_unsigned_byte(__ w1, YuhuAddress(__ x22, 1));
     }
     __ write_insts_get_cpool_and_tags(__ x2, __ x0);
 
@@ -180,19 +247,19 @@ void YuhuTemplateTable::ldc2_w()
     const int tags_offset = Array<u1>::base_offset_in_bytes();
 
     // get type
-    __ write_inst("add x2, x2, x0, lsl #0"); // __ lea(r2, Address(r2, r0, Address::lsl(0)));
-    __ write_insts_load_unsigned_byte(__ w2, __ x2, tags_offset);
+    __ write_insts_lea(__ x2, YuhuAddress(__ x2, __ x0, YuhuAddress::lsl(0)));
+    __ write_insts_load_unsigned_byte(__ w2, YuhuAddress( __ x2, tags_offset));
     __ write_inst("cmp w2, #%d", (int)JVM_CONSTANT_Double);
     __ write_inst_b(__ ne, Long);
     // dtos
-    __ write_inst("add x2, x1, x0, lsl #3"); // __ lea (r2, Address(r1, r0, Address::lsl(3)));
+    __ write_insts_lea(__ x2, YuhuAddress(__ x1, __ x1, YuhuAddress::lsl(3)));
     __ write_inst("ldr d0, [x2, #%d]", base_offset);
     __ write_inst_push_d();
     __ write_inst_b(Done);
 
     __ pin_label(Long);
     // ltos
-    __ write_inst("add x0, x1, x0, lsl #3"); // __ lea(r0, Address(r1, r0, Address::lsl(3)));
+    __ write_insts_lea(__ x0, YuhuAddress(__ x1, __ x0, YuhuAddress::lsl(3)));
     __ write_inst("ldr x0, [x0, #%d]", base_offset);
     __ write_inst_push_l();
 
@@ -207,7 +274,7 @@ void YuhuTemplateTable::iload()
         YuhuMacroAssembler::YuhuRegister bc = __ x4;
 
         // get next bytecode
-        __ write_insts_load_unsigned_byte(__ w1, __ x22, Bytecodes::length_for(Bytecodes::_iload));
+        __ write_insts_load_unsigned_byte(__ w1, YuhuAddress(__ x22, Bytecodes::length_for(Bytecodes::_iload)));
 
         // if _iload, wait to rewrite to iload2.  We only want to rewrite the
         // last two iloads in a pair.  Comparing against fast_iload means that
@@ -239,13 +306,13 @@ void YuhuTemplateTable::iload()
 
     // do iload, get the local value into tos
     locals_index(__ x1);
-    __ write_inst("ldr x0, [x24, x1, lsl #3]");
+    __ write_inst_ldr(__ x0, iaddress(__ x1));
 }
 
 void YuhuTemplateTable::lload()
 {
     transition(vtos, ltos);
-    __ write_inst("ldrb w1, [x22, #%s]", 1);
+    __ write_inst_ldrb(__ w1, at_bcp(1));
     __ write_inst("sub x1, x24, w1, uxtw #%d", LogBytesPerWord);
     __ write_inst("ldr x0, [x1, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
 }
@@ -256,13 +323,13 @@ void YuhuTemplateTable::fload()
     locals_index(__ x1);
     // n.b. we use ldrd here because this is a 64 bit slot
     // this is comparable to the iload case
-    __ write_inst("ldr d0, [x24, x1, lsl #3]");
+    __ write_inst_ldr(__ d0, faddress(__ x1));
 }
 
 void YuhuTemplateTable::dload()
 {
     transition(vtos, dtos);
-    __ write_inst("ldrb w1, [x22, #%d]", 1);
+    __ write_inst_ldrb(__ w1, at_bcp(1));
     __ write_inst("sub x1, x24, w1, uxtw #%d", LogBytesPerWord);
     __ write_inst("ldr d0, [x1, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
 }
@@ -271,31 +338,31 @@ void YuhuTemplateTable::aload()
 {
     transition(vtos, atos);
     locals_index(__ x1);
-    __ write_inst("ldr x0, [x24, x1, lsl #3]");
+    __ write_inst_ldr(__ x0, iaddress(__ x1));
 }
 
 void YuhuTemplateTable::iload(int n)
 {
     transition(vtos, itos);
-    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_ldr(__ x0, iaddress(n));
 }
 
 void YuhuTemplateTable::lload(int n)
 {
     transition(vtos, ltos);
-    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n + 1));
+    __ write_inst_ldr(__ x0, laddress(n));
 }
 
 void YuhuTemplateTable::fload(int n)
 {
     transition(vtos, ftos);
-    __ write_inst("ldr s0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_ldr(__ s0, faddress(n));
 }
 
 void YuhuTemplateTable::dload(int n)
 {
     transition(vtos, dtos);
-    __ write_inst("ldr d0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n + 1));
+    __ write_inst_ldr(__ d0, daddress(n));
 }
 
 void YuhuTemplateTable::aload_0()
@@ -326,7 +393,7 @@ void YuhuTemplateTable::aload_0()
         const YuhuMacroAssembler::YuhuRegister bc = __ x4;
 
         // get next bytecode
-        __ write_insts_load_unsigned_byte(__ w1, __ x22, Bytecodes::length_for(Bytecodes::_aload_0));
+        __ write_insts_load_unsigned_byte(__ w1, YuhuAddress(__ x22, Bytecodes::length_for(Bytecodes::_aload_0)));
 
         // do actual aload_0
         aload(0);
@@ -371,7 +438,7 @@ void YuhuTemplateTable::aload_0()
 void YuhuTemplateTable::aload(int n)
 {
     transition(vtos, atos);
-    __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_ldr(__ x0, iaddress(n));
 }
 
 void YuhuTemplateTable::iaload()
@@ -382,7 +449,7 @@ void YuhuTemplateTable::iaload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #2"); // __ lea(r1, Address(r0, r1, Address::uxtw(2)));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(2)));
     __ write_inst("ldr w0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_INT));
 }
 
@@ -394,7 +461,7 @@ void YuhuTemplateTable::laload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #3"); // __ lea(r1, Address(r0, r1, Address::uxtw(3)));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(3)));
     __ write_inst("ldr x0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_LONG));
 }
 
@@ -406,7 +473,7 @@ void YuhuTemplateTable::faload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #3"); // __ lea(r1,  Address(r0, r1, Address::uxtw(2)));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(2)));
     __ write_inst("ldr s0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_FLOAT));
 }
 
@@ -418,7 +485,7 @@ void YuhuTemplateTable::daload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #3"); // __ lea(r1,  Address(r0, r1, Address::uxtw(3)));
+    __ write_insts_lea(__ x0, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(3)));
     __ write_inst("ldr s0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_DOUBLE));
 }
 
@@ -431,8 +498,8 @@ void YuhuTemplateTable::aaload()
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
     int s = (UseCompressedOops ? 2 : 3);
-    __ write_inst("add x1, x0, w1, uxtw #%d", s); // __ lea(r1, Address(r0, r1, Address::uxtw(s)));
-    __ write_insts_load_heap_oop(__ x0, __ x1, arrayOopDesc::base_offset_in_bytes(T_OBJECT));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(s)));
+    __ write_insts_load_heap_oop(__ x0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_OBJECT)));
 }
 
 void YuhuTemplateTable::baload()
@@ -443,8 +510,8 @@ void YuhuTemplateTable::baload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #0"); // __ lea(r1,  Address(r0, r1, Address::uxtw(0)));
-    __ write_insts_load_signed_byte(__ x0, __ x1, arrayOopDesc::base_offset_in_bytes(T_BYTE));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(0)));
+    __ write_insts_load_signed_byte(__ x0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_BYTE)));
 }
 
 void YuhuTemplateTable::caload()
@@ -455,8 +522,8 @@ void YuhuTemplateTable::caload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #1"); // __ lea(r1,  Address(r0, r1, Address::uxtw(1)));
-    __ write_insts_load_unsigned_short(__ w0, __ x1, arrayOopDesc::base_offset_in_bytes(T_CHAR));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(1)));
+    __ write_insts_load_unsigned_short(__ w0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_CHAR)));
 }
 
 void YuhuTemplateTable::saload()
@@ -467,8 +534,8 @@ void YuhuTemplateTable::saload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_inst("add x1, x0, w1, uxtw #1"); // __ lea(r1,  Address(r0, r1, Address::uxtw(1)));
-    __ write_insts_load_unsigned_short(__ w0, __ x1, arrayOopDesc::base_offset_in_bytes(T_SHORT));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(1)));
+    __ write_insts_load_unsigned_short(__ w0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_SHORT)));
 }
 
 void YuhuTemplateTable::istore()
@@ -479,7 +546,7 @@ void YuhuTemplateTable::istore()
     // local with strw, which costs an extra instruction over what we'd
     // be able to do with a simple str.  We should just store the whole
     // word.
-    __ write_inst("add x8, x24, x1, lsl #3"); // __ lea(rscratch1, iaddress(r1));
+    __ write_insts_lea(__ x8, iaddress(__ x1));
     __ write_inst("str w0, [x8]");
 }
 
@@ -487,22 +554,20 @@ void YuhuTemplateTable::lstore()
 {
     transition(ltos, vtos);
     locals_index(__ x1);
-    __ write_inst("add x8, x24, x1, lsl #3");
-    __ write_inst("str x0, [x8, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+    __ write_inst_str(__ x0, laddress(__ x1, __ x8, _masm));
 }
 
 void YuhuTemplateTable::fstore() {
     transition(ftos, vtos);
     locals_index(__ x1);
-    __ write_inst("add x8, x24, x1, lsl #3"); // __ lea(rscratch1, iaddress(r1));
+    __ write_insts_lea(__ x8, iaddress(__ x1));
     __ write_inst("str s0, [x8]");
 }
 
 void YuhuTemplateTable::dstore() {
     transition(dtos, vtos);
     locals_index(__ x1);
-    __ write_inst("add x8, x24, x1, lsl #3");
-    __ write_inst("str d0, [x8, #%d]", YuhuInterpreter::local_offset_in_bytes(1));
+    __ write_inst_str(__ d0, daddress(__ x1, __ x8, _masm));
 }
 
 void YuhuTemplateTable::astore()
@@ -510,39 +575,38 @@ void YuhuTemplateTable::astore()
     transition(vtos, vtos);
     __ write_inst_pop_ptr(__ x0);
     locals_index(__ x1);
-    __ write_inst("add x8, x24, x1, lsl #3");
-    __ write_inst("str x0, [x8]");
+    __ write_inst_str(__ x0, aaddress(__ x1));
 }
 
 void YuhuTemplateTable::istore(int n)
 {
     transition(itos, vtos);
-    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_str(__ x0, iaddress(n));
 }
 
 void YuhuTemplateTable::lstore(int n)
 {
     transition(ltos, vtos);
-    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n+1));
+    __ write_inst_str(__ x0, laddress(n));
 }
 
 void YuhuTemplateTable::fstore(int n)
 {
     transition(ftos, vtos);
-    __ write_inst("str s0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_str(__ s0, faddress(n));
 }
 
 void YuhuTemplateTable::dstore(int n)
 {
     transition(dtos, vtos);
-    __ write_inst("str d0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n+1));
+    __ write_inst_str(__ d0, daddress(n));
 }
 
 void YuhuTemplateTable::astore(int n)
 {
     transition(vtos, vtos);
     __ write_inst_pop_ptr(__ x0);
-    __ write_inst("str x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(n));
+    __ write_inst_str(__ x0, iaddress(n));
 }
 
 void YuhuTemplateTable::iastore() {
@@ -553,7 +617,7 @@ void YuhuTemplateTable::iastore() {
     // r1: index
     // r3: array
     index_check(__ x3, __ x1); // prefer index in r1
-    __ write_inst("add x8, x3, w1, uxtw #2"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(2)));
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(2)));
     __ write_inst("str w0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_INT));
 }
 
@@ -565,7 +629,7 @@ void YuhuTemplateTable::lastore() {
     // r1: index
     // r3: array
     index_check(__ x3, __ x1); // prefer index in r1
-    __ write_inst("add x8, x3, w1, uxtw #3"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(3)));
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(3)));
     __ write_inst("str x0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_LONG));
 }
 
@@ -577,7 +641,7 @@ void YuhuTemplateTable::fastore() {
     // r1:  index
     // r3:  array
     index_check(__ x3, __ x1); // prefer index in r1
-    __ write_inst("add x8, x3, w1, uxtw #2"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(2)));
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(2)));
     __ write_inst("str s0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_FLOAT));
 }
 
@@ -589,7 +653,7 @@ void YuhuTemplateTable::dastore() {
     // r1:  index
     // r3:  array
     index_check(__ x3, __ x1); // prefer index in r1
-    __ write_inst("add x8, x3, w1, uxtw #3"); // __ lea(rscratch1, Address(r3, r1, Address::uxtw(3)));
+    __ write_insts_lea(__ x8, YuhuAddress(__ x3, __ x1, YuhuAddress::uxtw(3)));
     __ write_inst("str d0, [x8, #%d]", arrayOopDesc::base_offset_in_bytes(T_DOUBLE));
 }
 
@@ -597,14 +661,14 @@ void YuhuTemplateTable::aastore() {
     YuhuLabel is_null, ok_is_subtype, done;
     transition(vtos, vtos);
     // stack: ..., array, index, value
-    __ write_inst("ldr x0, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(0)); // value
-    __ write_inst("ldr x2, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(1)); // index
-    __ write_inst("ldr x3, [x20, #%d]", YuhuInterpreter::expr_offset_in_bytes(2)); // array
+    __ write_inst_ldr(__ x0, at_tos());    // value
+    __ write_inst_ldr(__ x2, at_tos_p1()); // index
+    __ write_inst_ldr(__ x3, at_tos_p2()); // array
 
     YuhuAddress element_address(__ x4, arrayOopDesc::base_offset_in_bytes(T_OBJECT));
 
     index_check(__ x3, __ x2);     // kills r1
-    __ write_inst("add x4, x3, w2, uxtw #%d", UseCompressedOops? 2 : 3); // __ lea(r4, Address(r3, r2, Address::uxtw(UseCompressedOops? 2 : 3)));
+    __ write_insts_lea(__ x4, YuhuAddress(__ x3, __ x2, YuhuAddress::uxtw(UseCompressedOops? 2 : 3)));
 
     // do array store check - check for NULL value first
     __ write_inst_cbz(__ x0, is_null);
@@ -765,6 +829,11 @@ static void do_oop_store(YuhuMacroAssembler* _masm,
     }
 }
 
+YuhuAddress YuhuTemplateTable::at_bcp(int offset) {
+    assert(_desc->uses_bcp(), "inconsistent uses_bcp information");
+    return YuhuAddress(__ x22, offset);
+}
+
 void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,
                                    YuhuMacroAssembler::YuhuRegister temp_reg, bool load_bc_into_bc_reg/*=true*/,
                                    int byte_no)
@@ -807,7 +876,7 @@ void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::Y
     if (JvmtiExport::can_post_breakpoint()) {
         YuhuLabel L_fast_patch;
         // if a breakpoint is present we can't rewrite the stream directly
-        __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), __ x22, 0);
+        __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), YuhuAddress(__ x22, 0));
         __ write_inst("cmp %s, #%d", __ w_reg(temp_reg), Bytecodes::_breakpoint);
         __ write_inst_b(__ ne, L_fast_patch);
         // Let breakpoint table handling rewrite to quicker bytecode
@@ -818,7 +887,7 @@ void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::Y
 
 #ifdef ASSERT
     YuhuLabel L_okay;
-    __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), __ x22, 0);
+    __ write_insts_load_unsigned_byte(__ w_reg(temp_reg), YuhuAddress(__ x22, 0));
     __ write_inst("cmp %s, #%d", __ w_reg(temp_reg), (int) Bytecodes::java_code(bc));
     __ write_inst_b(__ eq, L_okay);
     __ write_inst_regs("cmp %s, %s", temp_reg, bc_reg);
@@ -834,7 +903,7 @@ void YuhuTemplateTable::patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::Y
 
 void YuhuTemplateTable::locals_index(YuhuMacroAssembler::YuhuRegister reg, int offset)
 {
-    __ write_inst("ldrb %s, [x22, #%d]", __ w_reg(reg), offset);
+    __ write_inst_ldrb( __ w_reg(reg), at_bcp(offset));
     __ write_inst_regs("neg %s, %s", reg, reg);
 }
 

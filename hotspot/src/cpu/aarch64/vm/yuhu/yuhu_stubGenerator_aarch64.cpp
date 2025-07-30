@@ -306,7 +306,8 @@ private:
         __ write_inst("stp x3, x2, [sp, #-0x10]!");
 
         // __ incrementl(ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
-        __ write_insts_mov_imm64(__ x2, (uint64_t)(address) YuhuStubRoutines::verify_oop_count_addr()); // __ lea(c_rarg2, ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
+//        __ lea(c_rarg2, ExternalAddress((address) StubRoutines::verify_oop_count_addr()));
+        __ write_insts_lea(__ x2, YuhuAddress((address) YuhuStubRoutines::verify_oop_count_addr()));
         __ write_inst("ldr x3, [x2]");
         __ write_inst("add x3, x3, 1");
         __ write_inst("str x3, [x2]");

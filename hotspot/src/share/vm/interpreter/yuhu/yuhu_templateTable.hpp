@@ -68,6 +68,8 @@ private:
     // debugging of TemplateGenerator
     static void transition(TosState tos_in, TosState tos_out);// checks if in/out states expected by template generator correspond to table entries
 
+    // special registers
+    static inline YuhuAddress at_bcp(int offset);
     static void patch_bytecode(Bytecodes::Code bc, YuhuMacroAssembler::YuhuRegister bc_reg,
                                YuhuMacroAssembler::YuhuRegister temp_reg, bool load_bc_into_bc_reg = true, int byte_no = -1);
     static void locals_index(YuhuMacroAssembler::YuhuRegister reg, int offset = 1);

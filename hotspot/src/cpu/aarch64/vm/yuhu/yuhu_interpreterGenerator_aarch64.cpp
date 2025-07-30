@@ -657,7 +657,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // Change state to native
     __ write_insts_mov_imm64(__ x8, _thread_in_native);
-    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_insts_lea(__ x9, YuhuAddress(__ x28, JavaThread::thread_state_offset()));
     __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     // Call the native method.
@@ -680,7 +680,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // change thread state
     __ write_insts_mov_imm64(__ x8, _thread_in_native_trans);
-    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_insts_lea(__ x9, YuhuAddress(__ x28, JavaThread::thread_state_offset()));
     __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     if (os::is_MP()) {
@@ -731,7 +731,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // change thread state
     __ write_insts_mov_imm64(__ x8, _thread_in_Java);
-    __ write_inst("add x9, x28, #%d", in_bytes(JavaThread::thread_state_offset())); // __ lea(rscratch2, Address(rthread, JavaThread::thread_state_offset()));
+    __ write_insts_lea(__ x29, YuhuAddress(__ x28, JavaThread::thread_state_offset()));
     __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     // reset_last_Java_frame
@@ -781,7 +781,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     {
         YuhuLabel no_reguard;
-        __ write_inst("add x8, x28, #%d", in_bytes(JavaThread::stack_guard_state_offset())); // __ lea(rscratch1, Address(rthread, in_bytes(JavaThread::stack_guard_state_offset())));
+        __ write_insts_lea(__ x8, YuhuAddress(__ x28, in_bytes(JavaThread::stack_guard_state_offset())));
         __ write_inst_regs("ldrb %s, [%s]", __ w8, __ x8);
         __ write_inst("cmp x8, #%d", JavaThread::stack_guard_yellow_disabled);
         __ write_inst_b(__ ne, no_reguard);
@@ -834,10 +834,9 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
             // has not been unlocked by an explicit monitorexit bytecode.
 
             // monitor expect in c_rarg1 for slow unlock path
-            __ write_inst("add x1, x29, #%d", (intptr_t)(frame::interpreter_frame_initial_sp_offset *
-                                                           wordSize - sizeof(BasicObjectLock))); /*__ lea(c_rarg1, Address(rfp,   // address of first monitor
-                                     (intptr_t)(frame::interpreter_frame_initial_sp_offset *
-                                                wordSize - sizeof(BasicObjectLock))));*/
+            __ write_insts_lea(__ x1, YuhuAddress(__ x29,
+                                                  (intptr_t)(frame::interpreter_frame_initial_sp_offset * wordSize
+                                                  - sizeof(BasicObjectLock)))); // address of first monitor
 
             __ write_inst("ldr %s, [x1, #%d]", t, BasicObjectLock::obj_offset_in_bytes());
             __ write_inst_cbnz(t, unlock);
@@ -1096,7 +1095,7 @@ address YuhuInterpreterGenerator::generate_Reference_get_entry(void) {
 
         // Load the value of the referent field.
 //        const Address field_address(local_0, referent_offset);
-        __ write_insts_load_heap_oop(local_0, local_0, referent_offset);
+        __ write_insts_load_heap_oop(local_0, YuhuAddress(local_0, referent_offset));
 
         __ write_inst("mov x19, x13"); // Move senderSP to a callee-saved register
         // Generate the G1 pre-barrier code to log the value of
@@ -1267,7 +1266,7 @@ void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {
     __ write_inst("stp x24, x26, [sp, #%d]", 2 * wordSize);
 
     __ write_inst("stp x29, x30, [sp, #%d]", 8 * wordSize);
-    __ write_inst("add x29, sp, #%d", 8 * wordSize); // __ lea(rfp, Address(sp, 8 * wordSize));
+    __ write_insts_lea(__ x29, YuhuAddress(__ sp, 8 * wordSize));
 
     // set sender sp
     // leave last_sp as null
@@ -1728,7 +1727,7 @@ address YuhuInterpreterGenerator::generate_exception_handler_common(
     // exception happened
     __ write_insts_empty_expression_stack();
     // setup parameters
-    __ write_insts_mov_imm64(__ x1, (uint64_t)(address)name); // __ lea(c_rarg1, Address((address)name));
+    __ write_insts_lea(__ x1, YuhuAddress((address)name));
     if (pass_oop) {
         __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address,
                                         InterpreterRuntime::
@@ -1738,7 +1737,7 @@ address YuhuInterpreterGenerator::generate_exception_handler_common(
         // kind of lame ExternalAddress can't take NULL because
         // external_word_Relocation will assert.
         if (message != NULL) {
-            __ write_insts_mov_imm64(__ x2, (uint64_t)(address)message); // __ lea(c_rarg2, Address((address)message));
+            __ write_insts_lea(__ x2, YuhuAddress((address)message));
         } else {
             __ write_insts_mov_imm64(__ x2, (uint64_t)NULL_WORD);
         }
