@@ -182,11 +182,91 @@ address YuhuMacroAssembler::write_inst_str(YuhuRegister reg, YuhuAddress addr) {
         case YuhuAddress::base_plus_offset:
             return write_inst("str %s, [%s, #%d]", reg, addr);
         case YuhuAddress::base_plus_offset_reg:
-            return write_inst("str %s, [%s, %s, %s #%d", reg, addr);
+            return write_inst("str %s, [%s, %s, %s #%d]", reg, addr);
         case YuhuAddress::pre:
             return write_inst("str %s, [%s, #%d]!", reg, addr);
         case YuhuAddress::post:
             return write_inst("str %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldr(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldr %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldr %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldr %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldr %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldrh(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldrh %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldrh %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldrh %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldrh %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldrb(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldrb %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldrb %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldrb %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldrb %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldrsb(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldrsb %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldrsb %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldrsb %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldrsb %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldrsh(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldrsh %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldrsh %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldrsh %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("ldrsh %s, [%s], #%d", reg, addr);
         default:
             ShouldNotReachHere();
     }
@@ -412,29 +492,27 @@ address YuhuMacroAssembler::write_inst_csel(YuhuRegister reg1, YuhuRegister reg2
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_insts_load_unsigned_short(YuhuRegister dst, YuhuRegister src, int imm32) {
-    return write_inst("ldrh %s, [%s, #%d]", dst, src, imm32);
+address YuhuMacroAssembler::write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrh(dst, src);
 }
 
-address YuhuMacroAssembler::write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32) {
-    return write_inst("ldrb %s, [%s, #%d]", dst, src, imm32);
+address YuhuMacroAssembler::write_insts_load_unsigned_byte(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrb(dst, src);
 }
 
 address YuhuMacroAssembler::write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset) {
     assert(bcp_offset >= 0, "bcp is still pointing to start of bytecode");
-    write_inst("ldrh %s, [%s, #%d]", reg, x22, bcp_offset);
+    write_inst_ldrh(reg, YuhuAddress(x22, bcp_offset));
     write_inst_regs("rev16 %s, %s", reg, reg);
     return current_pc();
 }
 
-address YuhuMacroAssembler::write_insts_load_signed_byte(YuhuRegister dst, YuhuRegister src, int imm32) {
-    write_inst("ldrsb %s, [%s, #%d]", dst, src, imm32);
-    return current_pc();
+address YuhuMacroAssembler::write_insts_load_signed_byte(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrsb(dst, src);
 }
 
-address YuhuMacroAssembler::write_insts_load_signed_short(YuhuRegister dst, YuhuRegister src, int imm32) {
-    write_inst("ldrsh %s, [%s, #%d]", dst, src, imm32);
-    return current_pc();
+address YuhuMacroAssembler::write_insts_load_signed_short(YuhuRegister dst, YuhuAddress src) {
+    return write_inst_ldrsh(dst, src);
 }
 
 address YuhuMacroAssembler::write_insts_enter() {
@@ -1472,7 +1550,7 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_pre(YuhuRegister obj,
 
     // Do we need to load the previous value?
     if (obj != noreg) {
-        write_insts_load_heap_oop(pre_val, obj, 0);
+        write_insts_load_heap_oop(pre_val, YuhuAddress(obj, 0));
     }
 
     // Is the previous value null?
@@ -1615,13 +1693,13 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_post(YuhuRegister store
     return current_pc();
 }
 
-address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset) {
+address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuAddress src) {
     // TODO
 //    if (UseCompressedOops) {
 //        ldrw(dst, src);
 //        decode_heap_oop(dst);
 //    } else {
-        write_inst("ldr %s, [%s, #%d]", dst, obj, offset);
+        write_inst_ldr(dst, src);
 //    }
     return current_pc();
 }
@@ -1675,7 +1753,7 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
                                                        size_t index_size) {
     assert(bcp_offset > 0, "bcp is still pointing to start of bytecode");
     if (index_size == sizeof(u2)) {
-        write_insts_load_unsigned_short(w_reg(index), x22, bcp_offset);
+        write_insts_load_unsigned_short(w_reg(index), YuhuAddress(x22, bcp_offset));
     } else if (index_size == sizeof(u4)) {
         assert(EnableInvokeDynamic, "giant index used only for JSR 292");
         write_inst("ldr %s, [x22, #%d]", w_reg(index), bcp_offset);
@@ -1685,7 +1763,7 @@ address YuhuMacroAssembler::write_insts_get_cache_index_at_bcp(YuhuRegister inde
         assert(ConstantPool::decode_invokedynamic_index(~123) == 123, "else change next line");
         write_inst_regs("eon %s, %s, %s", w_reg(index), w_reg(index), wzr); // convert to plain index
     } else if (index_size == sizeof(u1)) {
-        write_insts_load_unsigned_byte(w_reg(index), x22, bcp_offset);
+        write_insts_load_unsigned_byte(w_reg(index), YuhuAddress(x22, bcp_offset));
     } else {
         ShouldNotReachHere();
     }

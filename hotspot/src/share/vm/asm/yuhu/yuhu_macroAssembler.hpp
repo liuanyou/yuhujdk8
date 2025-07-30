@@ -197,6 +197,16 @@ public:
 
     address write_inst_str(YuhuRegister reg, YuhuAddress addr);
 
+    address write_inst_ldr(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldrh(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldrb(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldrsb(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldrsh(YuhuRegister reg, YuhuAddress addr);
+
     address write_inst_mov_reg(YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_fmov_reg(YuhuFloatRegister reg1, YuhuRegister reg2);
@@ -254,12 +264,12 @@ public:
 
     address write_inst_csel(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
 
-    address write_insts_load_unsigned_short(YuhuRegister dst, YuhuRegister src, int imm32);
-    address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuRegister src, int imm32);
+    address write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src);
+    address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuAddress src);
     address write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset);
 
-    address write_insts_load_signed_byte(YuhuRegister dst, YuhuRegister src, int imm32);
-    address write_insts_load_signed_short(YuhuRegister dst, YuhuRegister src, int imm32);
+    address write_insts_load_signed_byte(YuhuRegister dst, YuhuAddress src);
+    address write_insts_load_signed_short(YuhuRegister dst, YuhuAddress src);
 
     address write_insts_enter();
 
@@ -390,7 +400,7 @@ public:
                                               YuhuRegister tmp,
                                               YuhuRegister tmp2);
 
-    address write_insts_load_heap_oop(YuhuRegister dst, YuhuRegister obj, int offset);
+    address write_insts_load_heap_oop(YuhuRegister dst, YuhuAddress src);
 
     address write_insts_empty_expression_stack() {
         write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_monitor_block_top_offset * wordSize);
