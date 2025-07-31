@@ -263,14 +263,14 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_ifge                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater_equal);
     def(Bytecodes::_ifgt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater      );
     def(Bytecodes::_ifle                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less_equal   );
-//    def(Bytecodes::_if_icmpeq           , ubcp|____|clvm|____, itos, vtos, if_icmp             , equal        );
-//    def(Bytecodes::_if_icmpne           , ubcp|____|clvm|____, itos, vtos, if_icmp             , not_equal    );
-//    def(Bytecodes::_if_icmplt           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less         );
-//    def(Bytecodes::_if_icmpge           , ubcp|____|clvm|____, itos, vtos, if_icmp             , greater_equal);
-//    def(Bytecodes::_if_icmpgt           , ubcp|____|clvm|____, itos, vtos, if_icmp             , greater      );
-//    def(Bytecodes::_if_icmple           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less_equal   );
-//    def(Bytecodes::_if_acmpeq           , ubcp|____|clvm|____, atos, vtos, if_acmp             , equal        );
-//    def(Bytecodes::_if_acmpne           , ubcp|____|clvm|____, atos, vtos, if_acmp             , not_equal    );
+    def(Bytecodes::_if_icmpeq           , ubcp|____|clvm|____, itos, vtos, if_icmp             , equal        );
+    def(Bytecodes::_if_icmpne           , ubcp|____|clvm|____, itos, vtos, if_icmp             , not_equal    );
+    def(Bytecodes::_if_icmplt           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less         );
+    def(Bytecodes::_if_icmpge           , ubcp|____|clvm|____, itos, vtos, if_icmp             , greater_equal);
+    def(Bytecodes::_if_icmpgt           , ubcp|____|clvm|____, itos, vtos, if_icmp             , greater      );
+    def(Bytecodes::_if_icmple           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less_equal   );
+    def(Bytecodes::_if_acmpeq           , ubcp|____|clvm|____, atos, vtos, if_acmp             , equal        );
+    def(Bytecodes::_if_acmpne           , ubcp|____|clvm|____, atos, vtos, if_acmp             , not_equal    );
 //    def(Bytecodes::_goto                , ubcp|disp|clvm|____, vtos, vtos, _goto               ,  _           );
 //    def(Bytecodes::_jsr                 , ubcp|disp|____|____, vtos, vtos, jsr                 ,  _           ); // result is not an oop, so do not transition to atos
 //    def(Bytecodes::_ret                 , ubcp|disp|____|____, vtos, vtos, ret                 ,  _           );

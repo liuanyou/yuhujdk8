@@ -1524,6 +1524,34 @@ void YuhuTemplateTable::if_0cmp(Condition cc)
 //    __ profile_not_taken_branch(r0);
 }
 
+void YuhuTemplateTable::if_icmp(Condition cc)
+{
+    transition(itos, vtos);
+    // assume branch is more often taken than not (loops use backward branches)
+    YuhuLabel not_taken;
+    __ write_inst_pop_i(__ x1);
+    __ write_inst("cmp w1, w0, lsl, #0");
+    __ write_inst_b(j_not(cc), not_taken);
+    branch(false, false);
+    __ pin_label(not_taken);
+    // TODO
+//    __ profile_not_taken_branch(r0);
+}
+
+void YuhuTemplateTable::if_acmp(Condition cc)
+{
+    transition(atos, vtos);
+    // assume branch is more often taken than not (loops use backward branches)
+    YuhuLabel not_taken;
+    __ write_inst_pop_ptr(__ x1);
+    __ write_inst("cmp x1, x0");
+    __ write_inst_b(j_not(cc), not_taken);
+    branch(false, false);
+    __ pin_label(not_taken);
+    // TODO
+//    __ profile_not_taken_branch(r0);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

@@ -179,6 +179,8 @@ private:
 
     static void branch(bool is_jsr, bool is_wide);
     static void if_0cmp   (Condition cc);
+    static void if_icmp   (Condition cc);
+    static void if_acmp   (Condition cc);
 public:
     static void initialize();
 
