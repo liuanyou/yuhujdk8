@@ -995,6 +995,83 @@ void YuhuTemplateTable::ldiv()
     __ corrected_idivq(r0, r1, r0, /* want_remainder */ false);
 }
 
+void YuhuTemplateTable::irem()
+{
+    transition(itos, itos);
+    // explicitly check for div0
+    YuhuLabel no_div0;
+    __ write_inst_cbnz(__ w0, no_div0);
+    __ write_insts_mov_imm64(__ x8, (uint64_t)YuhuInterpreter::_throw_ArithmeticException_entry);
+    __ write_inst_br(__ x8);
+    __ pin_label(no_div0);
+    __ write_inst_pop_i(__ x1);
+    // r0 <== r1 irem r0
+    __ write_insts_corrected_idivl(__ x0, __ x1, __ x0, /* want_remainder */ true);
+}
+
+void YuhuTemplateTable::lrem()
+{
+    transition(ltos, ltos);
+    // explicitly check for div0
+    YuhuLabel no_div0;
+    __ write_inst_cbnz(__ x0, no_div0);
+    __ write_insts_mov_imm64(__ x8, (uint64_t)YuhuInterpreter::_throw_ArithmeticException_entry);
+    __ write_inst_br(__ x8);
+    __ pin_label(no_div0);
+    __ write_inst_pop_l(__ x1);
+    // r0 <== r1 lrem r0
+    __ write_insts_corrected_idivq(__ x0, __ x1, __ x0, /* want_remainder */ true);
+}
+
+void YuhuTemplateTable::ineg()
+{
+    transition(itos, itos);
+    __ write_inst("neg w0, w0");
+
+}
+
+void YuhuTemplateTable::lneg()
+{
+    transition(ltos, ltos);
+    __ write_inst("neg x0, x0");
+}
+
+void YuhuTemplateTable::fneg()
+{
+    transition(ftos, ftos);
+    __ write_inst("fneg s0, s0");
+}
+
+void YuhuTemplateTable::dneg()
+{
+    transition(dtos, dtos);
+    __ write_inst("fneg d0, d0");
+}
+
+void YuhuTemplateTable::lshl()
+{
+    transition(itos, ltos);
+    // shift count is in r0
+    __ write_inst_pop_l(__ x1);
+    __ write_inst("lslv x0, x1, x0");
+}
+
+void YuhuTemplateTable::lshr()
+{
+    transition(itos, ltos);
+    // shift count is in r0
+    __ write_inst_pop_l(__ x1);
+    __ write_inst("asrv x0, x1, x0");
+}
+
+void YuhuTemplateTable::lushr()
+{
+    transition(itos, ltos);
+    // shift count is in r0
+    __ write_inst_pop_l(__ x1);
+    __ write_inst("lsrv x0, x1, x0");
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

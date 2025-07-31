@@ -155,6 +155,18 @@ private:
     static void lmul();
     static void idiv();
     static void ldiv();
+
+    static void irem();
+    static void lrem();
+
+    static void ineg();
+    static void lneg();
+    static void fneg();
+    static void dneg();
+
+    static void lshl();
+    static void lshr();
+    static void lushr();
 public:
     static void initialize();
 
