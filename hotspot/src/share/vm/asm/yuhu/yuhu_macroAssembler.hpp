@@ -359,6 +359,8 @@ public:
 
     address write_insts_final_call_VM_leaf_base(address entry_point, int number_of_arguments, YuhuLabel *retaddr = NULL);
 
+    address write_insts_final_call_VM_leaf(address entry_point, int number_of_arguments = 0);
+
     address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0);
 
     address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1);

@@ -1191,6 +1191,11 @@ address YuhuMacroAssembler::write_insts_final_call_VM_leaf_base(address entry_po
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, int number_of_arguments) {
+    write_insts_final_call_VM_leaf_base(entry_point, number_of_arguments);
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0) {
     if (arg_0 != x0) {
         write_inst_mov_reg(x0, arg_0);
