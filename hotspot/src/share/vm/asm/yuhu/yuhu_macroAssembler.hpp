@@ -70,7 +70,7 @@ public:
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi, le, eq, hs, lo
+        gt, ne, al, ls, hi, le, eq, hs, lo, lt, ge
     };
     enum YuhuOperation {
         lsl, uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
@@ -104,7 +104,7 @@ private:
 
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
-                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo"
+                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo", "lt", "ge"
         };
 
         // check array index
@@ -274,6 +274,10 @@ public:
 
     address write_inst_csel(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
 
+    address write_inst_csinc(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
+
+    address write_inst_csinv(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
+
     address write_inst_get_fpsr(YuhuRegister reg) {
         return write_inst_regs("mrs %s, fpsr", reg);
     }
@@ -318,6 +322,8 @@ public:
     address write_insts_dispatch_via(TosState state, address* table);
 
     address write_insts_dispatch_base(TosState state, address* table, bool verifyoop = true);
+
+    address write_insts_dispatch_only(TosState state);
 
     address write_insts_get_dispatch();
 

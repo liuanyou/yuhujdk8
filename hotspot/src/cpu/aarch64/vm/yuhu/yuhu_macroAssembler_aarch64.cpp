@@ -567,6 +567,18 @@ address YuhuMacroAssembler::write_inst_csel(YuhuRegister reg1, YuhuRegister reg2
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_csinc(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "csinc %s, %s, %s, %s", reg_name(reg1), reg_name(reg2), reg_name(reg3), cond_name(cond));
+    return write_inst(machine_code(buffer));
+}
+
+address YuhuMacroAssembler::write_inst_csinv(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond) {
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "csinv %s, %s, %s, %s", reg_name(reg1), reg_name(reg2), reg_name(reg3), cond_name(cond));
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src) {
     return write_inst_ldrh(dst, src);
 }
@@ -710,6 +722,10 @@ address YuhuMacroAssembler::write_insts_dispatch_base(TosState state, address* t
     }
     write_inst("br x9");
     return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_dispatch_only(TosState state) {
+    return write_insts_dispatch_base(state, YuhuInterpreter::dispatch_table(state));
 }
 
 address YuhuMacroAssembler::write_insts_get_dispatch() {
@@ -1754,7 +1770,7 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_post(YuhuRegister store
 
     assert((int)CardTableModRefBS::dirty_card_val() == 0, "must be 0");
 
-    write_inst("membar ish");
+    write_inst("dmb ish");
 
     write_inst_regs("ldrb %s, [%s]", w_reg(tmp2), card_addr);
     write_inst_cbz(w_reg(tmp2), done);
@@ -2383,7 +2399,7 @@ address YuhuMacroAssembler::write_insts_store_check_part_2(YuhuRegister obj) {
     write_insts_load_byte_map_base(x8);
 
     if (UseConcMarkSweepGC && CMSPrecleaningEnabled) {
-        write_inst("membar ISHST");
+        write_inst("dmb ishst");
     }
     write_inst_regs("strb wzr, [%s, %s]", obj, x8);
     return current_pc();
