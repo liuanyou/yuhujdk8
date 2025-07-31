@@ -189,6 +189,8 @@ public:
 
     address write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr);
 
+    address write_inst_regs(const char* assembly_format, YuhuRegister reg1);
+
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
@@ -271,6 +273,14 @@ public:
     address write_inst_cset(YuhuRegister reg, YuhuCond cond);
 
     address write_inst_csel(YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuCond cond);
+
+    address write_inst_get_fpsr(YuhuRegister reg) {
+        return write_inst_regs("mrs %s, fpsr", reg);
+    }
+
+    address write_inst_clear_fpsr() {
+        return write_inst("msr fpsr, xzr");
+    }
 
     address write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src);
     address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuAddress src);

@@ -168,6 +168,15 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatReg
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1));
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2) {
     char buffer[50];
     #pragma clang diagnostic push
