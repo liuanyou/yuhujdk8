@@ -1072,6 +1072,148 @@ void YuhuTemplateTable::lushr()
     __ write_inst("lsrv x0, x1, x0");
 }
 
+void YuhuTemplateTable::iinc()
+{
+    transition(vtos, vtos);
+    __ write_insts_load_signed_byte(__ x1, at_bcp(2)); // get constant
+    locals_index(__ x2);
+    __ write_inst_ldr(__ x0, iaddress(__ x2));
+    __ write_inst("add w0, w0, w1");
+    __ write_inst_str(__ x0, iaddress(__ x2));
+}
+
+void YuhuTemplateTable::convert()
+{
+    // Checking
+#ifdef ASSERT
+    {
+        TosState tos_in  = ilgl;
+        TosState tos_out = ilgl;
+        switch (bytecode()) {
+            case Bytecodes::_i2l: // fall through
+            case Bytecodes::_i2f: // fall through
+            case Bytecodes::_i2d: // fall through
+            case Bytecodes::_i2b: // fall through
+            case Bytecodes::_i2c: // fall through
+            case Bytecodes::_i2s: tos_in = itos; break;
+            case Bytecodes::_l2i: // fall through
+            case Bytecodes::_l2f: // fall through
+            case Bytecodes::_l2d: tos_in = ltos; break;
+            case Bytecodes::_f2i: // fall through
+            case Bytecodes::_f2l: // fall through
+            case Bytecodes::_f2d: tos_in = ftos; break;
+            case Bytecodes::_d2i: // fall through
+            case Bytecodes::_d2l: // fall through
+            case Bytecodes::_d2f: tos_in = dtos; break;
+            default             : ShouldNotReachHere();
+        }
+        switch (bytecode()) {
+            case Bytecodes::_l2i: // fall through
+            case Bytecodes::_f2i: // fall through
+            case Bytecodes::_d2i: // fall through
+            case Bytecodes::_i2b: // fall through
+            case Bytecodes::_i2c: // fall through
+            case Bytecodes::_i2s: tos_out = itos; break;
+            case Bytecodes::_i2l: // fall through
+            case Bytecodes::_f2l: // fall through
+            case Bytecodes::_d2l: tos_out = ltos; break;
+            case Bytecodes::_i2f: // fall through
+            case Bytecodes::_l2f: // fall through
+            case Bytecodes::_d2f: tos_out = ftos; break;
+            case Bytecodes::_i2d: // fall through
+            case Bytecodes::_l2d: // fall through
+            case Bytecodes::_f2d: tos_out = dtos; break;
+            default             : ShouldNotReachHere();
+        }
+        transition(tos_in, tos_out);
+    }
+#endif // ASSERT
+    // static const int64_t is_nan = 0x8000000000000000L;
+
+    // Conversion
+    switch (bytecode()) {
+        case Bytecodes::_i2l:
+            __ write_inst("sxtw x0, w0");
+            break;
+        case Bytecodes::_i2f:
+            __ write_inst("scvtf s0, w0");
+            break;
+        case Bytecodes::_i2d:
+            __ write_inst("scvtf d0, w0");
+            break;
+        case Bytecodes::_i2b:
+            __ write_inst("sxtb w0, w0");
+            break;
+        case Bytecodes::_i2c:
+            __ write_inst("uxth w0, w0");
+            break;
+        case Bytecodes::_i2s:
+            __ write_inst("sxth w0, w0");
+            break;
+        case Bytecodes::_l2i:
+            __ write_inst("ubfm x0, x0, #0, #31 ");
+            break;
+        case Bytecodes::_l2f:
+            __ write_inst("scvtf s0, x0");
+            break;
+        case Bytecodes::_l2d:
+            __ write_inst("scvtf d0, x0");
+            break;
+        case Bytecodes::_f2i:
+        {
+            YuhuLabel L_Okay;
+            __ write_inst_clear_fpsr();
+            __ write_inst("fcvtzs w0, s0");
+            __ write_inst_get_fpsr(__ x1);
+            __ write_inst_cbz(__ w1, L_Okay);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::f2i));
+            __ pin_label(L_Okay);
+        }
+            break;
+        case Bytecodes::_f2l:
+        {
+            YuhuLabel L_Okay;
+            __ write_inst_clear_fpsr();
+            __ write_inst("fcvtzs x0, s0");
+            __ write_inst_get_fpsr(__ x1);
+            __ write_inst_cbz(__ w1, L_Okay);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::f2l));
+            __ pin_label(L_Okay);
+        }
+            break;
+        case Bytecodes::_f2d:
+            __ write_inst("fcvt d0, s0");
+            break;
+        case Bytecodes::_d2i:
+        {
+            YuhuLabel L_Okay;
+            __ write_inst_clear_fpsr();
+            __ write_inst("fcvtzs w0, d0");
+            __ write_inst_get_fpsr(__ x1);
+            __ write_inst_cbz(__ w1, L_Okay);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::d2i));
+            __ pin_label(L_Okay);
+        }
+            break;
+        case Bytecodes::_d2l:
+        {
+            YuhuLabel L_Okay;
+            __ write_inst_clear_fpsr();
+            __ write_inst("fcvtzs x0, d0");
+            __ write_inst_get_fpsr(__ x1);
+            __ write_inst_cbz(__ w1, L_Okay);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::d2l));
+            __ pin_label(L_Okay);
+        }
+            break;
+        case Bytecodes::_d2f:
+            __ write_inst("fcvt s0, d0");
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

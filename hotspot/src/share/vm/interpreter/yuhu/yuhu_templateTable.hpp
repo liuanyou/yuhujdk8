@@ -167,6 +167,9 @@ private:
     static void lshl();
     static void lshr();
     static void lushr();
+
+    static void iinc();
+    static void convert();
 public:
     static void initialize();
 
