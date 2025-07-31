@@ -136,6 +136,15 @@ private:
     static void castore();
     static void sastore();
 
+    static void pop();
+    static void pop2();
+    static void dup();
+    static void dup_x1();
+    static void dup_x2();
+    static void dup2();
+    static void dup2_x1();
+    static void dup2_x2();
+    static void swap();
 public:
     static void initialize();
 

@@ -80,17 +80,17 @@ static inline YuhuAddress at_tos_p2() {
     return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(2));
 }
 
-//static inline YuhuAddress at_tos_p3() {
-//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(3));
-//}
+static inline YuhuAddress at_tos_p3() {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(3));
+}
 
-//static inline YuhuAddress at_tos_p4() {
-//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(4));
-//}
+static inline YuhuAddress at_tos_p4() {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(4));
+}
 
-//static inline YuhuAddress at_tos_p5() {
-//    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(5));
-//}
+static inline YuhuAddress at_tos_p5() {
+    return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(5));
+}
 
 // Individual instructions
 
@@ -751,6 +751,114 @@ void YuhuTemplateTable::castore()
 void YuhuTemplateTable::sastore()
 {
     castore();
+}
+
+void YuhuTemplateTable::pop()
+{
+    transition(vtos, vtos);
+    __ write_inst("add x20, x20, #%d", YuhuInterpreter::stackElementSize);
+}
+
+void YuhuTemplateTable::pop2()
+{
+    transition(vtos, vtos);
+    __ write_inst("add x20, x20, #%d", 2 * YuhuInterpreter::stackElementSize);
+}
+
+void YuhuTemplateTable::dup()
+{
+    transition(vtos, vtos);
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x20, 0));
+    __ write_inst_push(__ x0);
+    // stack: ..., a, a
+}
+
+void YuhuTemplateTable::dup_x1()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b
+    __ write_inst_ldr(__ x0, at_tos());  // load b
+    __ write_inst_ldr(__ x2, at_tos_p1());  // load a
+    __ write_inst_str(__ x0, at_tos_p1());  // store b
+    __ write_inst_str(__ x2, at_tos());  // store a
+    __ write_inst_push(__ x0);                  // push b
+    // stack: ..., b, a, b
+}
+
+void YuhuTemplateTable::dup_x2()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b, c
+    __ write_inst_ldr(__ x0, at_tos());  // load c
+    __ write_inst_ldr(__ x2, at_tos_p2());  // load a
+    __ write_inst_str(__ x0, at_tos_p2());  // store c in a
+    __ write_inst_push(__ x0);      // push c
+    // stack: ..., c, b, c, c
+    __ write_inst_ldr(__ x0, at_tos_p2());  // load b
+    __ write_inst_str(__ x2, at_tos_p2());  // store a in b
+    // stack: ..., c, a, c, c
+    __ write_inst_str(__ x0, at_tos_p1());  // store b in c
+    // stack: ..., c, a, b, c
+}
+
+void YuhuTemplateTable::dup2()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b
+    __ write_inst_ldr(__ x0, at_tos_p1());  // load a
+    __ write_inst_push(__ x0);                  // push a
+    __ write_inst_ldr(__ x0, at_tos_p1());  // load b
+    __ write_inst_push(__ x0);                  // push b
+    // stack: ..., a, b, a, b
+}
+
+void YuhuTemplateTable::dup2_x1()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b, c
+    __ write_inst_ldr(__ x2, at_tos());  // load c
+    __ write_inst_ldr(__ x0, at_tos_p1());  // load b
+    __ write_inst_push(__ x0);                  // push b
+    __ write_inst_push(__ x2);                  // push c
+    // stack: ..., a, b, c, b, c
+    __ write_inst_str(__ x2, at_tos_p3());  // store c in b
+    // stack: ..., a, c, c, b, c
+    __ write_inst_ldr(__ x2, at_tos_p4());  // load a
+    __ write_inst_str(__ x2, at_tos_p2());  // store a in 2nd c
+    // stack: ..., a, c, a, b, c
+    __ write_inst_str(__ x0, at_tos_p4());  // store b in a
+    // stack: ..., b, c, a, b, c
+}
+
+void YuhuTemplateTable::dup2_x2()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b, c, d
+    __ write_inst_ldr(__ x2, at_tos());  // load d
+    __ write_inst_ldr(__ x0, at_tos_p1());  // load c
+    __ write_inst_push(__ x0)            ;      // push c
+    __ write_inst_push(__ x2);                  // push d
+    // stack: ..., a, b, c, d, c, d
+    __ write_inst_ldr(__ x0, at_tos_p4());  // load b
+    __ write_inst_str(__ x0, at_tos_p2());  // store b in d
+    __ write_inst_str(__ x2, at_tos_p4());  // store d in b
+    // stack: ..., a, d, c, b, c, d
+    __ write_inst_ldr(__ x2, at_tos_p5());  // load a
+    __ write_inst_ldr(__ x0, at_tos_p3());  // load c
+    __ write_inst_str(__ x2, at_tos_p3());  // store a in c
+    __ write_inst_str(__ x0, at_tos_p5());  // store c in a
+    // stack: ..., c, d, a, b, c, d
+}
+
+void YuhuTemplateTable::swap()
+{
+    transition(vtos, vtos);
+    // stack: ..., a, b
+    __ write_inst_ldr(__ x2, at_tos_p1());  // load a
+    __ write_inst_ldr(__ x0, at_tos());  // load b
+    __ write_inst_str(__ x2, at_tos());  // store a in b
+    __ write_inst_str(__ x0, at_tos_p1());  // store b in a
+    // stack: ..., b, a
 }
 
 static void do_oop_store(YuhuMacroAssembler* _masm,
