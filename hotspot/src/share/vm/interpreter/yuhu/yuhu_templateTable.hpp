@@ -78,6 +78,7 @@ private:
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(            ), char filler );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg     ), int arg     );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(bool arg    ), bool arg    );
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Operation op), Operation op);
 
     // bytecodes
     static void nop();
@@ -145,6 +146,13 @@ private:
     static void dup2_x1();
     static void dup2_x2();
     static void swap();
+
+    static void iop2(Operation op);
+    static void lop2(Operation op);
+    static void fop2(Operation op);
+    static void dop2(Operation op);
+
+    static void lmul();
 public:
     static void initialize();
 

@@ -51,6 +51,10 @@ void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosSta
     def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)arg);
 }
 
+void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Operation op), Operation op) {
+    def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)op);
+}
+
 void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg), int arg) {
     // should factor out these constants
     const int ubcp = 1 << YuhuTemplate::uses_bcp_bit;
@@ -183,18 +187,18 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_dup2_x1             , ____|____|____|____, vtos, vtos, dup2_x1             ,  _           );
     def(Bytecodes::_dup2_x2             , ____|____|____|____, vtos, vtos, dup2_x2             ,  _           );
     def(Bytecodes::_swap                , ____|____|____|____, vtos, vtos, swap                ,  _           );
-//    def(Bytecodes::_iadd                , ____|____|____|____, itos, itos, iop2                , add          );
-//    def(Bytecodes::_ladd                , ____|____|____|____, ltos, ltos, lop2                , add          );
-//    def(Bytecodes::_fadd                , ____|____|____|____, ftos, ftos, fop2                , add          );
-//    def(Bytecodes::_dadd                , ____|____|____|____, dtos, dtos, dop2                , add          );
-//    def(Bytecodes::_isub                , ____|____|____|____, itos, itos, iop2                , sub          );
-//    def(Bytecodes::_lsub                , ____|____|____|____, ltos, ltos, lop2                , sub          );
-//    def(Bytecodes::_fsub                , ____|____|____|____, ftos, ftos, fop2                , sub          );
-//    def(Bytecodes::_dsub                , ____|____|____|____, dtos, dtos, dop2                , sub          );
-//    def(Bytecodes::_imul                , ____|____|____|____, itos, itos, iop2                , mul          );
-//    def(Bytecodes::_lmul                , ____|____|____|____, ltos, ltos, lmul                ,  _           );
-//    def(Bytecodes::_fmul                , ____|____|____|____, ftos, ftos, fop2                , mul          );
-//    def(Bytecodes::_dmul                , ____|____|____|____, dtos, dtos, dop2                , mul          );
+    def(Bytecodes::_iadd                , ____|____|____|____, itos, itos, iop2                , add          );
+    def(Bytecodes::_ladd                , ____|____|____|____, ltos, ltos, lop2                , add          );
+    def(Bytecodes::_fadd                , ____|____|____|____, ftos, ftos, fop2                , add          );
+    def(Bytecodes::_dadd                , ____|____|____|____, dtos, dtos, dop2                , add          );
+    def(Bytecodes::_isub                , ____|____|____|____, itos, itos, iop2                , sub          );
+    def(Bytecodes::_lsub                , ____|____|____|____, ltos, ltos, lop2                , sub          );
+    def(Bytecodes::_fsub                , ____|____|____|____, ftos, ftos, fop2                , sub          );
+    def(Bytecodes::_dsub                , ____|____|____|____, dtos, dtos, dop2                , sub          );
+    def(Bytecodes::_imul                , ____|____|____|____, itos, itos, iop2                , mul          );
+    def(Bytecodes::_lmul                , ____|____|____|____, ltos, ltos, lmul                ,  _           );
+    def(Bytecodes::_fmul                , ____|____|____|____, ftos, ftos, fop2                , mul          );
+    def(Bytecodes::_dmul                , ____|____|____|____, dtos, dtos, dop2                , mul          );
 //    def(Bytecodes::_idiv                , ____|____|____|____, itos, itos, idiv                ,  _           );
 //    def(Bytecodes::_ldiv                , ____|____|____|____, ltos, ltos, ldiv                ,  _           );
 //    def(Bytecodes::_fdiv                , ____|____|____|____, ftos, ftos, fop2                , div          );

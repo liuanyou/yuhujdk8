@@ -861,6 +861,112 @@ void YuhuTemplateTable::swap()
     // stack: ..., b, a
 }
 
+void YuhuTemplateTable::iop2(Operation op)
+{
+    transition(itos, itos);
+    // r0 <== r1 op r0
+    __ write_inst_pop_i(__ x1);
+    switch (op) {
+        case add  : __ write_inst("add w0, w1, w0"); break;
+        case sub  : __ write_inst("sub w0, w1, w0"); break;
+        case mul  : __ write_inst("mul w0, w1, w0"); break;
+        case _and : __ write_inst("and w0, w1, w0"); break;
+        case _or  : __ write_inst("orr w0, w1, w0"); break;
+        case _xor : __ write_inst("eor w0, w1, w0"); break;
+        case shl  : __ write_inst("lslv w0, w1, w0"); break;
+        case shr  : __ write_inst("asrv w0, w1, w0"); break;
+        case ushr : __ write_inst("lsrv w0, w1, w0"); break;
+        default   : ShouldNotReachHere();
+    }
+}
+
+void YuhuTemplateTable::lop2(Operation op)
+{
+    transition(ltos, ltos);
+    // r0 <== r1 op r0
+    __ write_inst_pop_l(__ x1);
+    switch (op) {
+        case add  : __ write_inst("add x0, x1, x0"); break;
+        case sub  : __ write_inst("sub x0, x1, x0"); break;
+        case mul  : __ write_inst("mul x0, x1, x0"); break;
+        case _and : __ write_inst("and x0, x1, x0"); break;
+        case _or  : __ write_inst("orr x0, x1, x0"); break;
+        case _xor : __ write_inst("eor x0, x1, x0"); break;
+        default   : ShouldNotReachHere();
+    }
+}
+
+void YuhuTemplateTable::fop2(Operation op)
+{
+    transition(ftos, ftos);
+    switch (op) {
+        case add:
+            // n.b. use ldrd because this is a 64 bit slot
+            __ write_inst_pop_f(__ s1);
+            __ write_inst("fadd s0, s1, s0");
+            break;
+        case sub:
+            __ write_inst_pop_f(__ s1);
+            __ write_inst("fsub s0, s1, s0");
+            break;
+        case mul:
+            __ write_inst_pop_f(__ s1);
+            __ write_inst("fmul s0, s1, s0");
+            break;
+        case div:
+            __ write_inst_pop_f(__ s1);
+            __ write_inst("fdiv s0, s1, s0");
+            break;
+        case rem:
+            __ write_inst("fmov s1, s0");
+            __ write_inst_pop_f(__ s0);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::frem));
+            break;
+        default:
+            ShouldNotReachHere();
+            break;
+    }
+}
+
+void YuhuTemplateTable::dop2(Operation op)
+{
+    transition(dtos, dtos);
+    switch (op) {
+        case add:
+            // n.b. use ldrd because this is a 64 bit slot
+            __ write_inst_pop_d(__ d1);
+            __ write_inst("fadd d0, d1, d0");
+            break;
+        case sub:
+            __ write_inst_pop_d(__ d1);
+            __ write_inst("fsub d0, d1, d0");
+            break;
+        case mul:
+            __ write_inst_pop_d(__ d1);
+            __ write_inst("fmul d0, d1, d0");
+            break;
+        case div:
+            __ write_inst_pop_d(__ d1);
+            __ write_inst("fdiv d0, d1, d0");
+            break;
+        case rem:
+            __ write_inst("fmov d1, d0");
+            __ write_inst_pop_d(__ d0);
+            __ write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::drem));
+            break;
+        default:
+            ShouldNotReachHere();
+            break;
+    }
+}
+
+void YuhuTemplateTable::lmul()
+{
+    transition(ltos, ltos);
+    __ write_inst_pop_l(__ x1);
+    __ write_inst("mul x0, x0, x1");
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
