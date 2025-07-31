@@ -186,6 +186,15 @@ address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuReg
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuRegister reg4) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(reg3), reg_name(reg4));
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_imms(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm1, int imm2) {
     char buffer[50];
     #pragma clang diagnostic push
@@ -2368,6 +2377,66 @@ address YuhuMacroAssembler::write_insts_store_check_part_2(YuhuRegister obj) {
         write_inst("membar ISHST");
     }
     write_inst_regs("strb wzr, [%s, %s]", obj, x8);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_corrected_idivl(YuhuRegister result, YuhuRegister ra, YuhuRegister rb,
+                                    bool want_remainder, YuhuRegister scratch)
+{
+    // Full implementation of Java idiv and irem.  The function
+    // returns the (pc) offset of the div instruction - may be needed
+    // for implicit exceptions.
+    //
+    // constraint : ra/rb =/= scratch
+    //         normal case
+    //
+    // input : ra: dividend
+    //         rb: divisor
+    //
+    // result: either
+    //         quotient  (= ra idiv rb)
+    //         remainder (= ra irem rb)
+
+    assert(ra != scratch && rb != scratch, "reg cannot be scratch");
+
+//    int idivl_offset = offset();
+    if (! want_remainder) {
+        write_inst_regs("sdiv %s, %s, %s", w_reg(result), w_reg(ra), w_reg(rb));
+    } else {
+        write_inst_regs("sdiv %s, %s, %s", w_reg(scratch), w_reg(ra), w_reg(rb));
+        write_inst_regs("msub %s, %s, %s, %s", w_reg(result), w_reg(scratch), w_reg(rb), w_reg(ra));
+    }
+
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_corrected_idivq(YuhuRegister result, YuhuRegister ra, YuhuRegister rb,
+                                    bool want_remainder, YuhuRegister scratch)
+{
+    // Full implementation of Java ldiv and lrem.  The function
+    // returns the (pc) offset of the div instruction - may be needed
+    // for implicit exceptions.
+    //
+    // constraint : ra/rb =/= scratch
+    //         normal case
+    //
+    // input : ra: dividend
+    //         rb: divisor
+    //
+    // result: either
+    //         quotient  (= ra idiv rb)
+    //         remainder (= ra irem rb)
+
+    assert(ra != scratch && rb != scratch, "reg cannot be scratch");
+
+//    int idivq_offset = offset();
+    if (! want_remainder) {
+        write_inst_regs("sdiv %s, %s, %s", result, ra, rb);
+    } else {
+        write_inst_regs("sdiv %s, %s, %s", scratch, ra, rb);
+        write_inst_regs("msub %s, %s, %s, %s", result, scratch, rb, ra);
+    }
+
     return current_pc();
 }
 

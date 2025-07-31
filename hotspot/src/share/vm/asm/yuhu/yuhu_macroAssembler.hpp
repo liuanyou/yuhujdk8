@@ -193,6 +193,8 @@ public:
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3);
 
+    address write_inst_regs(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, YuhuRegister reg4);
+
     address write_inst_imms(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm1, int imm2);
 
     address write_inst_add(YuhuRegister reg, YuhuRegister base, YuhuRegister index, YuhuOperation op, int shift);
@@ -516,6 +518,12 @@ public:
 
     address write_insts_store_check_part_1(YuhuRegister obj);
     address write_insts_store_check_part_2(YuhuRegister obj);
+
+    address write_insts_corrected_idivl(YuhuRegister result, YuhuRegister ra, YuhuRegister rb,
+                        bool want_remainder, YuhuRegister tmp = x8);
+
+    address write_insts_corrected_idivq(YuhuRegister result, YuhuRegister ra, YuhuRegister rb,
+                        bool want_remainder, YuhuRegister tmp = x8);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
