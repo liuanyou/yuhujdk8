@@ -181,6 +181,10 @@ private:
     static void if_0cmp   (Condition cc);
     static void if_icmp   (Condition cc);
     static void if_acmp   (Condition cc);
+
+    static void _goto();
+    static void jsr();
+    static void ret();
 public:
     static void initialize();
 

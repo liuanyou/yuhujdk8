@@ -88,6 +88,16 @@ void YuhuTemplateTable::double_cmp(int unordered_result) {
     float_cmp(false, unordered_result);
 }
 
+void YuhuTemplateTable::_goto() {
+    transition(vtos, vtos);
+    branch(false, false);
+}
+
+void YuhuTemplateTable::jsr() {
+    transition(vtos, vtos);       // result is not an oop, so do not transition to atos
+    branch(true, false);
+}
+
 void YuhuTemplateTable::initialize() {
     if (_is_initialized) return;
 
@@ -271,9 +281,9 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_if_icmple           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less_equal   );
     def(Bytecodes::_if_acmpeq           , ubcp|____|clvm|____, atos, vtos, if_acmp             , equal        );
     def(Bytecodes::_if_acmpne           , ubcp|____|clvm|____, atos, vtos, if_acmp             , not_equal    );
-//    def(Bytecodes::_goto                , ubcp|disp|clvm|____, vtos, vtos, _goto               ,  _           );
-//    def(Bytecodes::_jsr                 , ubcp|disp|____|____, vtos, vtos, jsr                 ,  _           ); // result is not an oop, so do not transition to atos
-//    def(Bytecodes::_ret                 , ubcp|disp|____|____, vtos, vtos, ret                 ,  _           );
+    def(Bytecodes::_goto                , ubcp|disp|clvm|____, vtos, vtos, _goto               ,  _           );
+    def(Bytecodes::_jsr                 , ubcp|disp|____|____, vtos, vtos, jsr                 ,  _           ); // result is not an oop, so do not transition to atos
+    def(Bytecodes::_ret                 , ubcp|disp|____|____, vtos, vtos, ret                 ,  _           );
 //    def(Bytecodes::_tableswitch         , ubcp|disp|____|____, itos, vtos, tableswitch         ,  _           );
 //    def(Bytecodes::_lookupswitch        , ubcp|disp|____|____, itos, itos, lookupswitch        ,  _           );
 //    def(Bytecodes::_ireturn             , ____|disp|clvm|____, itos, itos, _return             , itos         );

@@ -1552,6 +1552,24 @@ void YuhuTemplateTable::if_acmp(Condition cc)
 //    __ profile_not_taken_branch(r0);
 }
 
+void YuhuTemplateTable::ret() {
+    transition(vtos, vtos);
+    // We might be moving to a safepoint.  The thread which calls
+    // Interpreter::notice_safepoints() will effectively flush its cache
+    // when it makes a system call, but we need to do something to
+    // ensure that we see the changed dispatch table.
+    __ write_inst("dmb ishld");
+
+    locals_index(__ x1);
+    __ write_inst_ldr(__ x1, aaddress(__ x1)); // get return bci, compute return bcp
+    // TODO
+//    __ profile_ret(r1, r2);
+    __ write_inst_ldr(__ x22, YuhuAddress(__ x12, Method::const_offset()));
+    __ write_insts_lea(__ x22, YuhuAddress(__ x22, __ x1));
+    __ write_inst("add x22, x22, #%d", in_bytes(ConstMethod::codes_offset()));
+    __ write_insts_dispatch_next(vtos);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
