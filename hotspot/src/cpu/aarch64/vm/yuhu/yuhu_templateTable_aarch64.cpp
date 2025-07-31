@@ -967,6 +967,34 @@ void YuhuTemplateTable::lmul()
     __ write_inst("mul x0, x0, x1");
 }
 
+void YuhuTemplateTable::idiv()
+{
+    transition(itos, itos);
+    // explicitly check for div0
+    YuhuLabel no_div0;
+    __ write_inst_cbnz(__ w0, no_div0);
+    __ write_insts_mov_imm64(__ x8, (uint64_t) YuhuInterpreter::_throw_ArithmeticException_entry);
+    __ write_inst_br(__ x8);
+    __ pin_label(no_div0);
+    __ write_inst_pop_i(__ x1);
+    // r0 <== r1 idiv r0
+    __ write_insts_corrected_idivl(__ x0, __ x1, __ x0, /* want_remainder */ false);
+}
+
+void YuhuTemplateTable::ldiv()
+{
+    transition(ltos, ltos);
+    // explicitly check for div0
+    YuhuLabel no_div0;
+    __ write_inst_cbnz(__ x0, no_div0);
+    __ write_insts_mov_imm64(__ x8, (uint64_t) YuhuInterpreter::_throw_ArithmeticException_entry);
+    __ write_inst_br(__ x8);
+    __ pin_label(no_div0);
+    __ write_inst_pop_l(__ x1);
+    // r0 <== r1 ldiv r0
+    __ corrected_idivq(r0, r1, r0, /* want_remainder */ false);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

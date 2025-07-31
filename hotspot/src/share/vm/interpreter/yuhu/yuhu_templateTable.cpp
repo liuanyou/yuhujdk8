@@ -199,10 +199,10 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_lmul                , ____|____|____|____, ltos, ltos, lmul                ,  _           );
     def(Bytecodes::_fmul                , ____|____|____|____, ftos, ftos, fop2                , mul          );
     def(Bytecodes::_dmul                , ____|____|____|____, dtos, dtos, dop2                , mul          );
-//    def(Bytecodes::_idiv                , ____|____|____|____, itos, itos, idiv                ,  _           );
-//    def(Bytecodes::_ldiv                , ____|____|____|____, ltos, ltos, ldiv                ,  _           );
-//    def(Bytecodes::_fdiv                , ____|____|____|____, ftos, ftos, fop2                , div          );
-//    def(Bytecodes::_ddiv                , ____|____|____|____, dtos, dtos, dop2                , div          );
+    def(Bytecodes::_idiv                , ____|____|____|____, itos, itos, idiv                ,  _           );
+    def(Bytecodes::_ldiv                , ____|____|____|____, ltos, ltos, ldiv                ,  _           );
+    def(Bytecodes::_fdiv                , ____|____|____|____, ftos, ftos, fop2                , div          );
+    def(Bytecodes::_ddiv                , ____|____|____|____, dtos, dtos, dop2                , div          );
 //    def(Bytecodes::_irem                , ____|____|____|____, itos, itos, irem                ,  _           );
 //    def(Bytecodes::_lrem                , ____|____|____|____, ltos, ltos, lrem                ,  _           );
 //    def(Bytecodes::_frem                , ____|____|____|____, ftos, ftos, fop2                , rem          );

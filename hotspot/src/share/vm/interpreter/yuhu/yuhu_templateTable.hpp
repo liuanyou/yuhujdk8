@@ -153,6 +153,8 @@ private:
     static void dop2(Operation op);
 
     static void lmul();
+    static void idiv();
+    static void ldiv();
 public:
     static void initialize();
 
