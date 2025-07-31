@@ -55,6 +55,10 @@ void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosSta
     def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)op);
 }
 
+void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Condition cc), Condition cc) {
+    def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)cc);
+}
+
 void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg), int arg) {
     // should factor out these constants
     const int ubcp = 1 << YuhuTemplate::uses_bcp_bit;
@@ -72,6 +76,16 @@ void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosSta
     // setup entry
     t->initialize(flags, in, out, gen, arg);
     assert(t->bytecode() == code, "just checkin'");
+}
+
+void YuhuTemplateTable::float_cmp(int unordered_result) {
+    transition(ftos, itos);
+    float_cmp(true, unordered_result);
+}
+
+void YuhuTemplateTable::double_cmp(int unordered_result) {
+    transition(dtos, itos);
+    float_cmp(false, unordered_result);
 }
 
 void YuhuTemplateTable::initialize() {
@@ -239,17 +253,16 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_i2b                 , ____|____|____|____, itos, itos, convert             ,  _           );
     def(Bytecodes::_i2c                 , ____|____|____|____, itos, itos, convert             ,  _           );
     def(Bytecodes::_i2s                 , ____|____|____|____, itos, itos, convert             ,  _           );
-//    def(Bytecodes::_lcmp                , ____|____|____|____, ltos, itos, lcmp                ,  _           );
-//    def(Bytecodes::_fcmpl               , ____|____|____|____, ftos, itos, float_cmp           , -1           );
-//    def(Bytecodes::_fcmpg               , ____|____|____|____, ftos, itos, float_cmp           ,  1           );
-//    def(Bytecodes::_dcmpl               , ____|____|____|____, dtos, itos, double_cmp          , -1           );
-//    def(Bytecodes::_dcmpg               , ____|____|____|____, dtos, itos, double_cmp          ,  1           );
-//    def(Bytecodes::_ifeq                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , equal        );
-//    def(Bytecodes::_ifne                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , not_equal    );
-//    def(Bytecodes::_iflt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less         );
-//    def(Bytecodes::_ifge                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater_equal);
-//    def(Bytecodes::_ifgt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater      );
-//    def(Bytecodes::_ifle                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less_equal   );
+    def(Bytecodes::_lcmp                , ____|____|____|____, ltos, itos, lcmp                ,  _           );
+    def(Bytecodes::_fcmpl               , ____|____|____|____, ftos, itos, float_cmp           , -1           );
+    def(Bytecodes::_fcmpg               , ____|____|____|____, ftos, itos, float_cmp           ,  1           );
+    def(Bytecodes::_dcmpl               , ____|____|____|____, dtos, itos, double_cmp          , -1           );
+    def(Bytecodes::_dcmpg               , ____|____|____|____, dtos, itos, double_cmp          ,  1           );
+    def(Bytecodes::_ifne                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , not_equal    );
+    def(Bytecodes::_iflt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less         );
+    def(Bytecodes::_ifge                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater_equal);
+    def(Bytecodes::_ifgt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater      );
+    def(Bytecodes::_ifle                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less_equal   );
 //    def(Bytecodes::_if_icmpeq           , ubcp|____|clvm|____, itos, vtos, if_icmp             , equal        );
 //    def(Bytecodes::_if_icmpne           , ubcp|____|clvm|____, itos, vtos, if_icmp             , not_equal    );
 //    def(Bytecodes::_if_icmplt           , ubcp|____|clvm|____, itos, vtos, if_icmp             , less         );

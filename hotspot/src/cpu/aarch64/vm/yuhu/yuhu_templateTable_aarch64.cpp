@@ -92,6 +92,19 @@ static inline YuhuAddress at_tos_p5() {
     return YuhuAddress(YuhuMacroAssembler::x20,  YuhuInterpreter::expr_offset_in_bytes(5));
 }
 
+static YuhuMacroAssembler::YuhuCond j_not(YuhuTemplateTable::Condition cc) {
+    switch (cc) {
+        case YuhuTemplateTable::equal        : return YuhuMacroAssembler::ne;
+        case YuhuTemplateTable::not_equal    : return YuhuMacroAssembler::eq;
+        case YuhuTemplateTable::less         : return YuhuMacroAssembler::ge;
+        case YuhuTemplateTable::less_equal   : return YuhuMacroAssembler::gt;
+        case YuhuTemplateTable::greater      : return YuhuMacroAssembler::le;
+        case YuhuTemplateTable::greater_equal: return YuhuMacroAssembler::lt;
+    }
+    ShouldNotReachHere();
+    return YuhuMacroAssembler::eq;
+}
+
 // Individual instructions
 
 void YuhuTemplateTable::nop() {
@@ -1212,6 +1225,303 @@ void YuhuTemplateTable::convert()
         default:
             ShouldNotReachHere();
     }
+}
+
+void YuhuTemplateTable::lcmp()
+{
+    transition(ltos, itos);
+    YuhuLabel done;
+    __ write_inst_pop_l(__ x1);
+    __ write_inst("cmp x1, x0");
+    __ write_insts_mov_imm64(__ x0, (u_int64_t)-1L);
+    __ write_inst_b(__ lt, done);
+    // __ mov(r0, 1UL);
+    // __ csel(r0, r0, zr, Assembler::NE);
+    // and here is a faster way
+    __ write_inst_csinc(__ x0, __ xzr, __ xzr, __ eq);
+    __ pin_label(done);
+}
+
+void YuhuTemplateTable::float_cmp(bool is_float, int unordered_result)
+{
+    YuhuLabel done;
+    if (is_float) {
+        // XXX get rid of pop here, use ... reg, mem32
+        __ write_inst_pop_f(__ s1);
+        __ write_inst("fcmp s1, s0");
+    } else {
+        // XXX get rid of pop here, use ... reg, mem64
+        __ write_inst_pop_d(__ d0);
+        __ write_inst("fcmp d1, d0");
+    }
+    if (unordered_result < 0) {
+        // we want -1 for unordered or less than, 0 for equal and 1 for
+        // greater than.
+        __ write_insts_mov_imm64(__ x0, (u_int64_t)-1L);
+        // for FP LT tests less than or unordered
+        __ write_inst_b(__ lt, done);
+        // install 0 for EQ otherwise 1
+        __ write_inst_csinc(__ x0, __ xzr, __ xzr, __ eq);
+    } else {
+        // we want -1 for less than, 0 for equal and 1 for unordered or
+        // greater than.
+        __ write_insts_mov_imm64(__ x0, 1L);
+        // for FP HI tests greater than or unordered
+        __ write_inst_b(__ hi, done);
+        // install 0 for EQ otherwise ~0
+        __ write_inst_csinv(__ x0, __ xzr, __ xzr, __ eq);
+
+    }
+    __ pin_label(done);
+}
+
+void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
+{
+    // We might be moving to a safepoint.  The thread which calls
+    // Interpreter::notice_safepoints() will effectively flush its cache
+    // when it makes a system call, but we need to do something to
+    // ensure that we see the changed dispatch table.
+    __ write_inst("dmb ishld");
+
+    // TODO
+//    __ profile_taken_branch(r0, r1);
+    const ByteSize be_offset = MethodCounters::backedge_counter_offset() +
+                               InvocationCounter::counter_offset();
+    const ByteSize inv_offset = MethodCounters::invocation_counter_offset() +
+                                InvocationCounter::counter_offset();
+
+    // load branch displacement
+    if (!is_wide) {
+        __ write_inst_ldrh(__ x2, at_bcp(1));
+        __ write_inst("rev16 x2, x2");
+        // sign extend the 16 bit value in r2
+        __ write_inst("sbfm x2, x2, #0, #15");
+    } else {
+        __ write_inst_ldr(__ w2, at_bcp(1));
+        __ write_inst("rev w2, w2");
+        // sign extend the 32 bit value in r2
+        __ write_inst("sbfm x2, x2, #0, #31");
+    }
+
+    // Handle all the JSR stuff here, then exit.
+    // It's much shorter and cleaner than intermingling with the non-JSR
+    // normal-branch stuff occurring below.
+
+    if (is_jsr) {
+        // Pre-load the next target bytecode into rscratch1
+        __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x22, __ x2));
+        // compute return address as bci
+        __ write_inst_ldr(__ x9, YuhuAddress(__ x12, Method::const_offset()));
+        __ write_inst("add x9, x9, #%d", in_bytes(ConstMethod::codes_offset()) - (is_wide ? 5 : 3));
+        __ write_inst("sub x1, x22, x9");
+        __ write_inst_push_i(__ x1);
+        // Adjust the bcp by the 16-bit displacement in r2
+        __ write_inst("add x22, x22, x2");
+        __ write_insts_dispatch_only(vtos);
+        return;
+    }
+
+    // Normal (non-jsr) branch handling
+
+    // Adjust the bcp by the displacement in r2
+    __ write_inst("add x22, x22, x2");
+
+    assert(UseLoopCounter || !UseOnStackReplacement,
+           "on-stack-replacement requires loop counters");
+    // TODO
+//    Label backedge_counter_overflow;
+//    Label profile_method;
+//    Label dispatch;
+//    if (UseLoopCounter) {
+//        // increment backedge counter for backward branches
+//        // r0: MDO
+//        // w1: MDO bumped taken-count
+//        // r2: target offset
+//        __ cmp(r2, zr);
+//        __ br(Assembler::GT, dispatch); // count only if backward branch
+//
+//        // ECN: FIXME: This code smells
+//        // check if MethodCounters exists
+//        Label has_counters;
+//        __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
+//        __ cbnz(rscratch1, has_counters);
+//        __ push(r0);
+//        __ push(r1);
+//        __ push(r2);
+//        __ call_VM(noreg, CAST_FROM_FN_PTR(address,
+//                                           InterpreterRuntime::build_method_counters), rmethod);
+//        __ pop(r2);
+//        __ pop(r1);
+//        __ pop(r0);
+//        __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
+//        __ cbz(rscratch1, dispatch); // No MethodCounters allocated, OutOfMemory
+//        __ bind(has_counters);
+//
+//        if (TieredCompilation) {
+//            Label no_mdo;
+//            int increment = InvocationCounter::count_increment;
+//            int mask = ((1 << Tier0BackedgeNotifyFreqLog) - 1) << InvocationCounter::count_shift;
+//            if (ProfileInterpreter) {
+//                // Are we profiling?
+//                __ ldr(r1, Address(rmethod, in_bytes(Method::method_data_offset())));
+//                __ cbz(r1, no_mdo);
+//                // Increment the MDO backedge counter
+//                const Address mdo_backedge_counter(r1, in_bytes(MethodData::backedge_counter_offset()) +
+//                                                       in_bytes(InvocationCounter::counter_offset()));
+//                __ increment_mask_and_jump(mdo_backedge_counter, increment, mask,
+//                                           r0, rscratch2, false, Assembler::EQ, &backedge_counter_overflow);
+//                __ b(dispatch);
+//            }
+//            __ bind(no_mdo);
+//            // Increment backedge counter in MethodCounters*
+//            __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
+//            __ increment_mask_and_jump(Address(rscratch1, be_offset), increment, mask,
+//                                       r0, rscratch2, false, Assembler::EQ, &backedge_counter_overflow);
+//        } else {
+//            // increment counter
+//            __ ldr(rscratch2, Address(rmethod, Method::method_counters_offset()));
+//            __ ldrw(r0, Address(rscratch2, be_offset));        // load backedge counter
+//            __ addw(rscratch1, r0, InvocationCounter::count_increment); // increment counter
+//            __ strw(rscratch1, Address(rscratch2, be_offset));        // store counter
+//
+//            __ ldrw(r0, Address(rscratch2, inv_offset));    // load invocation counter
+//            __ andw(r0, r0, (unsigned)InvocationCounter::count_mask_value); // and the status bits
+//            __ addw(r0, r0, rscratch1);        // add both counters
+//
+//            if (ProfileInterpreter) {
+//                // Test to see if we should create a method data oop
+//                __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterProfileLimit));
+//                __ ldrw(rscratch1, rscratch1);
+//                __ cmpw(r0, rscratch1);
+//                __ br(Assembler::LT, dispatch);
+//
+//                // if no method data exists, go to profile method
+//                __ test_method_data_pointer(r0, profile_method);
+//
+//                if (UseOnStackReplacement) {
+//                    // check for overflow against w1 which is the MDO taken count
+//                    __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
+//                    __ ldrw(rscratch1, rscratch1);
+//                    __ cmpw(r1, rscratch1);
+//                    __ br(Assembler::LO, dispatch); // Intel == Assembler::below
+//
+//                    // When ProfileInterpreter is on, the backedge_count comes
+//                    // from the MethodData*, which value does not get reset on
+//                    // the call to frequency_counter_overflow().  To avoid
+//                    // excessive calls to the overflow routine while the method is
+//                    // being compiled, add a second test to make sure the overflow
+//                    // function is called only once every overflow_frequency.
+//                    const int overflow_frequency = 1024;
+//                    __ andsw(r1, r1, overflow_frequency - 1);
+//                    __ br(Assembler::EQ, backedge_counter_overflow);
+//
+//                }
+//            } else {
+//                if (UseOnStackReplacement) {
+//                    // check for overflow against w0, which is the sum of the
+//                    // counters
+//                    __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
+//                    __ ldrw(rscratch1, rscratch1);
+//                    __ cmpw(r0, rscratch1);
+//                    __ br(Assembler::HS, backedge_counter_overflow); // Intel == Assembler::aboveEqual
+//                }
+//            }
+//        }
+//    }
+//    __ bind(dispatch);
+
+    // Pre-load the next target bytecode into rscratch1
+    __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x22, 0));
+
+    // continue with the bytecode @ target
+    // rscratch1: target bytecode
+    // rbcp: target bcp
+    __ write_insts_dispatch_only(vtos);
+
+    // TODO
+//    if (UseLoopCounter) {
+//        if (ProfileInterpreter) {
+//            // Out-of-line code to allocate method data oop.
+//            __ bind(profile_method);
+//            __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
+//            __ load_unsigned_byte(r1, Address(rbcp, 0));  // restore target bytecode
+//            __ set_method_data_pointer_for_bcp();
+//            __ b(dispatch);
+//        }
+//
+//        if (TieredCompilation || UseOnStackReplacement) {
+//            // invocation counter overflow
+//            __ bind(backedge_counter_overflow);
+//            __ neg(r2, r2);
+//            __ add(r2, r2, rbcp);     // branch bcp
+//            // IcoResult frequency_counter_overflow([JavaThread*], address branch_bcp)
+//            __ call_VM(noreg,
+//                       CAST_FROM_FN_PTR(address,
+//                                        InterpreterRuntime::frequency_counter_overflow),
+//                       r2);
+//            if (!UseOnStackReplacement)
+//                __ b(dispatch);
+//        }
+//
+//        if (UseOnStackReplacement) {
+//            __ load_unsigned_byte(r1, Address(rbcp, 0));  // restore target bytecode
+//
+//            // r0: osr nmethod (osr ok) or NULL (osr not possible)
+//            // w1: target bytecode
+//            // r2: scratch
+//            __ cbz(r0, dispatch);     // test result -- no osr if null
+//            // nmethod may have been invalidated (VM may block upon call_VM return)
+//            __ ldrw(r2, Address(r0, nmethod::entry_bci_offset()));
+//            // InvalidOSREntryBci == -2 which overflows cmpw as unsigned
+//            // use cmnw against -InvalidOSREntryBci which does the same thing
+//            __ cmn(r2, -InvalidOSREntryBci);
+//            __ br(Assembler::EQ, dispatch);
+//
+//            // We have the address of an on stack replacement routine in r0
+//            // We need to prepare to execute the OSR method. First we must
+//            // migrate the locals and monitors off of the stack.
+//
+//            __ mov(r19, r0);                             // save the nmethod
+//
+//            call_VM(noreg, CAST_FROM_FN_PTR(address, SharedRuntime::OSR_migration_begin));
+//
+//            // r0 is OSR buffer, move it to expected parameter location
+//            __ mov(j_rarg0, r0);
+//
+//            // remove activation
+//            // get sender esp
+//            __ ldr(esp,
+//                   Address(rfp, frame::interpreter_frame_sender_sp_offset * wordSize));
+//            // remove frame anchor
+//            __ leave();
+//            // Ensure compiled code always sees stack at proper alignment
+//            __ andr(sp, esp, -16);
+//
+//            // and begin the OSR nmethod
+//            __ ldr(rscratch1, Address(r19, nmethod::osr_entry_point_offset()));
+//            __ br(rscratch1);
+//        }
+//    }
+}
+
+void YuhuTemplateTable::if_0cmp(Condition cc)
+{
+    transition(itos, vtos);
+    // assume branch is more often taken than not (loops use backward branches)
+    YuhuLabel not_taken;
+    if (cc == equal)
+        __ write_inst_cbnz(__ w0, not_taken);
+    else if (cc == not_equal)
+        __ write_inst_cbz(__ w0, not_taken);
+    else {
+        __ write_inst("ands wzr, w0, w0");
+        __ write_inst_b(j_not(cc), not_taken);
+    }
+
+    branch(false, false);
+    __ pin_label(not_taken);
+    // TODO
+//    __ profile_not_taken_branch(r0);
 }
 
 static void do_oop_store(YuhuMacroAssembler* _masm,

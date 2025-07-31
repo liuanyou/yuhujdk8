@@ -79,6 +79,7 @@ private:
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg     ), int arg     );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(bool arg    ), bool arg    );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Operation op), Operation op);
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Condition cc), Condition cc);
 
     // bytecodes
     static void nop();
@@ -170,6 +171,14 @@ private:
 
     static void iinc();
     static void convert();
+
+    static void lcmp();
+    static void float_cmp (bool is_float, int unordered_result);
+    static void float_cmp (int unordered_result);
+    static void double_cmp(int unordered_result);
+
+    static void branch(bool is_jsr, bool is_wide);
+    static void if_0cmp   (Condition cc);
 public:
     static void initialize();
 
