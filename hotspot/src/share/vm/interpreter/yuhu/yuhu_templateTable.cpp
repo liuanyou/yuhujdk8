@@ -59,6 +59,10 @@ void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosSta
     def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)cc);
 }
 
+void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(TosState tos), TosState tos) {
+    def(code, flags, in, out, (YuhuTemplate::generator)gen, (int)tos);
+}
+
 void YuhuTemplateTable::def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(int arg), int arg) {
     // should factor out these constants
     const int ubcp = 1 << YuhuTemplate::uses_bcp_bit;
@@ -284,14 +288,14 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_goto                , ubcp|disp|clvm|____, vtos, vtos, _goto               ,  _           );
     def(Bytecodes::_jsr                 , ubcp|disp|____|____, vtos, vtos, jsr                 ,  _           ); // result is not an oop, so do not transition to atos
     def(Bytecodes::_ret                 , ubcp|disp|____|____, vtos, vtos, ret                 ,  _           );
-//    def(Bytecodes::_tableswitch         , ubcp|disp|____|____, itos, vtos, tableswitch         ,  _           );
-//    def(Bytecodes::_lookupswitch        , ubcp|disp|____|____, itos, itos, lookupswitch        ,  _           );
-//    def(Bytecodes::_ireturn             , ____|disp|clvm|____, itos, itos, _return             , itos         );
-//    def(Bytecodes::_lreturn             , ____|disp|clvm|____, ltos, ltos, _return             , ltos         );
-//    def(Bytecodes::_freturn             , ____|disp|clvm|____, ftos, ftos, _return             , ftos         );
-//    def(Bytecodes::_dreturn             , ____|disp|clvm|____, dtos, dtos, _return             , dtos         );
-//    def(Bytecodes::_areturn             , ____|disp|clvm|____, atos, atos, _return             , atos         );
-//    def(Bytecodes::_return              , ____|disp|clvm|____, vtos, vtos, _return             , vtos         );
+    def(Bytecodes::_tableswitch         , ubcp|disp|____|____, itos, vtos, tableswitch         ,  _           );
+    def(Bytecodes::_lookupswitch        , ubcp|disp|____|____, itos, itos, lookupswitch        ,  _           );
+    def(Bytecodes::_ireturn             , ____|disp|clvm|____, itos, itos, _return             , itos         );
+    def(Bytecodes::_lreturn             , ____|disp|clvm|____, ltos, ltos, _return             , ltos         );
+    def(Bytecodes::_freturn             , ____|disp|clvm|____, ftos, ftos, _return             , ftos         );
+    def(Bytecodes::_dreturn             , ____|disp|clvm|____, dtos, dtos, _return             , dtos         );
+    def(Bytecodes::_areturn             , ____|disp|clvm|____, atos, atos, _return             , atos         );
+    def(Bytecodes::_return              , ____|disp|clvm|____, vtos, vtos, _return             , vtos         );
 //    def(Bytecodes::_getstatic           , ubcp|____|clvm|____, vtos, vtos, getstatic           , f1_byte      );
 //    def(Bytecodes::_putstatic           , ubcp|____|clvm|____, vtos, vtos, putstatic           , f2_byte      );
 //    def(Bytecodes::_getfield            , ubcp|____|clvm|____, vtos, vtos, getfield            , f1_byte      );

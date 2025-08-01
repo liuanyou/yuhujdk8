@@ -41,9 +41,9 @@ static inline YuhuAddress daddress(int n) {
     return laddress(n);
 }
 
-//static inline YuhuAddress aaddress(int n) {
-//    return iaddress(n);
-//}
+static inline YuhuAddress aaddress(int n) {
+    return iaddress(n);
+}
 
 static inline YuhuAddress iaddress(YuhuMacroAssembler::YuhuRegister r) {
     return YuhuAddress(YuhuMacroAssembler::x24, r, YuhuAddress::lsl(3));
@@ -1568,6 +1568,85 @@ void YuhuTemplateTable::ret() {
     __ write_insts_lea(__ x22, YuhuAddress(__ x22, __ x1));
     __ write_inst("add x22, x22, #%d", in_bytes(ConstMethod::codes_offset()));
     __ write_insts_dispatch_next(vtos);
+}
+
+void YuhuTemplateTable::tableswitch() {
+    YuhuLabel default_case, continue_execution;
+    transition(itos, vtos);
+    // align rbcp
+    __ write_insts_lea(__ x1, at_bcp(BytesPerInt));
+    __ write_inst("and x1, x1, #%d", -BytesPerInt);
+    // load lo & hi
+    __ write_inst_ldr(__ w2, YuhuAddress(__ x1, BytesPerInt));
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x1, 2 * BytesPerInt));
+    __ write_inst("rev32 x2, x2");
+    __ write_inst("rev32 x3, x3");
+    // check against lo & hi
+    __ write_inst("cmp w0, w2");
+    __ write_inst_b(__ lt, default_case);
+    __ write_inst("cmp w0, w3");
+    __ write_inst_b(__ gt, default_case);
+    // lookup dispatch offset
+    __ write_inst("sub w0, w0, w2");
+    __ write_insts_lea(__ x3, YuhuAddress(__ x1, __ w0, YuhuAddress::uxtw(2)));
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x3, 3 * BytesPerInt));
+    // TODO
+//    __ profile_switch_case(r0, r1, r2);
+    // continue execution
+    __ pin_label(continue_execution);
+    __ write_inst("rev32 x3, x3");
+    __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x2, __ x3, YuhuAddress::sxtw(0)));
+    __ write_inst("add x22, x22, x3, sxtw #0");
+    __ write_insts_dispatch_only(vtos);
+    // handle default
+    __ pin_label(default_case);
+    // TODO
+//    __ profile_switch_default(r0);
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x1, 0));
+    __ write_inst_b(continue_execution);
+}
+
+void YuhuTemplateTable::lookupswitch() {
+    transition(itos, itos);
+    __ write_insts_stop("lookupswitch bytecode should have been rewritten");
+}
+
+void YuhuTemplateTable::_return(TosState state)
+{
+    transition(state, state);
+    assert(_desc->calls_vm(),
+           "inconsistent calls_vm information"); // call in remove_activation
+
+    if (_desc->bytecode() == Bytecodes::_return_register_finalizer) {
+        assert(state == vtos, "only valid state");
+
+        __ write_inst_ldr(__ x1, aaddress(0));
+        __ write_insts_load_klass(__ x3, __ x1);
+        __ write_inst_ldr(__ w3, YuhuAddress(__ x3, Klass::access_flags_offset()));
+        __ write_inst("tst x3, #%d", JVM_ACC_HAS_FINALIZER);
+        YuhuLabel skip_register_finalizer;
+        __ write_inst_b(__ eq, skip_register_finalizer);
+
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::register_finalizer), __ x1);
+
+        __ pin_label(skip_register_finalizer);
+    }
+
+    // Issue a StoreStore barrier after all stores but before return
+    // from any constructor for any class with a final field.  We don't
+    // know if this is a finalizer, so we always do so.
+    if (_desc->bytecode() == Bytecodes::_return)
+        __ write_inst("dmb ishst");
+
+    // Narrow result if state is itos but result type is smaller.
+    // Need to narrow in the return bytecode rather than in generate_return_entry
+    // since compiled code callers expect the result to already be narrowed.
+    if (state == itos) {
+        __ write_insts_narrow(__ x0);
+    }
+
+    __ write_insts_remove_activation(state);
+    __ write_inst("ret");
 }
 
 static void do_oop_store(YuhuMacroAssembler* _masm,

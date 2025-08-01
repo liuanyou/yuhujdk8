@@ -80,6 +80,7 @@ private:
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(bool arg    ), bool arg    );
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Operation op), Operation op);
     static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(Condition cc), Condition cc);
+    static void def(Bytecodes::Code code, int flags, TosState in, TosState out, void (*gen)(TosState tos), TosState tos);
 
     // bytecodes
     static void nop();
@@ -185,6 +186,11 @@ private:
     static void _goto();
     static void jsr();
     static void ret();
+
+    static void tableswitch();
+    static void lookupswitch();
+
+    static void _return(TosState state);
 public:
     static void initialize();
 
