@@ -540,6 +540,8 @@ public:
 
     address write_insts_corrected_idivq(YuhuRegister result, YuhuRegister ra, YuhuRegister rb,
                         bool want_remainder, YuhuRegister tmp = x8);
+
+    address write_insts_narrow(YuhuRegister result);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

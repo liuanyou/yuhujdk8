@@ -2465,6 +2465,45 @@ address YuhuMacroAssembler::write_insts_corrected_idivq(YuhuRegister result, Yuh
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_narrow(YuhuRegister result) {
+
+    // Get method->_constMethod->_result_type
+    write_inst_ldr(x8, YuhuAddress(x29, frame::interpreter_frame_method_offset * wordSize));
+    write_inst_ldr(x8, YuhuAddress(x8, Method::const_offset()));
+    write_inst_ldrb(w8, YuhuAddress(x8, ConstMethod::result_type_offset()));
+
+    YuhuLabel done, notBool, notByte, notChar;
+
+    // common case first
+    write_inst("cmp w8, #%d", T_INT);
+    write_inst_b(eq, done);
+
+    // mask integer result to narrower return type.
+    write_inst("cmp w8, #%d", T_BOOLEAN);
+    write_inst_b(ne, notBool);
+    write_inst("and %s, %s, #%d", w_reg(result), w_reg(result), 0x1);
+    write_inst_b(done);
+
+    pin_label(notBool);
+    write_inst("cmp w8, #%d", T_BYTE);
+    write_inst_b(ne, notByte);
+    write_inst_imms("sbfx %s, %s, #%d, #%d", result, result, 0, 8);
+    write_inst_b(done);
+
+    pin_label(notByte);
+    write_inst("cmp w8, #%d", T_CHAR);
+    write_inst_b(ne, notChar);
+    write_inst_imms("ubfx %s, %s, #%d, #%d", result, result, 0, 16); // truncate upper 16 bits
+    write_inst_b(done);
+
+    pin_label(notChar);
+    write_inst_imms("sbfx %s, %s, #%d, #%d", result, result, 0, 16); // sign-extend short
+
+    // Nothing to do for T_INT
+    pin_label(done);
+    return current_pc();
+}
+
 #define __ as->
 
 void YuhuAddress::lea(YuhuMacroAssembler *as, YuhuMacroAssembler::YuhuRegister r) const {
