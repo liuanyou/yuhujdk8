@@ -205,6 +205,10 @@ public:
 
     address write_inst_str(YuhuFloatRegister reg, YuhuAddress addr);
 
+    address write_inst_strh(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_strb(YuhuRegister reg, YuhuAddress addr);
+
     address write_inst_ldr(YuhuRegister reg, YuhuAddress addr);
 
     address write_inst_ldr(YuhuFloatRegister reg, YuhuAddress addr);

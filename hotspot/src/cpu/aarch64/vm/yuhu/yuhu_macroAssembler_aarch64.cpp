@@ -236,6 +236,22 @@ address YuhuMacroAssembler::write_inst_str(YuhuRegister reg, YuhuAddress addr) {
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_inst_strh(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("strh %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("strh %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("strh %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("strh %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_inst_str(YuhuFloatRegister reg, YuhuAddress addr) {
     switch (addr.getMode()) {
         case YuhuAddress::base_plus_offset:
@@ -246,6 +262,22 @@ address YuhuMacroAssembler::write_inst_str(YuhuFloatRegister reg, YuhuAddress ad
             return write_inst("str %s, [%s, #%d]!", reg, addr);
         case YuhuAddress::post:
             return write_inst("str %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_strb(YuhuRegister reg, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("strb %s, [%s, #%d]", reg, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("strb %s, [%s, %s, %s #%d]", reg, addr);
+        case YuhuAddress::pre:
+            return write_inst("strb %s, [%s, #%d]!", reg, addr);
+        case YuhuAddress::post:
+            return write_inst("strb %s, [%s], #%d", reg, addr);
         default:
             ShouldNotReachHere();
     }
