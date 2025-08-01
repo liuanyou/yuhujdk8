@@ -1649,6 +1649,382 @@ void YuhuTemplateTable::_return(TosState state)
     __ write_inst("ret");
 }
 
+void YuhuTemplateTable::getfield_or_static(int byte_no, bool is_static)
+{
+    const YuhuMacroAssembler::YuhuRegister cache = __ x2;
+    const YuhuMacroAssembler::YuhuRegister index = __ x3;
+    const YuhuMacroAssembler::YuhuRegister obj   = __ x4;
+    const YuhuMacroAssembler::YuhuRegister off   = __ x19;
+    const YuhuMacroAssembler::YuhuRegister flags = __ x0;
+    const YuhuMacroAssembler::YuhuRegister raw_flags = __ x6;
+    const YuhuMacroAssembler::YuhuRegister bc    = __ x4; // uses same reg as obj, so don't mix them
+
+    resolve_cache_and_index(byte_no, cache, index, sizeof(u2));
+    // TODO
+//    jvmti_post_field_access(cache, index, is_static, false);
+    load_field_cp_cache_entry(obj, cache, index, off, raw_flags, is_static);
+
+    if (!is_static) {
+        // obj is on the stack
+        pop_and_check_object(obj);
+    }
+
+    // 8179954: We need to make sure that the code generated for
+    // volatile accesses forms a sequentially-consistent set of
+    // operations when combined with STLR and LDAR.  Without a leading
+    // membar it's possible for a simple Dekker test to fail if loads
+    // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+    // the stores in one method and we interpret the loads in another.
+    if (! UseBarriersForVolatile) {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(raw_flags, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+
+    const YuhuAddress field(obj, off);
+
+    YuhuLabel Done, notByte, notBool, notInt, notShort, notChar,
+            notLong, notFloat, notObj, notDouble;
+
+    // x86 uses a shift and mask or wings it with a shift plus assert
+    // the mask is not needed. aarch64 just uses bitfield extract
+    __ write_inst_imms("ubfx %s, %s, #%d, #%d", __ w_reg(flags), __ w_reg(raw_flags),
+                       ConstantPoolCacheEntry::tos_state_shift, ConstantPoolCacheEntry::tos_state_bits);
+
+    assert(btos == 0, "change code, btos != 0");
+    __ write_inst_cbnz(flags, notByte);
+
+    // btos
+    __ write_insts_load_signed_byte(__ x0, field);
+    __ write_insts_push(btos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_bgetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notByte);
+    /*__ cmp(flags, ztos);
+    __ br(Assembler::NE, notBool);
+
+    // ztos (same code as btos)
+    __ ldrsb(r0, field);
+    __ push(ztos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+      // use btos rewriting, no truncating to t/f bit is needed for getfield.
+      patch_bytecode(Bytecodes::_fast_bgetfield, bc, r1);
+    }
+    __ b(Done);
+
+    __ bind(notBool);*/
+    __ write_inst("cmp %s, #%d", flags, atos);
+    __ write_inst_b(__ ne, notObj);
+    // atos
+    __ write_insts_load_heap_oop(__ x0, field);
+    __ write_insts_push(atos);
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_agetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notObj);
+    __ write_inst("cmp %s, #%d", flags, itos);
+    __ write_inst_b(__ ne, notInt);
+    // itos
+    __ write_inst_ldr(__ w0, field);
+    __ write_insts_push(itos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_igetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notInt);
+    __ write_inst("cmp %s, #%d", flags, ctos);
+    __ write_inst_b(__ ne, notChar);
+    // ctos
+    __ write_insts_load_unsigned_short(__ x0, field);
+    __ write_insts_push(ctos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_cgetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notChar);
+    __ write_inst("cmp %s, #%d", flags, stos);
+    __ write_inst_b(__ ne, notShort);
+    // stos
+    __ write_insts_load_signed_short(__ x0, field);
+    __ write_insts_push(stos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_sgetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notShort);
+    __ write_inst("cmp %s, #%d", flags, ltos);
+    __ write_inst_b(__ ne, notLong);
+    // ltos
+    __ write_inst_ldr(__ x0, field);
+    __ write_insts_push(ltos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_lgetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notLong);
+    __ write_inst("cmp %s, #%d", flags, ftos);
+    __ write_inst_b(__ ne, notFloat);
+    // ftos
+    __ write_inst_ldr(__ s0, field);
+    __ write_insts_push(ftos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_fgetfield, bc, __ x1);
+    }
+    __ write_inst_b(Done);
+
+    __ pin_label(notFloat);
+#ifdef ASSERT
+    __ write_inst("cmp %s, #%d", flags, dtos);
+    __ write_inst_b(__ ne, notDouble);
+#endif
+    // dtos
+    __ write_inst_ldr(__ d0, field);
+    __ write_insts_push(dtos);
+    // Rewrite bytecode to be faster
+    if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_dgetfield, bc, __ x1);
+    }
+#ifdef ASSERT
+    __ write_inst_b(Done);
+
+    __ pin_label(notDouble);
+    __ write_insts_stop("Bad state");
+#endif
+
+    __ pin_label(Done);
+
+    YuhuLabel notVolatile;
+    __ write_inst_tbz(raw_flags, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+    __ write_inst("dmb ishld");
+    __ pin_label(notVolatile);
+}
+
+void YuhuTemplateTable::getstatic(int byte_no)
+{
+    getfield_or_static(byte_no, true);
+}
+
+void YuhuTemplateTable::putfield_or_static(int byte_no, bool is_static) {
+    transition(vtos, vtos);
+
+    const YuhuMacroAssembler::YuhuRegister cache = __ x2;
+    const YuhuMacroAssembler::YuhuRegister index = __ x3;
+    const YuhuMacroAssembler::YuhuRegister obj   = __ x2;
+    const YuhuMacroAssembler::YuhuRegister off   = __ x19;
+    const YuhuMacroAssembler::YuhuRegister flags = __ x0;
+    const YuhuMacroAssembler::YuhuRegister bc    = __ x4;
+
+    resolve_cache_and_index(byte_no, cache, index, sizeof(u2));
+    // TODO
+//    jvmti_post_field_mod(cache, index, is_static);
+    load_field_cp_cache_entry(obj, cache, index, off, flags, is_static);
+
+    YuhuLabel Done;
+    __ write_insts_mov_imm64(__ x5, flags);
+
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x5, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+
+    // field address
+    const YuhuAddress field(obj, off);
+
+    YuhuLabel notByte, notBool, notInt, notShort, notChar,
+            notLong, notFloat, notObj, notDouble;
+
+    // x86 uses a shift and mask or wings it with a shift plus assert
+    // the mask is not needed. aarch64 just uses bitfield extract
+    __ write_inst_imms("ubfx %s, %s, #%d, #%d", __ w_reg(flags), __ w_reg(flags),
+                       ConstantPoolCacheEntry::tos_state_shift,  ConstantPoolCacheEntry::tos_state_bits);
+
+    assert(btos == 0, "change code, btos != 0");
+    __ write_inst_cbnz(flags, notByte);
+
+    // btos
+    {
+        __ write_insts_pop(btos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_strb(__ w0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_bputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notByte);
+    /*__ cmp(flags, ztos);
+    __ br(Assembler::NE, notBool);
+
+    // ztos
+    {
+      __ pop(ztos);
+      if (!is_static) pop_and_check_object(obj);
+      __ andw(r0, r0, 0x1);
+      __ strb(r0, field);
+      if (!is_static) {
+        patch_bytecode(Bytecodes::_fast_zputfield, bc, r1, true, byte_no);
+      }
+      __ b(Done);
+    }
+
+    __ bind(notBool);*/
+    __ write_inst("cmp %s, #%d", flags, atos);
+    __ write_inst_b(__ ne, notObj);
+
+    // atos
+    {
+        __ write_insts_pop(atos);
+        if (!is_static) pop_and_check_object(obj);
+        // Store into the field
+        do_oop_store(_masm, field, __ x0, _bs->kind(), false);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_aputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notObj);
+    __ write_inst("cmp %s, #%d", flags, itos);
+    __ write_inst_b(__ ne, notInt);
+
+    // itos
+    {
+        __ write_insts_pop(itos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_str(__ w0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_iputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notInt);
+    __ write_inst("cmp %s, #%d", flags, ctos);
+    __ write_inst_b(__ ne, notChar);
+
+    // ctos
+    {
+        __ write_insts_pop(ctos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_strh(__ w0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_cputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notChar);
+    __ write_inst("cmp %s, #%d", flags, stos);
+    __ write_inst_b(__ ne, notShort);
+
+    // stos
+    {
+        __ write_insts_pop(stos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_strh(__ w0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_sputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notShort);
+    __ write_inst("cmp %s, #%d", flags, ltos);
+    __ write_inst_b(__ ne, notLong);
+
+    // ltos
+    {
+        __ write_insts_pop(ltos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_str(__ x0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_lputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notLong);
+    __ write_inst("cmp %s, #%d", flags, ftos);
+    __ write_inst_b(__ ne, notFloat);
+
+    // ftos
+    {
+        __ write_insts_pop(ftos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_str(__ s0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_fputfield, bc, __ x1, true, byte_no);
+        }
+        __ write_inst_b(Done);
+    }
+
+    __ pin_label(notFloat);
+#ifdef ASSERT
+    __ write_inst("cmp %s, #%d", flags, dtos);
+    __ write_inst_b(__ ne, notDouble);
+#endif
+
+    // dtos
+    {
+        __ write_insts_pop(dtos);
+        if (!is_static) pop_and_check_object(obj);
+        __ write_inst_str(__ d0, field);
+        if (!is_static) {
+            patch_bytecode(Bytecodes::_fast_dputfield, bc, __ x1, true, byte_no);
+        }
+    }
+
+#ifdef ASSERT
+    __ write_inst_b(Done);
+
+    __ pin_label(notDouble);
+    __ write_insts_stop("Bad state");
+#endif
+
+    __ pin_label(Done);
+
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x5, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+}
+
+void YuhuTemplateTable::putstatic(int byte_no) {
+    putfield_or_static(byte_no, true);
+}
+
+void YuhuTemplateTable::getfield(int byte_no)
+{
+    getfield_or_static(byte_no, false);
+}
+
+void YuhuTemplateTable::putfield(int byte_no)
+{
+    putfield_or_static(byte_no, false);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
@@ -1824,4 +2200,84 @@ void YuhuTemplateTable::index_check(YuhuMacroAssembler::YuhuRegister array, Yuhu
     __ write_insts_mov_imm64(__ x8, (uint64_t)YuhuInterpreter::_throw_ArrayIndexOutOfBoundsException_entry);
     __ write_inst_br(__ x8);
     __ pin_label(ok);
+}
+
+void YuhuTemplateTable::resolve_cache_and_index(int byte_no,
+                                            YuhuMacroAssembler::YuhuRegister Rcache,
+                                            YuhuMacroAssembler::YuhuRegister index,
+                                            size_t index_size) {
+    const YuhuMacroAssembler::YuhuRegister temp = __ x19;
+//    assert_different_registers(Rcache, index, temp);
+
+    YuhuLabel resolved;
+    assert(byte_no == f1_byte || byte_no == f2_byte, "byte_no out of range");
+    __ write_insts_get_cache_and_index_and_bytecode_at_bcp(Rcache, index, temp, byte_no, 1, index_size);
+    __ write_inst("cmp %s, #%d", temp, (int) bytecode()); // have we resolved this bytecode?
+    __ write_inst_b(__ eq, resolved);
+
+    // resolve first time through
+    address entry;
+    switch (bytecode()) {
+        case Bytecodes::_getstatic:
+        case Bytecodes::_putstatic:
+        case Bytecodes::_getfield:
+        case Bytecodes::_putfield:
+            entry = CAST_FROM_FN_PTR(address, InterpreterRuntime::resolve_get_put);
+            break;
+        case Bytecodes::_invokevirtual:
+        case Bytecodes::_invokespecial:
+        case Bytecodes::_invokestatic:
+        case Bytecodes::_invokeinterface:
+            entry = CAST_FROM_FN_PTR(address, InterpreterRuntime::resolve_invoke);
+            break;
+        case Bytecodes::_invokehandle:
+            entry = CAST_FROM_FN_PTR(address, InterpreterRuntime::resolve_invokehandle);
+            break;
+        case Bytecodes::_invokedynamic:
+            entry = CAST_FROM_FN_PTR(address, InterpreterRuntime::resolve_invokedynamic);
+            break;
+        default:
+            fatal(err_msg("unexpected bytecode: %s", Bytecodes::name(bytecode())));
+            break;
+    }
+    __ write_insts_mov_imm32(temp, (int) bytecode());
+    __ write_insts_final_call_VM(__ noreg, entry, temp);
+
+    // Update registers with resolved info
+    __ write_insts_get_cache_and_index_at_bcp(Rcache, index, 1, index_size);
+    // n.b. unlike x86 Rcache is now rcpool plus the indexed offset
+    // so all clients ofthis method must be modified accordingly
+    __ pin_label(resolved);
+}
+
+void YuhuTemplateTable::load_field_cp_cache_entry(YuhuMacroAssembler::YuhuRegister obj,
+                                                  YuhuMacroAssembler::YuhuRegister cache,
+                                                  YuhuMacroAssembler::YuhuRegister index,
+                                                  YuhuMacroAssembler::YuhuRegister off,
+                                                  YuhuMacroAssembler::YuhuRegister flags,
+                                              bool is_static = false) {
+//    assert_different_registers(cache, index, flags, off);
+
+    ByteSize cp_base_offset = ConstantPoolCache::base_offset();
+    // Field offset
+    __ write_inst_ldr(off, YuhuAddress(cache, in_bytes(cp_base_offset +
+                                                       ConstantPoolCacheEntry::f2_offset())));
+    // Flags
+    __ write_inst_ldr(__ w_reg(flags), YuhuAddress(cache, in_bytes(cp_base_offset +
+                                                                   ConstantPoolCacheEntry::flags_offset())));
+
+    // klass overwrite register
+    if (is_static) {
+        __ write_inst_ldr(obj, YuhuAddress(cache, in_bytes(cp_base_offset +
+                                                           ConstantPoolCacheEntry::f1_offset())));
+        const int mirror_offset = in_bytes(Klass::java_mirror_offset());
+        __ write_inst_ldr(obj, YuhuAddress(obj, mirror_offset));
+    }
+}
+
+void YuhuTemplateTable::pop_and_check_object(YuhuMacroAssembler::YuhuRegister r)
+{
+    __ write_inst_pop_ptr(r);
+    __ write_insts_null_check(r);  // for field access must check obj.
+    __ write_insts_verify_oop(r, "broken oop");
 }

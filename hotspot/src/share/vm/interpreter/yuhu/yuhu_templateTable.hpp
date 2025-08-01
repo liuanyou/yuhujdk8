@@ -191,6 +191,32 @@ private:
     static void lookupswitch();
 
     static void _return(TosState state);
+
+    static void resolve_cache_and_index(int byte_no,       // one of 1,2,11
+                                        YuhuMacroAssembler::YuhuRegister cache,    // output for CP cache
+                                        YuhuMacroAssembler::YuhuRegister index,    // output for CP index
+                                        size_t index_size); // one of 1,2,4
+    static void load_invoke_cp_cache_entry(int byte_no,
+                                           YuhuMacroAssembler::YuhuRegister method,
+                                           YuhuMacroAssembler::YuhuRegister itable_index,
+                                           YuhuMacroAssembler::YuhuRegister flags,
+                                           bool is_invokevirtual,
+                                           bool is_virtual_final,
+                                           bool is_invokedynamic);
+    static void load_field_cp_cache_entry(YuhuMacroAssembler::YuhuRegister obj,
+                                          YuhuMacroAssembler::YuhuRegister cache,
+                                          YuhuMacroAssembler::YuhuRegister index,
+                                          YuhuMacroAssembler::YuhuRegister offset,
+                                          YuhuMacroAssembler::YuhuRegister flags,
+                                          bool is_static);
+    static void pop_and_check_object(YuhuMacroAssembler::YuhuRegister obj);
+
+    static void getfield_or_static(int byte_no, bool is_static);
+    static void getstatic(int byte_no);
+    static void putfield_or_static(int byte_no, bool is_static);
+    static void putstatic(int byte_no);
+    static void getfield(int byte_no);
+    static void putfield(int byte_no);
 public:
     static void initialize();
 
