@@ -2459,6 +2459,132 @@ void YuhuTemplateTable::anewarray() {
     __ write_inst("dmb ishst");
 }
 
+void YuhuTemplateTable::arraylength() {
+    transition(atos, itos);
+    __ write_insts_null_check(__ x0, arrayOopDesc::length_offset_in_bytes());
+    __ write_inst_ldr(__ w0, YuhuAddress(__ x0, arrayOopDesc::length_offset_in_bytes()));
+}
+
+void YuhuTemplateTable::athrow() {
+    transition(atos, vtos);
+    __ write_insts_null_check(__ x0);
+    __ write_inst_b(YuhuInterpreter::throw_exception_entry());
+}
+
+void YuhuTemplateTable::checkcast()
+{
+    transition(atos, atos);
+    YuhuLabel done, is_null, ok_is_subtype, quicked, resolved;
+    __ write_inst_cbz(__ x0, is_null);
+
+    // Get cpool & tags index
+    __ write_insts_get_cpool_and_tags(__ x2, __ x3); // r2=cpool, r3=tags array
+    __ write_insts_get_unsigned_2_byte_index_at_bcp(__ x19, 1); // r19=index
+    // See if bytecode has already been quicked
+    __ write_inst("add x8, x3, #%d", Array<u1>::base_offset_in_bytes());
+    __ write_insts_lea(__ x1, YuhuAddress(__ x8, __ x19));
+    __ write_inst("ldarb w1, x1");
+    __ write_inst("cmp x1, #%d", JVM_CONSTANT_Class);
+    __ write_inst_b(__ eq, quicked);
+
+    __ write_insts_push(atos); // save receiver for result, and for GC
+    __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::quicken_io_cc));
+    // vm_result_2 has metadata result
+    __ write_insts_get_vm_result_2(__ x0, __ x28);
+    __ write_inst_pop(__ x3); // restore receiver
+    __ write_inst_b(resolved);
+
+    // Get superklass in r0 and subklass in r3
+    __ pin_label(quicked);
+    __ write_inst("mov x3, x0"); // Save object in r3; r0 needed for subtype check
+    __ write_insts_lea(__ x0, YuhuAddress(__ x2, __ x19, YuhuAddress::lsl(3)));
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x0, sizeof(ConstantPool)));
+
+    __ pin_label(resolved);
+    __ write_insts_load_klass(__ x19, __ x3);
+
+    // Generate subtype check.  Blows r2, r5.  Object in r3.
+    // Superklass in r0.  Subklass in r19.
+    __ write_insts_gen_subtype_check(__ x19, ok_is_subtype);
+
+    // Come here on failure
+    __ write_inst_push(__ x3);
+    // object is at TOS
+    __ write_inst_b(YuhuInterpreter::_throw_ClassCastException_entry);
+
+    // Come here on success
+    __ pin_label(ok_is_subtype);
+    __ write_inst("mov x0, x3"); // Restore object in r3
+
+    // Collect counts on whether this test sees NULLs a lot or not.
+    if (ProfileInterpreter) {
+        __ write_inst_b(done);
+        __ pin_label(is_null);
+        // TODO
+//        __ profile_null_seen(r2);
+    } else {
+        __ pin_label(is_null);   // same as 'done'
+    }
+    __ pin_label(done);
+}
+
+void YuhuTemplateTable::instanceof() {
+    transition(atos, itos);
+    YuhuLabel done, is_null, ok_is_subtype, quicked, resolved;
+    __ write_inst_cbz(__ x0, is_null);
+
+    // Get cpool & tags index
+    __ write_insts_get_cpool_and_tags(__ x2, __ x3); // r2=cpool, r3=tags array
+    __ write_insts_get_unsigned_2_byte_index_at_bcp(__ x19, 1); // r19=index
+    // See if bytecode has already been quicked
+    __ write_inst("add x8, x3, #%d", Array<u1>::base_offset_in_bytes());
+    __ write_insts_lea(__ x1, YuhuAddress(__ x8, __ x19));
+    __ write_inst("ldarb w1, x1");
+    __ write_inst("cmp x1, #%d", JVM_CONSTANT_Class);
+    __ write_inst_b(__ eq, quicked);
+
+    __ write_insts_push(atos); // save receiver for result, and for GC
+    __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::quicken_io_cc));
+    // vm_result_2 has metadata result
+    __ write_insts_get_vm_result_2(__ x0, __ x28);
+    __ write_inst_pop(__ x3); // restore receiver
+    __ write_insts_verify_oop(__ x3, "broken oop");
+    __ write_insts_load_klass(__ x3, __ x3);
+    __ write_inst_b(resolved);
+
+    // Get superklass in r0 and subklass in r3
+    __ pin_label(quicked);
+    __ write_insts_load_klass(__ x3, __ x0);
+    __ write_insts_lea(__ x0, YuhuAddress(__ x2, __ x19, YuhuAddress::lsl(3)));
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x0, sizeof(ConstantPool)));
+
+    __ pin_label(resolved);
+
+    // Generate subtype check.  Blows r2, r5
+    // Superklass in r0.  Subklass in r3.
+    __ write_insts_gen_subtype_check(__ x3, ok_is_subtype);
+
+    // Come here on failure
+    __ write_insts_mov_imm64(__ x0, 0);
+    __ write_inst_b(done);
+    // Come here on success
+    __ pin_label(ok_is_subtype);
+    __ write_insts_mov_imm64(__ x0, 1);
+
+    // Collect counts on whether this test sees NULLs a lot or not.
+    if (ProfileInterpreter) {
+        __ write_inst_b(done);
+        __ pin_label(is_null);
+        // TODO
+//        __ profile_null_seen(r2);
+    } else {
+        __ pin_label(is_null);   // same as 'done'
+    }
+    __ pin_label(done);
+    // r0 = 0: obj == NULL or  obj is not an instanceof the specified klass
+    // r0 = 1: obj != NULL and obj is     an instanceof the specified klass
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

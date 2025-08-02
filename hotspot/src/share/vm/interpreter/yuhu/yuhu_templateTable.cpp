@@ -308,10 +308,10 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_new                 , ubcp|____|clvm|____, vtos, atos, _new                ,  _           );
     def(Bytecodes::_newarray            , ubcp|____|clvm|____, itos, atos, newarray            ,  _           );
     def(Bytecodes::_anewarray           , ubcp|____|clvm|____, itos, atos, anewarray           ,  _           );
-//    def(Bytecodes::_arraylength         , ____|____|____|____, atos, itos, arraylength         ,  _           );
-//    def(Bytecodes::_athrow              , ____|disp|____|____, atos, vtos, athrow              ,  _           );
-//    def(Bytecodes::_checkcast           , ubcp|____|clvm|____, atos, atos, checkcast           ,  _           );
-//    def(Bytecodes::_instanceof          , ubcp|____|clvm|____, atos, itos, instanceof          ,  _           );
+    def(Bytecodes::_arraylength         , ____|____|____|____, atos, itos, arraylength         ,  _           );
+    def(Bytecodes::_athrow              , ____|disp|____|____, atos, vtos, athrow              ,  _           );
+    def(Bytecodes::_checkcast           , ubcp|____|clvm|____, atos, atos, checkcast           ,  _           );
+    def(Bytecodes::_instanceof          , ubcp|____|clvm|____, atos, itos, instanceof          ,  _           );
 //    def(Bytecodes::_monitorenter        , ____|disp|clvm|____, atos, vtos, monitorenter        ,  _           );
 //    def(Bytecodes::_monitorexit         , ____|____|clvm|____, atos, vtos, monitorexit         ,  _           );
 //    def(Bytecodes::_wide                , ubcp|disp|____|____, vtos, vtos, wide                ,  _           );

@@ -227,6 +227,11 @@ private:
     static void _new();
     static void newarray();
     static void anewarray();
+
+    static void arraylength();
+    static void athrow();
+    static void checkcast();
+    static void instanceof();
 public:
     static void initialize();
 

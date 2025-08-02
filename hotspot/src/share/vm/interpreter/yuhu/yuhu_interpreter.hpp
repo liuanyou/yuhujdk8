@@ -147,6 +147,8 @@ public:
     static address*   invokedynamic_return_entry_table()          { return _invokedynamic_return_entry; }
     static address* invoke_return_entry_table_for(Bytecodes::Code code);
 
+    static address    throw_exception_entry()                     { return _throw_exception_entry; }
+
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"
 #endif
