@@ -305,9 +305,9 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_invokestatic        , ubcp|disp|clvm|____, vtos, vtos, invokestatic        , f1_byte      );
     def(Bytecodes::_invokeinterface     , ubcp|disp|clvm|____, vtos, vtos, invokeinterface     , f1_byte      );
     def(Bytecodes::_invokedynamic       , ubcp|disp|clvm|____, vtos, vtos, invokedynamic       , f1_byte      );
-//    def(Bytecodes::_new                 , ubcp|____|clvm|____, vtos, atos, _new                ,  _           );
-//    def(Bytecodes::_newarray            , ubcp|____|clvm|____, itos, atos, newarray            ,  _           );
-//    def(Bytecodes::_anewarray           , ubcp|____|clvm|____, itos, atos, anewarray           ,  _           );
+    def(Bytecodes::_new                 , ubcp|____|clvm|____, vtos, atos, _new                ,  _           );
+    def(Bytecodes::_newarray            , ubcp|____|clvm|____, itos, atos, newarray            ,  _           );
+    def(Bytecodes::_anewarray           , ubcp|____|clvm|____, itos, atos, anewarray           ,  _           );
 //    def(Bytecodes::_arraylength         , ____|____|____|____, atos, itos, arraylength         ,  _           );
 //    def(Bytecodes::_athrow              , ____|disp|____|____, atos, vtos, athrow              ,  _           );
 //    def(Bytecodes::_checkcast           , ubcp|____|clvm|____, atos, atos, checkcast           ,  _           );

@@ -223,6 +223,10 @@ private:
     static void invokestatic(int byte_no);
     static void invokeinterface(int byte_no);
     static void invokedynamic(int byte_no);
+
+    static void _new();
+    static void newarray();
+    static void anewarray();
 public:
     static void initialize();
 

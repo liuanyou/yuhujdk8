@@ -524,7 +524,7 @@ void YuhuTemplateTable::baload()
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
     __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(0)));
-    __ write_insts_load_signed_byte(__ x0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_BYTE)));
+    __ write_insts_load_signed_byte(__ w0, YuhuAddress(__ x1, arrayOopDesc::base_offset_in_bytes(T_BYTE)));
 }
 
 void YuhuTemplateTable::caload()
@@ -1088,7 +1088,7 @@ void YuhuTemplateTable::lushr()
 void YuhuTemplateTable::iinc()
 {
     transition(vtos, vtos);
-    __ write_insts_load_signed_byte(__ x1, at_bcp(2)); // get constant
+    __ write_insts_load_signed_byte(__ w1, at_bcp(2)); // get constant
     locals_index(__ x2);
     __ write_inst_ldr(__ x0, iaddress(__ x2));
     __ write_inst("add w0, w0, w1");
@@ -1309,7 +1309,7 @@ void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
 
     if (is_jsr) {
         // Pre-load the next target bytecode into rscratch1
-        __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x22, __ x2));
+        __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, __ x2));
         // compute return address as bci
         __ write_inst_ldr(__ x9, YuhuAddress(__ x12, Method::const_offset()));
         __ write_inst("add x9, x9, #%d", in_bytes(ConstMethod::codes_offset()) - (is_wide ? 5 : 3));
@@ -1431,7 +1431,7 @@ void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
 //    __ bind(dispatch);
 
     // Pre-load the next target bytecode into rscratch1
-    __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x22, 0));
+    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, 0));
 
     // continue with the bytecode @ target
     // rscratch1: target bytecode
@@ -1595,7 +1595,7 @@ void YuhuTemplateTable::tableswitch() {
     // continue execution
     __ pin_label(continue_execution);
     __ write_inst("rev32 x3, x3");
-    __ write_insts_load_unsigned_byte(__ x8, YuhuAddress(__ x2, __ x3, YuhuAddress::sxtw(0)));
+    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x2, __ x3, YuhuAddress::sxtw(0)));
     __ write_inst("add x22, x22, x3, sxtw #0");
     __ write_insts_dispatch_only(vtos);
     // handle default
@@ -1696,7 +1696,7 @@ void YuhuTemplateTable::getfield_or_static(int byte_no, bool is_static)
     __ write_inst_cbnz(flags, notByte);
 
     // btos
-    __ write_insts_load_signed_byte(__ x0, field);
+    __ write_insts_load_signed_byte(__ w0, field);
     __ write_insts_push(btos);
     // Rewrite bytecode to be faster
     if (!is_static) {
@@ -1745,7 +1745,7 @@ void YuhuTemplateTable::getfield_or_static(int byte_no, bool is_static)
     __ write_inst("cmp %s, #%d", flags, ctos);
     __ write_inst_b(__ ne, notChar);
     // ctos
-    __ write_insts_load_unsigned_short(__ x0, field);
+    __ write_insts_load_unsigned_short(__ w0, field);
     __ write_insts_push(ctos);
     // Rewrite bytecode to be faster
     if (!is_static) {
@@ -1757,7 +1757,7 @@ void YuhuTemplateTable::getfield_or_static(int byte_no, bool is_static)
     __ write_inst("cmp %s, #%d", flags, stos);
     __ write_inst_b(__ ne, notShort);
     // stos
-    __ write_insts_load_signed_short(__ x0, field);
+    __ write_insts_load_signed_short(__ w0, field);
     __ write_insts_push(stos);
     // Rewrite bytecode to be faster
     if (!is_static) {
@@ -2315,6 +2315,148 @@ void YuhuTemplateTable::invokedynamic(int byte_no) {
     __ write_insts_verify_oop(__ x0, "broken oop");
 
     __ write_insts_jump_from_interpreted(__ x12, __ x0);
+}
+
+void YuhuTemplateTable::_new() {
+    transition(vtos, atos);
+
+    __ write_insts_get_unsigned_2_byte_index_at_bcp(__ w3, 1);
+    YuhuLabel slow_case;
+    YuhuLabel done;
+    YuhuLabel initialize_header;
+    YuhuLabel initialize_object; // including clearing the fields
+    YuhuLabel allocate_shared;
+
+    __ write_insts_get_cpool_and_tags(__ x4, __ x0);
+    // Make sure the class we're about to instantiate has been resolved.
+    // This is done before loading InstanceKlass to be consistent with the order
+    // how Constant Pool is updated (see ConstantPool::klass_at_put)
+    const int tags_offset = Array<u1>::base_offset_in_bytes();
+    __ write_insts_lea(__ x8, YuhuAddress(__ x0, __ x3, YuhuAddress::lsl(0)));
+    __ write_insts_lea(__ x8, YuhuAddress(__ x8, tags_offset));
+    __ write_inst("ldarb w8, x8");
+    __ write_inst("cmp x8, #%d", JVM_CONSTANT_Class);
+    __ write_inst_b(__ ne, slow_case);
+
+    // get InstanceKlass
+    __ write_insts_lea(__ x4, YuhuAddress(__ x4, __ x3, YuhuAddress::lsl(3)));
+    __ write_inst_ldr(__ x4, YuhuAddress(__ x4, sizeof(ConstantPool)));
+
+    // make sure klass is initialized & doesn't have finalizer
+    // make sure klass is fully initialized
+    __ write_inst_ldrb(__ w8, YuhuAddress(__ x4, InstanceKlass::init_state_offset()));
+    __ write_inst("cmp x8, #%d", InstanceKlass::fully_initialized);
+    __ write_inst_b(__ ne, slow_case);
+
+    // get instance_size in InstanceKlass (scaled to a count of bytes)
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x4, Klass::layout_helper_offset()));
+    // test to see if it has a finalizer or is malformed in some way
+    __ write_inst_tbnz(__ x3, exact_log2(Klass::_lh_instance_slow_path_bit), slow_case);
+
+    // Allocate the instance
+    // 1) Try to allocate in the TLAB
+    // 2) if fail and the object is large allocate in the shared Eden
+    // 3) if the above fails (or is not applicable), go to a slow case
+    // (creates a new TLAB, etc.)
+
+    const bool allow_shared_alloc =
+            Universe::heap()->supports_inline_contig_alloc() && !CMSIncrementalMode;
+
+    if (UseTLAB) {
+        __ write_insts_tlab_allocate(__ x0, __ x3, 0, __ noreg, __ x1,
+                         allow_shared_alloc ? allocate_shared : slow_case);
+
+        if (ZeroTLAB) {
+            // the fields have been already cleared
+            __ write_inst_b(initialize_header);
+        } else {
+            // initialize both the header and fields
+            __ write_inst_b(initialize_object);
+        }
+    }
+
+    // Allocation in the shared Eden, if allowed.
+    //
+    // r3: instance size in bytes
+    if (allow_shared_alloc) {
+        __ pin_label(allocate_shared);
+
+        __ write_insts_eden_allocate(__ x0, __ x3, 0, __ x10, slow_case);
+        __ write_insts_incr_allocated_bytes(__ x28, __ x3, 0, __ x8);
+    }
+
+    if (UseTLAB || Universe::heap()->supports_inline_contig_alloc()) {
+        // The object is initialized before the header.  If the object size is
+        // zero, go directly to the header initialization.
+        __ pin_label(initialize_object);
+        __ write_inst("sub %s, %s, #%d", __ x3, __ x3, sizeof(oopDesc));
+        __ write_inst_cbz(__ x3, initialize_header);
+
+        // Initialize object fields
+        {
+            __ write_inst("add %s, %s, #%d", __ x2, __ x0, sizeof(oopDesc));
+            YuhuLabel loop;
+            __ pin_label(loop);
+            __ write_inst_str(__ xzr, YuhuAddress(YuhuPost(__ x2, BytesPerLong)));
+            __ write_inst("sub x3, x3, #%d", BytesPerLong);
+            __ write_inst_cbnz(__ x3, loop);
+        }
+
+        // initialize object header only.
+        __ pin_label(initialize_header);
+        if (UseBiasedLocking) {
+            __ write_inst_ldr(__ x8, YuhuAddress(__ x4, Klass::prototype_header_offset()));
+        } else {
+            __ write_insts_mov_imm64(__ x8, (intptr_t)markOopDesc::prototype());
+        }
+        __ write_inst_str(__ x8, YuhuAddress(__ x0, oopDesc::mark_offset_in_bytes()));
+        __ write_insts_store_klass_gap(__ x0, __ xzr);  // zero klass gap for compressed oops
+        __ write_insts_store_klass(__ x0, __ x4);      // store klass last
+
+        {
+            YuhuSkipIfEqual skip(_masm, &DTraceAllocProbes, false);
+            // Trigger dtrace event for fastpath
+            __ write_insts_push(atos); // save the return value
+            __ write_insts_final_call_VM_leaf(
+                    CAST_FROM_FN_PTR(address, SharedRuntime::dtrace_object_alloc), __ x0);
+            __ write_insts_pop(atos); // restore the return value
+
+        }
+        __ write_inst_b(done);
+    }
+
+    // slow case
+    __ pin_label(slow_case);
+    __ write_insts_get_constant_pool(__ x1);
+    __ write_insts_get_unsigned_2_byte_index_at_bcp(__ x2, 1);
+    __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::_new), __ x1, __ x2);
+    __ write_insts_verify_oop(__ x0, "broken oop");
+
+    // continue
+    __ pin_label(done);
+    // Must prevent reordering of stores for object initialization with stores that publish the new object.
+    __ write_inst("dmb ishst");
+}
+
+void YuhuTemplateTable::newarray() {
+    transition(itos, atos);
+    __ write_insts_load_unsigned_byte(__ x1, at_bcp(1));
+    __ write_inst("mov x2, x0");
+    __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::newarray),
+            __ x1, __ x2);
+    // Must prevent reordering of stores for object initialization with stores that publish the new object.
+    __ write_inst("dmb ishst");
+}
+
+void YuhuTemplateTable::anewarray() {
+    transition(itos, atos);
+    __ write_insts_get_unsigned_2_byte_index_at_bcp(__ x2, 1);
+    __ write_insts_get_constant_pool(__ x1);
+    __ write_inst("mov x3, x0");
+    __ write_insts_final_call_VM(__ x0, CAST_FROM_FN_PTR(address, InterpreterRuntime::anewarray),
+            __ x1, __ x2, __ x3);
+    // Must prevent reordering of stores for object initialization with stores that publish the new object.
+    __ write_inst("dmb ishst");
 }
 
 static void do_oop_store(YuhuMacroAssembler* _masm,
