@@ -2128,11 +2128,10 @@ address YuhuMacroAssembler::write_insts_check_klass_subtype_fast_path(YuhuRegist
                                                    YuhuLabel* L_success,
                                                    YuhuLabel* L_failure,
                                                    YuhuLabel* L_slow_path,
-                                                   YuhuRegister super_check_offset_r,
-                                                   intptr_t super_check_offset_c) {
+                                                   YuhuRegisterOrConstant super_check_offset) {
 //    assert_different_registers(sub_klass, super_klass, temp_reg);
-    bool must_load_sco = (super_check_offset_c == -1);
-    if (super_check_offset_r != noreg) {
+    bool must_load_sco = (super_check_offset.constant_or_zero() == -1);
+    if (super_check_offset.is_register()) {
 //        assert_different_registers(sub_klass, super_klass,
 //                                   super_check_offset.as_register());
     } else if (must_load_sco) {
@@ -2148,7 +2147,7 @@ address YuhuMacroAssembler::write_insts_check_klass_subtype_fast_path(YuhuRegist
 
     int sc_offset = in_bytes(Klass::secondary_super_cache_offset());
     int sco_offset = in_bytes(Klass::super_check_offset_offset());
-//    Address super_check_offset_addr(super_klass, sco_offset);
+    YuhuAddress super_check_offset_addr(super_klass, sco_offset);
 
     // Hacked jmp, which may only be used just before L_fallthrough.
 #define final_jmp(label)                                                \
@@ -2168,16 +2167,12 @@ address YuhuMacroAssembler::write_insts_check_klass_subtype_fast_path(YuhuRegist
     // Check the supertype display:
     if (must_load_sco) {
         // Positive movl does right thing on LP64.
-        write_inst("ldr %s, [%s, #%d]", w_reg(temp_reg), super_klass, sco_offset);
-        super_check_offset_r = temp_reg;
+        write_inst_ldr(w_reg(temp_reg), super_check_offset_addr);
+        super_check_offset = YuhuRegisterOrConstant(temp_reg);
     }
-//    Address super_check_addr(sub_klass, super_check_offset);
-    if (super_check_offset_r != noreg) {
-        write_inst_regs("ldr x8, [%s, %s]", sub_klass, super_check_offset_r);
-    } else if (super_check_offset_c != -1) {
-        write_inst("ldr x8, [%s, #%d]", sub_klass, super_check_offset_c);
-    }
-    write_inst("cmp %s, %s", super_klass, x8);  // load displayed supertype
+    YuhuAddress super_check_addr(sub_klass, super_check_offset);
+    write_inst_ldr(x8, super_check_addr);
+    write_inst_regs("cmp %s, %s", super_klass, x8);  // load displayed supertype
 
     // This check has worked decisively for primary supers.
     // Secondary supers are sought in the super_cache ('super_cache_addr').
@@ -2190,16 +2185,16 @@ address YuhuMacroAssembler::write_insts_check_klass_subtype_fast_path(YuhuRegist
     // So if it was a primary super, we can just fail immediately.
     // Otherwise, it's the slow path for us (no success at this point).
 
-    if (super_check_offset_r != noreg) {
+    if (super_check_offset.is_register()) {
         write_inst_b(eq, *L_success);
-        write_inst("cmp %s, #%d", super_check_offset_r, sc_offset);
+        write_inst("cmp %s, #%d", super_check_offset.as_register(), sc_offset);
         if (L_failure == &L_fallthrough) {
             write_inst_b(eq, *L_slow_path);
         } else {
             write_inst_b(ne, *L_failure);
             final_jmp(*L_slow_path);
         }
-    } else if (super_check_offset_c == sc_offset) {
+    } else if (super_check_offset.as_constant() == sc_offset) {
         // Need a slow path; fast failure is impossible.
         if (L_slow_path == &L_fallthrough) {
             write_inst_b(eq, *L_success);
@@ -2533,6 +2528,190 @@ address YuhuMacroAssembler::write_insts_narrow(YuhuRegister result) {
 
     // Nothing to do for T_INT
     pin_label(done);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_load_resolved_reference_at_index(
+        YuhuRegister result, YuhuRegister index) {
+//    assert_different_registers(result, index);
+    // convert from field index to resolved_references() index and from
+    // word index to byte offset. Since this is a java object, it can be compressed
+    YuhuRegister tmp = index;  // reuse
+    write_inst("lsl %s, %s, #%d", w_reg(tmp), w_reg(tmp), LogBytesPerHeapOop);
+
+    write_insts_get_constant_pool(result);
+    // load pointer for resolved_references[] objArray
+    write_inst_ldr(result, YuhuAddress(result, ConstantPool::resolved_references_offset_in_bytes()));
+    // JNIHandles::resolve(obj);
+    write_inst_ldr(result, YuhuAddress(result, 0));
+    // Add in the index
+    write_inst_regs("add %s, %s, %s", result, result, tmp);
+    write_insts_load_heap_oop(result, YuhuAddress(result, arrayOopDesc::base_offset_in_bytes(T_OBJECT)));
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_prepare_to_jump_from_interpreted() {
+    // set sender sp
+    write_inst("mov x13, sp");
+    // record last_sp
+    write_inst_str(x20, YuhuAddress(x29, frame::interpreter_frame_last_sp_offset * wordSize));
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_jump_from_interpreted(YuhuRegister method, YuhuRegister temp) {
+    write_insts_prepare_to_jump_from_interpreted();
+
+    if (JvmtiExport::can_post_interpreter_events()) {
+        YuhuLabel run_compiled_code;
+        // JVMTI events, such as single-stepping, are implemented partly by avoiding running
+        // compiled code in threads for which the event is enabled.  Check here for
+        // interp_only_mode if these events CAN be enabled.
+        // interp_only is an int, on little endian it is sufficient to test the byte only
+        // Is a cmpl faster?
+        write_inst_ldr(x8, YuhuAddress(x28, JavaThread::interp_only_mode_offset()));
+        write_inst_cbz(x8, run_compiled_code);
+        write_inst_ldr(x8, YuhuAddress(method, Method::interpreter_entry_offset()));
+        write_inst_br(x8);
+        pin_label(run_compiled_code);
+    }
+
+    write_inst_ldr(x8, YuhuAddress(method, Method::from_interpreted_offset()));
+    write_inst_br(x8);
+    return current_pc();
+}
+
+YuhuAddress YuhuMacroAssembler::form_address(YuhuRegister Rd, YuhuRegister base, int64_t byte_offset, int shift) {
+    // TODO
+//    if (Address::offset_ok_for_immed(byte_offset, shift))
+//        // It fits; no need for any heroics
+//        return Address(base, byte_offset);
+//
+//    // Don't do anything clever with negative or misaligned offsets
+//    unsigned mask = (1 << shift) - 1;
+//    if (byte_offset < 0 || byte_offset & mask) {
+//        mov(Rd, byte_offset);
+//        add(Rd, base, Rd);
+//        return Address(Rd);
+//    }
+//
+//    // See if we can do this with two 12-bit offsets
+//    {
+//        uint64_t word_offset = byte_offset >> shift;
+//        uint64_t masked_offset = word_offset & 0xfff000;
+//        if (Address::offset_ok_for_immed(word_offset - masked_offset, 0)
+//            && Assembler::operand_valid_for_add_sub_immediate(masked_offset << shift)) {
+//            add(Rd, base, masked_offset << shift);
+//            word_offset -= masked_offset;
+//            return Address(Rd, word_offset << shift);
+//        }
+//    }
+
+    // Do it the hard way
+    write_insts_mov_imm64(Rd, byte_offset);
+    write_inst_regs("add %s, %s, %s", Rd, base, Rd);
+    return YuhuAddress(Rd);
+}
+
+address YuhuMacroAssembler::write_insts_lookup_virtual_method(YuhuRegister recv_klass,
+                                                              YuhuRegisterOrConstant vtable_index,
+                                                              YuhuRegister method_result) {
+    const int base = InstanceKlass::vtable_start_offset() * wordSize;
+    assert(vtableEntry::size() * wordSize == 8,
+           "adjust the scaling in the code below");
+    int vtable_offset_in_bytes = base + vtableEntry::method_offset_in_bytes();
+
+    if (vtable_index.is_register()) {
+        write_insts_lea(method_result,
+                        YuhuAddress(recv_klass, vtable_index.as_register(), YuhuAddress::lsl(LogBytesPerWord)));
+        write_inst_ldr(method_result, YuhuAddress(method_result, vtable_offset_in_bytes));
+    } else {
+        vtable_offset_in_bytes += vtable_index.as_constant() * wordSize;
+        write_inst_ldr(method_result, form_address(x8, recv_klass, vtable_offset_in_bytes, 0));
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_lookup_interface_method(YuhuRegister recv_klass,
+                                                                YuhuRegister intf_klass,
+                                                                YuhuRegisterOrConstant itable_index,
+                                                                YuhuRegister method_result,
+                                                                YuhuRegister scan_temp,
+                                                                YuhuLabel& L_no_such_interface,
+                                                                bool return_method) {
+//    assert_different_registers(recv_klass, intf_klass, scan_temp);
+//    assert_different_registers(method_result, intf_klass, scan_temp);
+    assert(recv_klass != method_result || !return_method,
+           "recv_klass can be destroyed when method isn't needed");
+
+    assert(itable_index.is_constant() || itable_index.as_register() == method_result,
+           "caller must use same register for non-constant itable index as for method");
+
+    // Compute start of first itableOffsetEntry (which is at the end of the vtable)
+    int vtable_base = InstanceKlass::vtable_start_offset() * wordSize;
+    int itentry_off = itableMethodEntry::method_offset_in_bytes();
+    int scan_step   = itableOffsetEntry::size() * wordSize;
+    int vte_size    = vtableEntry::size() * wordSize;
+    assert(vte_size == wordSize, "else adjust times_vte_scale");
+
+    write_inst_ldr(w_reg(scan_temp), YuhuAddress(recv_klass, InstanceKlass::vtable_length_offset() * wordSize));
+
+    // %%% Could store the aligned, prescaled offset in the klassoop.
+    // lea(scan_temp, Address(recv_klass, scan_temp, times_vte_scale, vtable_base));
+    write_insts_lea(scan_temp, YuhuAddress(recv_klass, scan_temp, YuhuAddress::lsl(3)));
+    write_inst("add %s, %s, #%d", scan_temp, scan_temp, vtable_base);
+    if (HeapWordsPerLong > 1) {
+        // Round up to align_object_offset boundary
+        // see code for instanceKlass::start_of_itable!
+        // TODO
+//        round_to(scan_temp, BytesPerLong);
+    }
+
+    if (return_method) {
+        // Adjust recv_klass by scaled itable_index, so we can free itable_index.
+        assert(itableMethodEntry::size() * wordSize == wordSize, "adjust the scaling in the code below");
+        // lea(recv_klass, Address(recv_klass, itable_index, Address::times_ptr, itentry_off));
+        write_insts_lea(recv_klass,
+                        YuhuAddress(recv_klass, itable_index, YuhuAddress::lsl(3)));
+        if (itentry_off)
+            write_inst("add %s, %s, #%d", recv_klass, recv_klass, itentry_off);
+    }
+
+    // for (scan = klass->itable(); scan->interface() != NULL; scan += scan_step) {
+    //   if (scan->interface() == intf) {
+    //     result = (klass + scan->offset() + itable_index);
+    //   }
+    // }
+    YuhuLabel search, found_method;
+
+    for (int peel = 1; peel >= 0; peel--) {
+        write_inst_ldr(method_result, YuhuAddress(scan_temp, itableOffsetEntry::interface_offset_in_bytes()));
+        write_inst_regs("cmp %s, %s", intf_klass, method_result);
+
+        if (peel) {
+            write_inst_b(eq, found_method);
+        } else {
+            write_inst_b(ne, search);
+            // (invert the test to fall through to found_method...)
+        }
+
+        if (!peel)  break;
+
+        pin_label(search);
+
+        // Check that the previous entry is non-null.  A null entry means that
+        // the receiver class doesn't implement the interface, and wasn't the
+        // same as when the caller was compiled.
+        write_inst_cbz(method_result, L_no_such_interface);
+        write_inst("add %s, %s, #%d", scan_temp, scan_temp, scan_step);
+    }
+
+    pin_label(found_method);
+
+    if (return_method) {
+        // Got a hit.
+        write_inst_ldr(w_reg(scan_temp), YuhuAddress(scan_temp, itableOffsetEntry::offset_offset_in_bytes()));
+        write_inst_ldr(method_result, YuhuAddress(recv_klass, scan_temp, YuhuAddress::uxtw(0)));
+    }
     return current_pc();
 }
 

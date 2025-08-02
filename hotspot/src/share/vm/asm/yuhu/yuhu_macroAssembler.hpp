@@ -75,6 +75,25 @@ public:
     enum YuhuOperation {
         lsl, uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
     };
+    class YuhuRegisterOrConstant VALUE_OBJ_CLASS_SPEC {
+    private:
+        YuhuRegister _r;
+        intptr_t _c;
+
+    public:
+        YuhuRegisterOrConstant(): _r(noreg), _c(0) {}
+        YuhuRegisterOrConstant(YuhuRegister r): _r(r), _c(0) {}
+        YuhuRegisterOrConstant(intptr_t c): _r(noreg), _c(c) {}
+
+        YuhuRegister as_register() const { assert(is_register(),""); return _r; }
+        intptr_t as_constant() const { assert(is_constant(),""); return _c; }
+
+        YuhuRegister register_or_noreg() const { return _r; }
+        intptr_t constant_or_zero() const  { return _c; }
+
+        bool is_register() const { return _r != noreg; }
+        bool is_constant() const { return _r == noreg; }
+    };
 private:
     const char* reg_name(YuhuRegister reg) {
         static const char* register_names[] = {
@@ -290,6 +309,8 @@ public:
         return write_inst("msr fpsr, xzr");
     }
 
+    address write_insts_round_to(YuhuRegister reg, int modulus);
+
     address write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src);
     address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuAddress src);
     address write_insts_get_unsigned_2_byte_index_at_bcp(YuhuRegister reg, int bcp_offset);
@@ -503,8 +524,7 @@ public:
                                        YuhuLabel* L_success,
                                        YuhuLabel* L_failure,
                                        YuhuLabel* L_slow_path,
-                                       YuhuRegister super_check_offset_r = noreg,
-                                       intptr_t super_check_offset_c = -1);
+                                       YuhuRegisterOrConstant super_check_offset = YuhuRegisterOrConstant(-1));
 
     // The rest of the type check; must be wired to a corresponding fast path.
     // It does not repeat the fast path logic, so don't use it standalone.
@@ -546,6 +566,25 @@ public:
                         bool want_remainder, YuhuRegister tmp = x8);
 
     address write_insts_narrow(YuhuRegister result);
+
+    address write_insts_load_resolved_reference_at_index(YuhuRegister result, YuhuRegister index);
+
+    address write_insts_prepare_to_jump_from_interpreted();
+    address write_insts_jump_from_interpreted(YuhuRegister method, YuhuRegister temp);
+
+    YuhuAddress form_address(YuhuRegister Rd, YuhuRegister base, int64_t byte_offset, int shift);
+
+    address write_insts_lookup_virtual_method(YuhuRegister recv_klass,
+                                              YuhuRegisterOrConstant vtable_index,
+                                              YuhuRegister method_result);
+
+    address write_insts_lookup_interface_method(YuhuRegister recv_klass,
+                                                YuhuRegister intf_klass,
+                                                YuhuRegisterOrConstant itable_index,
+                                                YuhuRegister method_result,
+                                                YuhuRegister scan_temp,
+                                                YuhuLabel& no_such_interface,
+                                                bool return_method = true);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
@@ -774,6 +813,19 @@ public:
     : _mode(post), _base(p.reg()), _offset(p.offset()), _target(0) { }
     YuhuAddress(address target)
     : _mode(literal), _is_lval(false), _target(target)  { }
+    YuhuAddress(YuhuMacroAssembler::YuhuRegister base, YuhuMacroAssembler::YuhuRegisterOrConstant index, extend ext = lsl())
+    : _base (base),
+            _ext(ext), _offset(0), _target(0) {
+        if (index.is_register()) {
+            _mode = base_plus_offset_reg;
+            _index = index.as_register();
+        } else {
+            guarantee(ext.op() == YuhuMacroAssembler::uxtx, "should be");
+            assert(index.is_constant(), "should be");
+            _mode = base_plus_offset;
+            _offset = index.as_constant() << ext.shift();
+        }
+    }
 
     YuhuMacroAssembler::YuhuRegister base() const {
         guarantee((_mode == base_plus_offset | _mode == base_plus_offset_reg
