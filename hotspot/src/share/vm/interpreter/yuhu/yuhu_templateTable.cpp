@@ -102,6 +102,17 @@ void YuhuTemplateTable::jsr() {
     branch(true, false);
 }
 
+void YuhuTemplateTable::goto_w() {
+    transition(vtos, vtos);
+    branch(false, true);
+}
+
+
+void YuhuTemplateTable::jsr_w() {
+    transition(vtos, vtos);       // result is not an oop, so do not transition to atos
+    branch(true, true);
+}
+
 void YuhuTemplateTable::initialize() {
     if (_is_initialized) return;
 
@@ -312,15 +323,15 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_athrow              , ____|disp|____|____, atos, vtos, athrow              ,  _           );
     def(Bytecodes::_checkcast           , ubcp|____|clvm|____, atos, atos, checkcast           ,  _           );
     def(Bytecodes::_instanceof          , ubcp|____|clvm|____, atos, itos, instanceof          ,  _           );
-//    def(Bytecodes::_monitorenter        , ____|disp|clvm|____, atos, vtos, monitorenter        ,  _           );
-//    def(Bytecodes::_monitorexit         , ____|____|clvm|____, atos, vtos, monitorexit         ,  _           );
-//    def(Bytecodes::_wide                , ubcp|disp|____|____, vtos, vtos, wide                ,  _           );
-//    def(Bytecodes::_multianewarray      , ubcp|____|clvm|____, vtos, atos, multianewarray      ,  _           );
-//    def(Bytecodes::_ifnull              , ubcp|____|clvm|____, atos, vtos, if_nullcmp          , equal        );
-//    def(Bytecodes::_ifnonnull           , ubcp|____|clvm|____, atos, vtos, if_nullcmp          , not_equal    );
-//    def(Bytecodes::_goto_w              , ubcp|____|clvm|____, vtos, vtos, goto_w              ,  _           );
-//    def(Bytecodes::_jsr_w               , ubcp|____|____|____, vtos, vtos, jsr_w               ,  _           );
-//
+    def(Bytecodes::_monitorenter        , ____|disp|clvm|____, atos, vtos, monitorenter        ,  _           );
+    def(Bytecodes::_monitorexit         , ____|____|clvm|____, atos, vtos, monitorexit         ,  _           );
+    def(Bytecodes::_wide                , ubcp|disp|____|____, vtos, vtos, wide                ,  _           );
+    def(Bytecodes::_multianewarray      , ubcp|____|clvm|____, vtos, atos, multianewarray      ,  _           );
+    def(Bytecodes::_ifnull              , ubcp|____|clvm|____, atos, vtos, if_nullcmp          , equal        );
+    def(Bytecodes::_ifnonnull           , ubcp|____|clvm|____, atos, vtos, if_nullcmp          , not_equal    );
+    def(Bytecodes::_goto_w              , ubcp|____|clvm|____, vtos, vtos, goto_w              ,  _           );
+    def(Bytecodes::_jsr_w               , ubcp|____|____|____, vtos, vtos, jsr_w               ,  _           );
+
 //    // wide Java spec bytecodes
 //    def(Bytecodes::_iload               , ubcp|____|____|iswd, vtos, itos, wide_iload          ,  _           );
 //    def(Bytecodes::_lload               , ubcp|____|____|iswd, vtos, ltos, wide_lload          ,  _           );

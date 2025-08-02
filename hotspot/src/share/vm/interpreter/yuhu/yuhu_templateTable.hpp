@@ -232,6 +232,17 @@ private:
     static void athrow();
     static void checkcast();
     static void instanceof();
+
+    static void monitorenter();
+    static void monitorexit();
+
+    static void wide();
+    static void multianewarray();
+
+    static void if_nullcmp(Condition cc);
+
+    static void goto_w();
+    static void jsr_w();
 public:
     static void initialize();
 

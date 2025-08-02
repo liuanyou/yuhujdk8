@@ -2585,6 +2585,195 @@ void YuhuTemplateTable::instanceof() {
     // r0 = 1: obj != NULL and obj is     an instanceof the specified klass
 }
 
+void YuhuTemplateTable::monitorenter()
+{
+    transition(atos, vtos);
+
+    // check for NULL object
+    __ write_insts_null_check(__ x0);
+
+    const YuhuAddress monitor_block_top(
+            __ x29, frame::interpreter_frame_monitor_block_top_offset * wordSize);
+    const YuhuAddress monitor_block_bot(
+            __ x29, frame::interpreter_frame_initial_sp_offset * wordSize);
+    const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
+
+    YuhuLabel allocated;
+
+    // initialize entry pointer
+    __ write_inst("mov x1, xzr");  // points to free slot or NULL
+
+    // find a free slot in the monitor block (result in c_rarg1)
+    {
+        YuhuLabel entry, loop, exit;
+        __ write_inst_ldr(__ x3, monitor_block_top); // points to current entry,
+        // starting with top-most entry
+        __ write_insts_lea(__ x2, monitor_block_bot); // points to word before bottom
+
+        __ write_inst_b(entry);
+
+        __ pin_label(loop);
+        // check if current entry is used
+        // if not used then remember entry in c_rarg1
+        __ write_inst_ldr(__ x8, YuhuAddress(__ x3, BasicObjectLock::obj_offset_in_bytes()));
+        __ write_inst("cmp %s, %s", __ xzr, __ x8);
+        __ write_inst_csel(__ x1, __ x3, __ x1, __ eq);
+        // check if current entry is for same object
+        __ write_inst("cmp x0, x8");
+        // if same object then stop searching
+        __ write_inst_b(__ eq, exit);
+        // otherwise advance to next entry
+        __ write_inst("add x3, x3, #%d", entry_size);
+        __ pin_label(entry);
+        // check if bottom reached
+        __ write_inst("cmp x3, x2");
+        // if not at bottom then check this entry
+        __ write_inst_b(__ ne, loop);
+        __ pin_label(exit);
+    }
+
+    __ write_inst_cbnz(__ x1, allocated); // check if a slot has been found and
+    // if found, continue with that on
+
+    // allocate one if there's no free slot
+    {
+        YuhuLabel entry, loop;
+        // 1. compute new pointers            // rsp: old expression stack top
+        __ write_inst_ldr(__ x1, monitor_block_bot); // c_rarg1: old expression stack bottom
+        __ write_inst("sub x20, x20, #%d", entry_size);
+        __ write_inst("sub x1, x1, #%d", entry_size); // move expression stack bottom
+        __ write_inst("mov x3, x20"); // set start value for copy loop
+        __ write_inst_str(__ x1, monitor_block_bot); // set new monitor block bottom
+
+        __ write_inst("sub sp, sp, #%d", entry_size); // make room for the monitor
+
+        __ write_inst_b(entry);
+        // 2. move expression stack contents
+        __ pin_label(loop);
+        __ write_inst_ldr(__ x2, YuhuAddress(__ x3, entry_size)); // load expression stack
+        // word from old location
+        __ write_inst_str(__ x2, YuhuAddress(__ x3, 0)); // and store it at new location
+        __ write_inst("add x3, x3, #%d", wordSize); // advance to next word
+        __ pin_label(entry);
+        __ write_inst("cmp x3, x1"); // check if bottom reached
+        __ write_inst_b(__ ne, loop); // if not at bottom then
+        // copy next word
+    }
+
+    // call run-time routine
+    // c_rarg1: points to monitor entry
+    __ pin_label(allocated);
+
+    // Increment bcp to point to the next bytecode, so exception
+    // handling for async. exceptions work correctly.
+    // The object has already been poped from the stack, so the
+    // expression stack looks correct.
+    __ write_insts_increment(__ x22);
+
+    // store object
+    __ write_inst_str(__ x0, YuhuAddress(__ x1, BasicObjectLock::obj_offset_in_bytes()));
+    __ write_insts_lock_object(__ x1);
+
+    // check to make sure this monitor doesn't cause stack overflow after locking
+    __ write_insts_save_bcp();  // in case of exception
+    __ write_insts_generate_stack_overflow_check(0);
+
+    // The bcp has already been incremented. Just need to dispatch to
+    // next instruction.
+    __ write_insts_dispatch_next(vtos);
+}
+
+
+void YuhuTemplateTable::monitorexit()
+{
+    transition(atos, vtos);
+
+    // check for NULL object
+    __ write_insts_null_check(__ x0);
+
+    const YuhuAddress monitor_block_top(
+            __ x29, frame::interpreter_frame_monitor_block_top_offset * wordSize);
+    const YuhuAddress monitor_block_bot(
+            __ x29, frame::interpreter_frame_initial_sp_offset * wordSize);
+    const int entry_size = frame::interpreter_frame_monitor_size() * wordSize;
+
+    YuhuLabel found;
+
+    // find matching slot
+    {
+        YuhuLabel entry, loop;
+        __ write_inst_ldr(__ x1, monitor_block_top); // points to current entry,
+        // starting with top-most entry
+        __ write_insts_lea(__ x2, monitor_block_bot); // points to word before bottom
+        // of monitor block
+        __ write_inst_b(entry);
+
+        __ pin_label(loop);
+        // check if current entry is for same object
+        __ write_inst_ldr(__ x8, YuhuAddress(__ x1, BasicObjectLock::obj_offset_in_bytes()));
+        __ write_inst("cmp x0, x8");
+        // if same object then stop searching
+        __ write_inst_b(__ eq, found);
+        // otherwise advance to next entry
+        __ write_inst("add x1, x1, #%d", entry_size);
+        __ pin_label(entry);
+        // check if bottom reached
+        __ write_inst("cmp x1, x2");
+        // if not at bottom then check this entry
+        __ write_inst_b(__ ne, loop);
+    }
+
+    // error handling. Unlocking was not block-structured
+    __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address,
+                                       InterpreterRuntime::throw_illegal_monitor_state_exception));
+    __ write_insts_stop("should not reach here");
+
+    // call run-time routine
+    __ pin_label(found);
+    __ write_inst_push_ptr(__ x0); // make sure object is on stack (contract with oopMaps)
+    __ write_insts_unlock_object(__ x1);
+    __ write_inst_pop_ptr(__ x0); // discard object
+}
+
+void YuhuTemplateTable::wide()
+{
+    __ write_insts_load_unsigned_byte(__ w19, at_bcp(1));
+    __ write_insts_mov_imm64(__ x8, (uint64_t)(address)YuhuInterpreter::_wentry_point);
+    __ write_inst_ldr(__ x8, YuhuAddress(__ x8, __ w19, YuhuAddress::uxtw(3)));
+    __ write_inst_br(__ x8);
+}
+
+
+// Multi arrays
+void YuhuTemplateTable::multianewarray() {
+    transition(vtos, atos);
+    __ write_insts_load_unsigned_byte(__ w0, at_bcp(3)); // get number of dimensions
+    // last dim is on top of stack; we want address of first one:
+    // first_addr = last_addr + (ndims - 1) * wordSize
+    __ write_insts_lea(__ x1, YuhuAddress(__ x20, __ w0, YuhuAddress::uxtw(3)));
+    __ write_inst("sub x1, x1, #%d", wordSize);
+    __ write_insts_final_call_VM(__ x0,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::multianewarray),
+            __ x1);
+    __ write_insts_load_unsigned_byte(__ w1, at_bcp(3));
+    __ write_insts_lea(__ x20, YuhuAddress(__ x20, __ w1, YuhuAddress::uxtw(3)));
+}
+
+void YuhuTemplateTable::if_nullcmp(Condition cc)
+{
+    transition(atos, vtos);
+    // assume branch is more often taken than not (loops use backward branches)
+    YuhuLabel not_taken;
+    if (cc == equal)
+        __ write_inst_cbnz(__ x0, not_taken);
+    else
+        __ write_inst_cbz(__ x0, not_taken);
+    branch(false, false);
+    __ pin_label(not_taken);
+    // TODO
+//    __ profile_not_taken_branch(r0);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
