@@ -2909,6 +2909,91 @@ address YuhuMacroAssembler::write_insts_reinit_heapbase()
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_decrement(YuhuRegister reg, int value)
+{
+    if (value < 0)  { write_insts_increment(reg, -value);      return current_pc(); }
+    if (value == 0) {                              return current_pc(); }
+    if (value < (1 << 12)) { write_inst("sub %s, %s, #%d", reg, reg, value); return current_pc(); }
+    /* else */ {
+        assert(reg != x9, "invalid dst for register decrement");
+        write_insts_mov_imm64(x9, (uint64_t)value);
+        write_inst_regs("sub %s, %s, %s", reg, reg, x9);
+        return current_pc();
+    }
+}
+
+address YuhuMacroAssembler::write_insts_decrement(YuhuAddress dst, int value)
+{
+    assert(!dst.uses(x8), "invalid address for decrement");
+    write_inst_ldr(x8, dst);
+    write_insts_decrement(x8, value);
+    write_inst_str(x8, dst);
+    return current_pc();
+}
+
+
+address YuhuMacroAssembler::write_insts_increment(YuhuRegister reg, int value)
+{
+    if (value < 0)  { write_insts_decrement(reg, -value);      return current_pc(); }
+    if (value == 0) {                              return current_pc(); }
+    if (value < (1 << 12)) { write_inst("add %s, %s, #%d", reg, reg, value); return current_pc(); }
+    /* else */ {
+        assert(reg != x9, "invalid dst for register increment");
+        write_insts_mov_imm32(w9, (unsigned)value);
+        write_inst_regs("add %s, %s, %s", reg, reg, x9);
+        return current_pc();
+    }
+}
+
+address YuhuMacroAssembler::write_insts_increment(YuhuAddress dst, int value)
+{
+    assert(!dst.uses(x8), "invalid dst for address increment");
+    write_inst_ldr(x8, dst);
+    write_insts_increment(x8, value);
+    write_inst_str(x8, dst);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_generate_stack_overflow_check( int frame_size_in_bytes) {
+    if (UseStackBanging) {
+        // Each code entry causes one stack bang n pages down the stack where n
+        // is configurable by StackShadowPages.  The setting depends on the maximum
+        // depth of VM call stack or native before going back into java code,
+        // since only java code can raise a stack overflow exception using the
+        // stack banging mechanism.  The VM and native code does not detect stack
+        // overflow.
+        // The code in JavaCalls::call() checks that there is at least n pages
+        // available, so all entry code needs to do is bang once for the end of
+        // this shadow zone.
+        // The entry code may need to bang additional pages if the framesize
+        // is greater than a page.
+
+        const int page_size = os::vm_page_size();
+        int bang_end = StackShadowPages*page_size;
+
+        // This is how far the previous frame's stack banging extended.
+        const int bang_end_safe = bang_end;
+
+        if (frame_size_in_bytes > page_size) {
+            bang_end += frame_size_in_bytes;
+        }
+
+        int bang_offset = bang_end_safe;
+        while (bang_offset <= bang_end) {
+            // Need at least one stack bang at end of shadow zone.
+            // stack grows down, caller passes positive offset
+            int offset = bang_offset;
+
+            assert(offset > 0, "must bang with negative offset");
+            write_insts_mov_imm64(x9, -offset);
+            write_inst_str(xzr, YuhuAddress(sp, x9));
+
+            bang_offset += page_size;
+        }
+    } // end (UseStackBanging)
+    return current_pc();
+}
+
 #define __ _masm->
 
 YuhuSkipIfEqual::YuhuSkipIfEqual(

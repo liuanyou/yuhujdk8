@@ -615,6 +615,14 @@ public:
     address write_insts_encode_klass_not_null(YuhuRegister dst, YuhuRegister src);
 
     address write_insts_reinit_heapbase();
+
+    address write_insts_decrement(YuhuRegister reg, int value = 1);
+    address write_insts_decrement(YuhuAddress dst, int value = 1);
+
+    address write_insts_increment(YuhuRegister reg, int value = 1);
+    address write_insts_increment(YuhuAddress dst, int value = 1);
+
+    address write_insts_generate_stack_overflow_check( int frame_size_in_bytes );
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
