@@ -2715,6 +2715,211 @@ address YuhuMacroAssembler::write_insts_lookup_interface_method(YuhuRegister rec
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_tlab_allocate(YuhuRegister obj,
+                                                      YuhuRegister var_size_in_bytes,
+                                                      int con_size_in_bytes,
+                                                      YuhuRegister t1,
+                                                      YuhuRegister t2,
+                                                      YuhuLabel& slow_case) {
+//    assert_different_registers(obj, t2);
+//    assert_different_registers(obj, var_size_in_bytes);
+    YuhuRegister end = t2;
+
+    // verify_tlab();
+
+    write_inst_ldr(obj, YuhuAddress(x28, JavaThread::tlab_top_offset()));
+    if (var_size_in_bytes == noreg) {
+        write_insts_lea(end, YuhuAddress(obj, con_size_in_bytes));
+    } else {
+        write_insts_lea(end, YuhuAddress(obj, var_size_in_bytes));
+    }
+    write_inst_ldr(x8, YuhuAddress(x28, JavaThread::tlab_end_offset()));
+    write_inst_regs("cmp %s, %s", end, x8);
+    write_inst_b(hi, slow_case);
+
+    // update the tlab top pointer
+    write_inst_str(end, YuhuAddress(x28, JavaThread::tlab_top_offset()));
+
+    // recover var_size_in_bytes if necessary
+    if (var_size_in_bytes == end) {
+        write_inst_regs("sub %s, %s, %s", var_size_in_bytes, var_size_in_bytes, obj);
+    }
+    // verify_tlab();
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_eden_allocate(YuhuRegister obj,
+                                                      YuhuRegister var_size_in_bytes,
+                                                      int con_size_in_bytes,
+                                                      YuhuRegister t1,
+                                                      YuhuLabel& slow_case) {
+//    assert_different_registers(obj, var_size_in_bytes, t1);
+    if (CMSIncrementalMode || !Universe::heap()->supports_inline_contig_alloc()) {
+        write_inst_b(slow_case);
+    } else {
+        YuhuRegister end = t1;
+        YuhuRegister heap_end = x9;
+        YuhuLabel retry;
+        pin_label(retry);
+        {
+            uint64_t offset;
+            write_insts_adrp(x8, (address) Universe::heap()->end_addr(), offset);
+            write_inst_ldr(heap_end, YuhuAddress(x8, offset));
+        }
+
+        ExternalAddress heap_top((address) Universe::heap()->top_addr());
+
+        // Get the current top of the heap
+        {
+            uint64_t offset;
+            write_insts_adrp(x8, (address) Universe::heap()->top_addr(), offset);
+            // Use add() here after ARDP, rather than lea().
+            // lea() does not generate anything if its offset is zero.
+            // However, relocs expect to find either an ADD or a load/store
+            // insn after an ADRP.  add() always generates an ADD insn, even
+            // for add(Rn, Rn, 0).
+            write_inst("add x8, x8, #%d", offset);
+            write_inst_regs("ldaxr %s, %s", obj, x8);
+        }
+
+        // Adjust it my the size of our new object
+        if (var_size_in_bytes == noreg) {
+            write_insts_lea(end, YuhuAddress(obj, con_size_in_bytes));
+        } else {
+            write_insts_lea(end, YuhuAddress(obj, var_size_in_bytes));
+        }
+
+        // if end < obj then we wrapped around high memory
+        write_inst_regs("cmp %s, %s", end, obj);
+        write_inst_b(lo, slow_case);
+
+        write_inst_regs("cmp %s, %s", end, heap_end);
+        write_inst_b(hi, slow_case);
+
+        // If heap_top hasn't been changed by some other thread, update it.
+        write_inst_regs("stlxr x9, %s, x8", end);
+        write_inst_cbnz(w9, retry);
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_incr_allocated_bytes(YuhuRegister thread,
+                                                             YuhuRegister var_size_in_bytes,
+                                                             int con_size_in_bytes,
+                                                             YuhuRegister t1) {
+    if (thread == noreg) {
+        thread = x28;
+    }
+    assert(t1 != noreg, "need temp reg");
+
+    write_inst_ldr(t1, YuhuAddress(thread, in_bytes(JavaThread::allocated_bytes_offset())));
+    if (var_size_in_bytes != noreg) {
+        write_inst_regs("add %s, %s, %s", t1, t1, var_size_in_bytes);
+    } else {
+        write_inst("add %s, %s, #%d", t1, t1, con_size_in_bytes);
+    }
+    write_inst_str(t1, YuhuAddress(thread, in_bytes(JavaThread::allocated_bytes_offset())));
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_klass_gap(YuhuRegister dst, YuhuRegister src) {
+    if (UseCompressedClassPointers) {
+        // Store to klass gap in destination
+        write_inst_str(w_reg(src), YuhuAddress(dst, oopDesc::klass_gap_offset_in_bytes()));
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_store_klass(YuhuRegister dst, YuhuRegister src) {
+    // FIXME: Should this be a store release?  concurrent gcs assumes
+    // klass length is valid if klass field is not null.
+    if (UseCompressedClassPointers) {
+        write_insts_encode_klass_not_null(src);
+        write_inst_str(w_reg(src), YuhuAddress(dst, oopDesc::klass_offset_in_bytes()));
+    } else {
+        write_inst_str(src, YuhuAddress(dst, oopDesc::klass_offset_in_bytes()));
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_encode_klass_not_null(YuhuRegister r) {
+    return write_insts_encode_klass_not_null(r, r);
+}
+
+address YuhuMacroAssembler::write_insts_encode_klass_not_null(YuhuRegister dst, YuhuRegister src) {
+    if (Universe::narrow_klass_base() == NULL) {
+        if (Universe::narrow_klass_shift() != 0) {
+            assert (LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+            write_inst("lsr %s, %s, #%d", dst, src, LogKlassAlignmentInBytes);
+        } else {
+            if (dst != src) write_inst_mov_reg(dst, src);
+        }
+        return current_pc();
+    }
+
+    if (use_XOR_for_compressed_class_base) {
+        if (Universe::narrow_klass_shift() != 0) {
+            write_inst("eor %s, %s, #%d", dst, src, (uint64_t)Universe::narrow_klass_base());
+            write_inst("lsr %s, %s, #%d", dst, dst, LogKlassAlignmentInBytes);
+        } else {
+            write_inst("eor %s, %s, #%d", dst, src, (uint64_t)Universe::narrow_klass_base());
+        }
+        return current_pc();
+    }
+
+    if (((uint64_t)Universe::narrow_klass_base() & 0xffffffff) == 0
+        && Universe::narrow_klass_shift() == 0) {
+        write_inst_mov_reg(w_reg(dst), w_reg(src));
+        return current_pc();
+    }
+
+#ifdef ASSERT
+    // TODO
+//    verify_heapbase("MacroAssembler::encode_klass_not_null2: heap base corrupted?");
+#endif
+
+    YuhuRegister rbase = dst;
+    if (dst == src) rbase = x27;
+    write_insts_mov_imm64(rbase, (uint64_t)Universe::narrow_klass_base());
+    write_inst_regs("sub %s, %s, %s", dst, src, rbase);
+    if (Universe::narrow_klass_shift() != 0) {
+        assert (LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+        write_inst("lsr, %s, %s, #%d", dst, dst, LogKlassAlignmentInBytes);
+    }
+    if (dst == src) write_insts_reinit_heapbase();
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_reinit_heapbase()
+{
+    if (UseCompressedOops) {
+        if (Universe::is_fully_initialized()) {
+            write_insts_mov_imm64(x27, (uint64_t)Universe::narrow_ptrs_base());
+        } else {
+            write_insts_lea(x27, (address)Universe::narrow_ptrs_base_addr());
+            write_inst_ldr(x27, YuhuAddress(x27));
+        }
+    }
+    return current_pc();
+}
+
+#define __ _masm->
+
+YuhuSkipIfEqual::YuhuSkipIfEqual(
+        YuhuMacroAssembler* masm, const bool* flag_addr, bool value) {
+    _masm = masm;
+    uint64_t offset;
+    __ write_insts_adrp(__ x8, (address)flag_addr, offset);
+    __ write_inst_ldrb(__ w8, YuhuAddress(__ x8, offset));
+    __ write_inst_cbz(__ w8, _label);
+}
+
+#undef __
+
+YuhuSkipIfEqual::~YuhuSkipIfEqual() {
+    _masm->pin_label(_label);
+}
+
 #define __ as->
 
 void YuhuAddress::lea(YuhuMacroAssembler *as, YuhuMacroAssembler::YuhuRegister r) const {

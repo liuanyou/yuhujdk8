@@ -585,6 +585,35 @@ public:
                                                 YuhuRegister scan_temp,
                                                 YuhuLabel& no_such_interface,
                                                 bool return_method = true);
+
+    address write_insts_tlab_allocate(
+            YuhuRegister obj,                      // result: pointer to object after successful allocation
+            YuhuRegister var_size_in_bytes,        // object size in bytes if unknown at compile time; invalid otherwise
+            int      con_size_in_bytes,        // object size in bytes if   known at compile time
+            YuhuRegister t1,                       // temp register
+            YuhuRegister t2,                       // temp register
+            YuhuLabel&   slow_case                 // continuation point if fast allocation fails
+    );
+
+    address write_insts_eden_allocate(
+            YuhuRegister obj,                      // result: pointer to object after successful allocation
+            YuhuRegister var_size_in_bytes,        // object size in bytes if unknown at compile time; invalid otherwise
+            int      con_size_in_bytes,        // object size in bytes if   known at compile time
+            YuhuRegister t1,                       // temp register
+            YuhuLabel&   slow_case                 // continuation point if fast allocation fails
+    );
+
+    address write_insts_incr_allocated_bytes(YuhuRegister thread,
+                                             YuhuRegister var_size_in_bytes, int con_size_in_bytes,
+                                             YuhuRegister t1 = noreg);
+
+    address write_insts_store_klass_gap(YuhuRegister dst, YuhuRegister src);
+    address write_insts_store_klass(YuhuRegister dst, YuhuRegister src);
+
+    address write_insts_encode_klass_not_null(YuhuRegister r);
+    address write_insts_encode_klass_not_null(YuhuRegister dst, YuhuRegister src);
+
+    address write_insts_reinit_heapbase();
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
@@ -666,6 +695,16 @@ public:
     YuhuLabel() {
         init();
     }
+};
+
+class YuhuSkipIfEqual {
+private:
+    YuhuMacroAssembler* _masm;
+    YuhuLabel _label;
+
+public:
+    YuhuSkipIfEqual(YuhuMacroAssembler*, const bool* flag_addr, bool value);
+    ~YuhuSkipIfEqual();
 };
 
 // A set of registers
