@@ -168,3 +168,20 @@ int YuhuInterpreter::BasicType_as_index(BasicType type) {
            "index out of bounds");
     return i;
 }
+
+address* YuhuInterpreter::invoke_return_entry_table_for(Bytecodes::Code code) {
+    switch (code) {
+        case Bytecodes::_invokestatic:
+        case Bytecodes::_invokespecial:
+        case Bytecodes::_invokevirtual:
+        case Bytecodes::_invokehandle:
+            return YuhuInterpreter::invoke_return_entry_table();
+        case Bytecodes::_invokeinterface:
+            return YuhuInterpreter::invokeinterface_return_entry_table();
+        case Bytecodes::_invokedynamic:
+            return YuhuInterpreter::invokedynamic_return_entry_table();
+        default:
+            fatal(err_msg("invalid bytecode: %s", Bytecodes::name(code)));
+            return NULL;
+    }
+}

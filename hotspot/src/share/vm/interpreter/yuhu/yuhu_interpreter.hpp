@@ -142,6 +142,11 @@ public:
         return ((frame::interpreter_frame_expression_stack_direction() * n) * stackElementSize);
     }
 
+    static address*   invoke_return_entry_table()                 { return _invoke_return_entry; }
+    static address*   invokeinterface_return_entry_table()        { return _invokeinterface_return_entry; }
+    static address*   invokedynamic_return_entry_table()          { return _invokedynamic_return_entry; }
+    static address* invoke_return_entry_table_for(Bytecodes::Code code);
+
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"
 #endif

@@ -2025,6 +2025,298 @@ void YuhuTemplateTable::putfield(int byte_no)
     putfield_or_static(byte_no, false);
 }
 
+void YuhuTemplateTable::prepare_invoke(int byte_no,
+                                       YuhuMacroAssembler::YuhuRegister method, // linked method (or i-klass)
+                                       YuhuMacroAssembler::YuhuRegister index,  // itable index, MethodType, etc.
+                                       YuhuMacroAssembler::YuhuRegister recv,   // if caller wants to see it
+                                       YuhuMacroAssembler::YuhuRegister flags   // if caller wants to test it
+) {
+    // determine flags
+    Bytecodes::Code code = bytecode();
+    const bool is_invokeinterface  = code == Bytecodes::_invokeinterface;
+    const bool is_invokedynamic    = code == Bytecodes::_invokedynamic;
+    const bool is_invokehandle     = code == Bytecodes::_invokehandle;
+    const bool is_invokevirtual    = code == Bytecodes::_invokevirtual;
+    const bool is_invokespecial    = code == Bytecodes::_invokespecial;
+    const bool load_receiver       = (recv  != __ noreg);
+    const bool save_flags          = (flags != __ noreg);
+    assert(load_receiver == (code != Bytecodes::_invokestatic && code != Bytecodes::_invokedynamic), "");
+    assert(save_flags    == (is_invokeinterface || is_invokevirtual), "need flags for vfinal");
+    assert(flags == __ noreg || flags == __ x3, "");
+    assert(recv  == __ noreg || recv  == __ x2, "");
+
+    // setup registers & access constant pool cache
+    if (recv  == __ noreg)  recv  = __ x2;
+    if (flags == __ noreg)  flags = __ x3;
+//    assert_different_registers(method, index, recv, flags);
+
+    // save 'interpreter return address'
+    __ write_insts_save_bcp();
+
+    load_invoke_cp_cache_entry(byte_no, method, index, flags, is_invokevirtual, false, is_invokedynamic);
+
+    // maybe push appendix to arguments (just before return address)
+    if (is_invokedynamic || is_invokehandle) {
+        YuhuLabel L_no_push;
+        __ write_inst_tbz(flags, ConstantPoolCacheEntry::has_appendix_shift, L_no_push);
+        // Push the appendix as a trailing parameter.
+        // This must be done before we get the receiver,
+        // since the parameter_size includes it.
+        __ write_inst_push(__ x19);
+        __ write_insts_mov_imm64(__ x19, index);
+        assert(ConstantPoolCacheEntry::_indy_resolved_references_appendix_offset == 0, "appendix expected at index+0");
+        __ write_insts_load_resolved_reference_at_index(index, __ x19);
+        __ write_inst_pop(__ x19);
+        __ write_inst_push(index);  // push appendix (MethodType, CallSite, etc.)
+        __ pin_label(L_no_push);
+    }
+
+    // load receiver if needed (note: no return address pushed yet)
+    if (load_receiver) {
+        __ write_inst("add %s, %s, #%d", __ w_reg(recv), __ w_reg(flags), ConstantPoolCacheEntry::parameter_size_mask);
+        // FIXME -- is this actually correct? looks like it should be 2
+        // const int no_return_pc_pushed_yet = -1;  // argument slot correction before we push return address
+        // const int receiver_is_at_end      = -1;  // back off one slot to get receiver
+        // Address recv_addr = __ argument_address(recv, no_return_pc_pushed_yet + receiver_is_at_end);
+        // __ movptr(recv, recv_addr);
+        __ write_inst_add(__ x8, __ x20, recv, __ uxtx, 3); // FIXME: uxtb here?
+        __ write_inst_ldr(recv, YuhuAddress(__ x8, -YuhuInterpreter::expr_offset_in_bytes(1)));
+        __ write_insts_verify_oop(recv, "broken oop");
+    }
+
+    // compute return type
+    // x86 uses a shift and mask or wings it with a shift plus assert
+    // the mask is not needed. aarch64 just uses bitfield extract
+    __ write_inst_imms("ubfx %s, %s, #%d, #%d", __ w9, __ w_reg(flags),
+                       ConstantPoolCacheEntry::tos_state_shift,  ConstantPoolCacheEntry::tos_state_bits);
+    // load return address
+    {
+        const address table_addr = (address) YuhuInterpreter::invoke_return_entry_table_for(code);
+        __ write_insts_mov_imm64(__ x8, (uint64_t) table_addr);
+        __ write_inst_ldr(__ lr, YuhuAddress(__ x8, __ x9, YuhuAddress::lsl(3)));
+    }
+}
+
+void YuhuTemplateTable::invokevirtual_helper(YuhuMacroAssembler::YuhuRegister index,
+                                             YuhuMacroAssembler::YuhuRegister recv,
+                                             YuhuMacroAssembler::YuhuRegister flags)
+{
+    // Uses temporary registers r0, r3
+//    assert_different_registers(index, recv, r0, r3);
+    // Test for an invoke of a final method
+    YuhuLabel notFinal;
+    __ write_inst_tbz(flags, ConstantPoolCacheEntry::is_vfinal_shift, notFinal);
+
+    const YuhuMacroAssembler::YuhuRegister method = index;  // method must be rmethod
+    assert(method == __ x12,
+           "methodOop must be rmethod for interpreter calling convention");
+
+    // do the call - the index is actually the method to call
+    // that is, f2 is a vtable index if !is_vfinal, else f2 is a Method*
+
+    // It's final, need a null check here!
+    __ write_insts_null_check(recv);
+
+    // profile this call
+    // TODO
+//    __ profile_final_call(r0);
+//    __ profile_arguments_type(r0, method, r4, true);
+
+    __ write_insts_jump_from_interpreted(method, __ x0);
+
+    __ pin_label(notFinal);
+
+    // get receiver klass
+    __ write_insts_null_check(recv, oopDesc::klass_offset_in_bytes());
+    __ write_insts_load_klass(__ x0, recv);
+
+    // profile this call
+    // TODO
+//    __ profile_virtual_call(r0, rlocals, r3);
+
+    // get target methodOop & entry point
+    __ write_insts_lookup_virtual_method(__ x0, method, index);
+    // TODO
+//    __ profile_arguments_type(r3, method, r4, true);
+    // FIXME -- this looks completely redundant. is it?
+    // __ ldr(r3, Address(method, Method::interpreter_entry_offset()));
+    __ write_insts_jump_from_interpreted(method, __ x3);
+}
+
+void YuhuTemplateTable::invokevirtual(int byte_no)
+{
+    transition(vtos, vtos);
+    assert(byte_no == f2_byte, "use this argument");
+
+    const YuhuMacroAssembler::YuhuRegister t = __ x17;
+
+    prepare_invoke(byte_no, __ x12, __ noreg, __ x2, __ x3);
+
+    // rmethod: index (actually a Method*)
+    // r2: receiver
+    // r3: flags
+
+    invokevirtual_helper(__ x12, __ x2, __ x3);
+}
+
+void YuhuTemplateTable::invokespecial(int byte_no)
+{
+    transition(vtos, vtos);
+    assert(byte_no == f1_byte, "use this argument");
+
+    prepare_invoke(byte_no, __ x12, __ noreg,  // get f1 Method*
+                   __ x2);  // get receiver also for null check
+    __ write_insts_verify_oop(__ x2, "broken oop");
+    __ write_insts_null_check(__ x2);
+    // do the call
+    // TODO
+//    __ profile_call(r0);
+//    __ profile_arguments_type(r0, rmethod, rbcp, false);
+    __ write_insts_jump_from_interpreted(__ x12, __ x0);
+}
+
+void YuhuTemplateTable::invokestatic(int byte_no)
+{
+    transition(vtos, vtos);
+    assert(byte_no == f1_byte, "use this argument");
+
+    prepare_invoke(byte_no, __ x12);  // get f1 Method*
+    // do the call
+    // TODO
+//    __ profile_call(r0);
+//    __ profile_arguments_type(r0, rmethod, r4, false);
+    __ write_insts_jump_from_interpreted(__ x12, __ x0);
+}
+
+void YuhuTemplateTable::invokeinterface(int byte_no) {
+    transition(vtos, vtos);
+    assert(byte_no == f1_byte, "use this argument");
+
+    prepare_invoke(byte_no, __ x0, __ x12,  // get f1 Klass*, f2 Method*
+                   __ x2, __ x3); // recv, flags
+
+    // r0: interface klass (from f1)
+    // rmethod: method (from f2)
+    // r2: receiver
+    // r3: flags
+
+    // Special case of invokeinterface called for virtual method of
+    // java.lang.Object.  See cpCacheOop.cpp for details.
+    // This code isn't produced by javac, but could be produced by
+    // another compliant java compiler.
+    YuhuLabel notMethod;
+    __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_forced_virtual_shift, notMethod);
+
+    invokevirtual_helper(__ x12, __ x2, __ x3);
+    __ pin_label(notMethod);
+
+    // Get receiver klass into r3 - also a null check
+    __ write_insts_restore_locals();
+    __ write_insts_null_check(__ x2, oopDesc::klass_offset_in_bytes());
+    __ write_insts_load_klass(__ x3, __ x2);
+
+    YuhuLabel no_such_interface, no_such_method;
+
+    // Receiver subtype check against REFC.
+    // Superklass in r0. Subklass in r3. Blows rscratch2, r13.
+    __ write_insts_lookup_interface_method(// inputs: rec. class, interface, itable index
+            __ x3, __ x0, __ noreg,
+            // outputs: scan temp. reg, scan temp. reg
+            __ x9, __ x13,
+            no_such_interface,
+            /*return_method=*/false);
+
+    // profile this call
+    // TODO
+//    __ profile_virtual_call(r3, r13, r19);
+
+    // Get declaring interface class from method, and itable index
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x12, Method::const_offset()));
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x0, ConstMethod::constants_offset()));
+    __ write_inst_ldr(__ x0, YuhuAddress(__ x0, ConstantPool::pool_holder_offset_in_bytes()));
+    __ write_inst_ldr(__ w12, YuhuAddress(__ x12, Method::itable_index_offset()));
+    __ write_inst("sub w12, w12, #%d", Method::itable_index_max);
+    __ write_inst("neg w12, w12");
+
+    __ write_insts_lookup_interface_method(// inputs: rec. class, interface, itable index
+            __ x3, __ x0, __ x12,
+            // outputs: method, scan temp. reg
+            __ x12, __ x13,
+            no_such_interface);
+
+    // rmethod,: methodOop to call
+    // r2: receiver
+    // Check for abstract method error
+    // Note: This should be done more efficiently via a throw_abstract_method_error
+    //       interpreter entry point and a conditional jump to it in case of a null
+    //       method.
+    __ write_inst_cbz(__ x12, no_such_method);
+
+    // TODO
+//    __ profile_arguments_type(r3, rmethod, r13, true);
+
+    // do the call
+    // r2: receiver
+    // rmethod,: methodOop
+    __ write_insts_jump_from_interpreted(__ x12, __ x3);
+    __ write_insts_stop("should not reach here");
+
+    // exception handling code follows...
+    // note: must restore interpreter registers to canonical
+    //       state for exception handling to work correctly!
+
+    __ pin_label(no_such_method);
+    // throw exception
+    __ write_insts_restore_bcp();      // bcp must be correct for exception handler   (was destroyed)
+    __ write_insts_restore_locals();   // make sure locals pointer is correct as well (was destroyed)
+    __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::throw_AbstractMethodError));
+    // the call_VM checks for exception, so we should never return here.
+    __ write_insts_stop("should not reach here");
+
+    __ pin_label(no_such_interface);
+    // throw exception
+    __ write_insts_restore_bcp();      // bcp must be correct for exception handler   (was destroyed)
+    __ write_insts_restore_locals();   // make sure locals pointer is correct as well (was destroyed)
+    __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address,
+                                       InterpreterRuntime::throw_IncompatibleClassChangeError));
+    // the call_VM checks for exception, so we should never return here.
+    __ write_insts_stop("should not reach here");
+    return;
+}
+
+void YuhuTemplateTable::invokedynamic(int byte_no) {
+    transition(vtos, vtos);
+    assert(byte_no == f1_byte, "use this argument");
+
+    if (!EnableInvokeDynamic) {
+        // We should not encounter this bytecode if !EnableInvokeDynamic.
+        // The verifier will stop it.  However, if we get past the verifier,
+        // this will stop the thread in a reasonable way, without crashing the JVM.
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address,
+                                           InterpreterRuntime::throw_IncompatibleClassChangeError));
+        // the call_VM checks for exception, so we should never return here.
+        __ write_insts_stop("should not reach here");
+        return;
+    }
+
+    prepare_invoke(byte_no, __ x12, __ x0);
+
+    // r0: CallSite object (from cpool->resolved_references[])
+    // rmethod: MH.linkToCallSite method (from f2)
+
+    // Note:  r0_callsite is already pushed by prepare_invoke
+
+    // %%% should make a type profile for any invokedynamic that takes a ref argument
+    // profile this call
+    // TODO
+//    __ profile_call(rbcp);
+//    __ profile_arguments_type(r3, rmethod, r13, false);
+
+    __ write_insts_verify_oop(__ x0, "broken oop");
+
+    __ write_insts_jump_from_interpreted(__ x12, __ x0);
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,
@@ -2248,6 +2540,43 @@ void YuhuTemplateTable::resolve_cache_and_index(int byte_no,
     // n.b. unlike x86 Rcache is now rcpool plus the indexed offset
     // so all clients ofthis method must be modified accordingly
     __ pin_label(resolved);
+}
+
+void YuhuTemplateTable::load_invoke_cp_cache_entry(int byte_no,
+                                                   YuhuMacroAssembler::YuhuRegister method,
+                                                   YuhuMacroAssembler::YuhuRegister itable_index,
+                                                   YuhuMacroAssembler::YuhuRegister flags,
+                                                   bool is_invokevirtual,
+                                                   bool is_invokevfinal, /*unused*/
+                                                   bool is_invokedynamic) {
+    // setup registers
+    const YuhuMacroAssembler::YuhuRegister cache = __ x9;
+    const YuhuMacroAssembler::YuhuRegister index = __ x4;
+//    assert_different_registers(method, flags);
+//    assert_different_registers(method, cache, index);
+//    assert_different_registers(itable_index, flags);
+//    assert_different_registers(itable_index, cache, index);
+    // determine constant pool cache field offsets
+    assert(is_invokevirtual == (byte_no == f2_byte), "is_invokevirtual flag redundant");
+    const int method_offset = in_bytes(
+            ConstantPoolCache::base_offset() +
+            (is_invokevirtual
+             ? ConstantPoolCacheEntry::f2_offset()
+             : ConstantPoolCacheEntry::f1_offset()));
+    const int flags_offset = in_bytes(ConstantPoolCache::base_offset() +
+                                      ConstantPoolCacheEntry::flags_offset());
+    // access constant pool cache fields
+    const int index_offset = in_bytes(ConstantPoolCache::base_offset() +
+                                      ConstantPoolCacheEntry::f2_offset());
+
+    size_t index_size = (is_invokedynamic ? sizeof(u4) : sizeof(u2));
+    resolve_cache_and_index(byte_no, cache, index, index_size);
+    __ write_inst_ldr(method, YuhuAddress(cache, method_offset));
+
+    if (itable_index != __ noreg) {
+        __ write_inst_ldr(itable_index, YuhuAddress(cache, index_offset));
+    }
+    __ write_inst_ldr(__ w_reg(flags), YuhuAddress(cache, flags_offset));
 }
 
 void YuhuTemplateTable::load_field_cp_cache_entry(YuhuMacroAssembler::YuhuRegister obj,

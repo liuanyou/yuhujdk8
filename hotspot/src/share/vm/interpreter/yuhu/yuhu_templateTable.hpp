@@ -217,6 +217,12 @@ private:
     static void putstatic(int byte_no);
     static void getfield(int byte_no);
     static void putfield(int byte_no);
+
+    static void invokevirtual(int byte_no);
+    static void invokespecial(int byte_no);
+    static void invokestatic(int byte_no);
+    static void invokeinterface(int byte_no);
+    static void invokedynamic(int byte_no);
 public:
     static void initialize();
 
