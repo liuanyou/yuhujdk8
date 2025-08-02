@@ -411,6 +411,7 @@ public:
     address write_insts_final_call_VM_leaf(address entry_point, YuhuRegister arg_0, YuhuRegister arg_1, YuhuRegister arg_2);
 
     address write_insts_get_vm_result(YuhuRegister oop_result, YuhuRegister thread);
+    address write_insts_get_vm_result_2(YuhuRegister metadata_result, YuhuRegister thread);
 
     int write_insts_biased_locking_enter(YuhuRegister lock_reg, YuhuRegister obj_reg,
                              YuhuRegister swap_reg, YuhuRegister tmp_reg,

@@ -1302,6 +1302,12 @@ address YuhuMacroAssembler::write_insts_get_vm_result(YuhuRegister oop_result, Y
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_get_vm_result_2(YuhuRegister metadata_result, YuhuRegister java_thread) {
+    write_inst_ldr(metadata_result, YuhuAddress(java_thread, JavaThread::vm_result_2_offset()));
+    write_inst_str(xzr, YuhuAddress(java_thread, JavaThread::vm_result_2_offset()));
+    return current_pc();
+}
+
 int YuhuMacroAssembler::write_insts_biased_locking_enter(YuhuRegister lock_reg,
                                          YuhuRegister obj_reg,
                                          YuhuRegister swap_reg,
