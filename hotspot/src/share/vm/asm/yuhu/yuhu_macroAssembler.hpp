@@ -70,7 +70,7 @@ public:
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi, le, eq, hs, lo, lt, ge
+        gt, ne, al, ls, hi, le, eq, hs, lo, lt, ge, pl
     };
     enum YuhuOperation {
         lsl, uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
@@ -123,7 +123,7 @@ private:
 
     const char* cond_name(YuhuCond cond) {
         static const char* cond_names[] = {
-                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo", "lt", "ge"
+                "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo", "lt", "ge", "pl"
         };
 
         // check array index
