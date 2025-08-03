@@ -2774,6 +2774,453 @@ void YuhuTemplateTable::if_nullcmp(Condition cc)
 //    __ profile_not_taken_branch(r0);
 }
 
+void YuhuTemplateTable::fast_accessfield(TosState state)
+{
+    transition(atos, state);
+    // Do the JVMTI work here to avoid disturbing the register state below
+    // TODO
+//    if (JvmtiExport::can_post_field_access()) {
+//        // Check to see if a field access watch has been set before we
+//        // take the time to call into the VM.
+//        Label L1;
+//        __ lea(rscratch1, ExternalAddress((address) JvmtiExport::get_field_access_count_addr()));
+//        __ ldrw(r2, Address(rscratch1));
+//        __ cbzw(r2, L1);
+//        // access constant pool cache entry
+//        __ get_cache_entry_pointer_at_bcp(c_rarg2, rscratch2, 1);
+//        __ verify_oop(r0);
+//        __ push_ptr(r0);  // save object pointer before call_VM() clobbers it
+//        __ mov(c_rarg1, r0);
+//        // c_rarg1: object pointer copied above
+//        // c_rarg2: cache entry pointer
+//        __ call_VM(noreg,
+//                   CAST_FROM_FN_PTR(address,
+//                                    InterpreterRuntime::post_field_access),
+//                   c_rarg1, c_rarg2);
+//        __ pop_ptr(r0); // restore object pointer
+//        __ bind(L1);
+//    }
+
+    // access constant pool cache
+    __ write_insts_get_cache_and_index_at_bcp(__ x2, __ x1, 1);
+
+    // Must prevent reordering of the following cp cache loads with bytecode load
+    __ write_inst("dmb ishld");
+
+    __ write_inst_ldr(__ x1, YuhuAddress(__ x2, in_bytes(ConstantPoolCache::base_offset() +
+                                                         ConstantPoolCacheEntry::f2_offset())));
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x2, in_bytes(ConstantPoolCache::base_offset() +
+                                                         ConstantPoolCacheEntry::flags_offset())));
+
+    // r0: object
+    __ write_insts_verify_oop(__ x0, "broken oop");
+    __ write_insts_null_check(__ x0);
+    const YuhuAddress field(__ x0, __ x1);
+
+    // 8179954: We need to make sure that the code generated for
+    // volatile accesses forms a sequentially-consistent set of
+    // operations when combined with STLR and LDAR.  Without a leading
+    // membar it's possible for a simple Dekker test to fail if loads
+    // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+    // the stores in one method and we interpret the loads in another.
+    if (! UseBarriersForVolatile) {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+
+    // access field
+    switch (bytecode()) {
+        case Bytecodes::_fast_agetfield:
+            __ write_insts_load_heap_oop(__ x0, field);
+            __ write_insts_verify_oop(__ x0, "broken oop");
+            break;
+        case Bytecodes::_fast_lgetfield:
+            __ write_inst_ldr(__ x0, field);
+            break;
+        case Bytecodes::_fast_igetfield:
+            __ write_inst_ldr(__ w0, field);
+            break;
+        case Bytecodes::_fast_bgetfield:
+            __ write_insts_load_signed_byte(__ w0, field);
+            break;
+        case Bytecodes::_fast_sgetfield:
+            __ write_insts_load_signed_short(__ w0, field);
+            break;
+        case Bytecodes::_fast_cgetfield:
+            __ write_insts_load_unsigned_short(__ w0, field);
+            break;
+        case Bytecodes::_fast_fgetfield:
+            __ write_inst_ldr(__ s0, field);
+            break;
+        case Bytecodes::_fast_dgetfield:
+            __ write_inst_ldr(__ d0, field);
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ishld");
+        __ pin_label(notVolatile);
+    }
+}
+
+void YuhuTemplateTable::fast_storefield(TosState state)
+{
+    transition(state, vtos);
+
+    ByteSize base = ConstantPoolCache::base_offset();
+
+    // TODO
+//    jvmti_post_fast_field_mod();
+
+    // access constant pool cache
+    __ write_insts_get_cache_and_index_at_bcp(__ x2, __ x1, 1);
+
+    // Must prevent reordering of the following cp cache loads with bytecode load
+    __ write_inst("dmb ishld");
+
+    // test for volatile with r3
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x2, in_bytes(base +
+                                     ConstantPoolCacheEntry::flags_offset())));
+
+    // replace index with field offset from cache entry
+    __ write_inst_ldr(__ x1, YuhuAddress(__ x2, in_bytes(base + ConstantPoolCacheEntry::f2_offset())));
+
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+
+    YuhuLabel notVolatile;
+
+    // Get object from stack
+    pop_and_check_object(__ x2);
+
+    // field address
+    const YuhuAddress field(__ x2, __ x1);
+
+    // access field
+    switch (bytecode()) {
+        case Bytecodes::_fast_aputfield:
+            do_oop_store(_masm, field, __ x0, _bs->kind(), false);
+            break;
+        case Bytecodes::_fast_lputfield:
+            __ write_inst_str(__ x0, field);
+            break;
+        case Bytecodes::_fast_iputfield:
+            __ write_inst_str(__ w0, field);
+            break;
+            /*case Bytecodes::_fast_zputfield:
+              __ andw(r0, r0, 0x1);  // boolean is true if LSB is 1*/
+            // fall through to bputfield
+        case Bytecodes::_fast_bputfield:
+            __ write_inst_strb(__ w0, field);
+            break;
+        case Bytecodes::_fast_sputfield:
+            // fall through
+        case Bytecodes::_fast_cputfield:
+            __ write_inst_strh(__ w0, field);
+            break;
+        case Bytecodes::_fast_fputfield:
+            __ write_inst_str(__ s0, field);
+            break;
+        case Bytecodes::_fast_dputfield:
+            __ write_inst_str(__ d0, field);
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+}
+
+void YuhuTemplateTable::fast_xaccess(TosState state)
+{
+    transition(vtos, state);
+
+    // get receiver
+    __ write_inst_ldr(__ x0, aaddress(0));
+    // access constant pool cache
+    __ write_insts_get_cache_and_index_at_bcp(__ x2, __ x3, 2);
+    __ write_inst_ldr(__ x1, YuhuAddress(__ x2, in_bytes(ConstantPoolCache::base_offset() +
+                                    ConstantPoolCacheEntry::f2_offset())));
+
+    // 8179954: We need to make sure that the code generated for
+    // volatile accesses forms a sequentially-consistent set of
+    // operations when combined with STLR and LDAR.  Without a leading
+    // membar it's possible for a simple Dekker test to fail if loads
+    // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+    // the stores in one method and we interpret the loads in another.
+    if (! UseBarriersForVolatile) {
+        YuhuLabel notVolatile;
+        __ write_inst_ldr(__ w3, YuhuAddress(__ x2, in_bytes(ConstantPoolCache::base_offset() +
+                                         ConstantPoolCacheEntry::flags_offset())));
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ish");
+        __ pin_label(notVolatile);
+    }
+
+    // make sure exception is reported in correct bcp range (getfield is
+    // next instruction)
+    __ write_insts_increment(__ x22);
+    __ write_insts_null_check(__ x0);
+    switch (state) {
+        case itos:
+            __ write_inst_ldr(__ w0, YuhuAddress(__ x0, __ x1, YuhuAddress::lsl(0)));
+            break;
+        case atos:
+            __ write_insts_load_heap_oop(__ x0, YuhuAddress(__ x0, __ x1, YuhuAddress::lsl(0)));
+            __ write_insts_verify_oop(__ x0, "broken oop");
+            break;
+        case ftos:
+            __ write_inst_ldr(__ s0, YuhuAddress(__ x0, __ x1, YuhuAddress::lsl(0)));
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+
+    {
+        YuhuLabel notVolatile;
+        __ write_inst_ldr(__ w3, YuhuAddress(__ x2, in_bytes(ConstantPoolCache::base_offset() +
+                                         ConstantPoolCacheEntry::flags_offset())));
+        __ write_inst_tbz(__ x3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+        __ write_inst("dmb ishld");
+        __ pin_label(notVolatile);
+    }
+
+    __ write_insts_decrement(__ x22);
+}
+
+void YuhuTemplateTable::fast_iload()
+{
+    transition(vtos, itos);
+    locals_index(__ x1);
+    __ write_inst_ldr(__ x0, iaddress(__ x1));
+}
+
+void YuhuTemplateTable::fast_iload2()
+{
+    transition(vtos, itos);
+    locals_index(__ x1);
+    __ write_inst_ldr(__ x0, iaddress(__ x1));
+    __ write_insts_push(itos);
+    locals_index(__ x1, 3);
+    __ write_inst_ldr(__ x0, iaddress(__ x1));
+}
+
+void YuhuTemplateTable::fast_icaload()
+{
+    transition(vtos, itos);
+    // load index out of locals
+    locals_index(__ x2);
+    __ write_inst_ldr(__ x1, iaddress(__ x2));
+
+    __ write_inst_pop_ptr(__ x0);
+
+    // r0: array
+    // r1: index
+    index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
+    __ write_insts_lea(__ x1,  YuhuAddress(__ x0, __ x1, YuhuAddress::uxtw(1)));
+    __ write_insts_load_unsigned_short(__ x0, YuhuAddress(__ x1,  arrayOopDesc::base_offset_in_bytes(T_CHAR)));
+}
+
+void YuhuTemplateTable::fast_invokevfinal(int byte_no)
+{
+    __ call_Unimplemented();
+}
+
+void YuhuTemplateTable::fast_linearswitch() {
+    transition(itos, vtos);
+    YuhuLabel loop_entry, loop, found, continue_execution;
+    // bswap r0 so we can avoid bswapping the table entries
+    __ write_inst("rev32 x0, x0");
+    // align rbcp
+    __ write_insts_lea(__ x19, at_bcp(BytesPerInt)); // btw: should be able to get rid of
+    // this instruction (change offsets
+    // below)
+    __ write_inst("and x19, x19, #%d", -BytesPerInt);
+    // set counter
+    __ write_inst_ldr(__ x1, YuhuAddress(__ x19, BytesPerInt));
+    __ write_inst("rev32 x1, x1");
+    __ write_inst_b(loop_entry);
+    // table search
+    __ pin_label(loop);
+    __ write_insts_lea(__ x8, YuhuAddress(__ x19, __ x1, YuhuAddress::lsl(3)));
+    __ write_inst_ldr(__ w8, YuhuAddress(__ x8, 2 * BytesPerInt));
+    __ write_inst("cmp w0, w8");
+    __ write_inst_b(__ eq, found);
+    __ pin_label(loop_entry);
+    __ write_inst("subs x1, x1, #1");
+    __ write_inst_b(__ pl, loop);
+    // default case
+    // TODO
+//    __ profile_switch_default(r0);
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x19, 0));
+    __ write_inst_b(continue_execution);
+    // entry found -> get offset
+    __ pin_label(found);
+    __ write_insts_lea(__ x8, YuhuAddress(__ x19, __ x1, YuhuAddress::lsl(3)));
+    __ write_inst_ldr(__ w3, YuhuAddress(__ x8, 3 * BytesPerInt));
+    // TODO
+//    __ profile_switch_case(r1, r0, r19);
+    // continue execution
+    __ pin_label(continue_execution);
+    __ write_inst("rev32 x3, x3");
+    __ write_inst("add x22, x22, w3, sxtw #0");
+    __ write_inst_ldrb(__ w8, YuhuAddress(__ x22, 0));
+    __ write_insts_dispatch_only(vtos);
+}
+
+void YuhuTemplateTable::fast_binaryswitch() {
+    transition(itos, vtos);
+    // Implementation using the following core algorithm:
+    //
+    // int binary_search(int key, LookupswitchPair* array, int n) {
+    //   // Binary search according to "Methodik des Programmierens" by
+    //   // Edsger W. Dijkstra and W.H.J. Feijen, Addison Wesley Germany 1985.
+    //   int i = 0;
+    //   int j = n;
+    //   while (i+1 < j) {
+    //     // invariant P: 0 <= i < j <= n and (a[i] <= key < a[j] or Q)
+    //     // with      Q: for all i: 0 <= i < n: key < a[i]
+    //     // where a stands for the array and assuming that the (inexisting)
+    //     // element a[n] is infinitely big.
+    //     int h = (i + j) >> 1;
+    //     // i < h < j
+    //     if (key < array[h].fast_match()) {
+    //       j = h;
+    //     } else {
+    //       i = h;
+    //     }
+    //   }
+    //   // R: a[i] <= key < a[i+1] or Q
+    //   // (i.e., if key is within array, i is the correct index)
+    //   return i;
+    // }
+
+    // Register allocation
+    const YuhuMacroAssembler::YuhuRegister key   = __ x0; // already set (tosca)
+    const YuhuMacroAssembler::YuhuRegister array = __ x1;
+    const YuhuMacroAssembler::YuhuRegister i     = __ x2;
+    const YuhuMacroAssembler::YuhuRegister j     = __ x3;
+    const YuhuMacroAssembler::YuhuRegister h     = __ x8;
+    const YuhuMacroAssembler::YuhuRegister temp  = __ x9;
+
+    // Find array start
+    __ write_insts_lea(array, at_bcp(3 * BytesPerInt)); // btw: should be able to
+    // get rid of this
+    // instruction (change
+    // offsets below)
+    __ write_inst("and %s, %s, #%d", array, array, -BytesPerInt);
+
+    // Initialize i & j
+    __ write_insts_mov_imm32(i, 0); // i = 0;
+    __ write_inst_ldr(__ w_reg(j), YuhuAddress(array, -BytesPerInt)); // j = length(array);
+
+    // Convert j into native byteordering
+    __ write_inst_regs("rev32 %s, %s", j, j);
+
+    // And start
+    YuhuLabel entry;
+    __ write_inst_b(entry);
+
+    // binary search loop
+    {
+        YuhuLabel loop;
+        __ pin_label(loop);
+        // int h = (i + j) >> 1;
+        __ write_inst_regs("add %s, %s, %s", __ w_reg(h), __ w_reg(i), __ w_reg(j)); // h = i + j;
+        __ write_inst("lsr %s, %s, #%d", __ w_reg(h), __ w_reg(h), 1); // h = (i + j) >> 1;
+        // if (key < array[h].fast_match()) {
+        //   j = h;
+        // } else {
+        //   i = h;
+        // }
+        // Convert array[h].match to native byte-ordering before compare
+        __ write_inst_ldr(temp, YuhuAddress(array, h, YuhuAddress::lsl(3)));
+        __ write_inst_regs("rev32 %s, %s", temp, temp);
+        __ write_inst_regs("cmp %s, %s", __ w_reg(key), __ w_reg(temp));
+        // j = h if (key <  array[h].fast_match())
+        __ write_inst_csel(j, h, j, __ lt);
+        // i = h if (key >= array[h].fast_match())
+        __ write_inst_csel(i, h, i, __ ge);
+        // while (i+1 < j)
+        __ pin_label(entry);
+        __ write_inst("add %s, %s, #%d", __ w_reg(h), __ w_reg(i), 1); // i+1
+        __ write_inst("cmp %s, %s", __ w_reg(h), __ w_reg(j)); // i+1 < j
+        __ write_inst_b(__ lt, loop);
+    }
+
+    // end of binary search, result index is i (must check again!)
+    YuhuLabel default_case;
+    // Convert array[i].match to native byte-ordering before compare
+    __ write_inst_ldr(temp, YuhuAddress(array, i, YuhuAddress::lsl(3)));
+    __ write_inst_regs("rev32 %s, %s", temp, temp);
+    __ write_inst_regs("cmp %s, %s", __ w_reg(key), __ w_reg(temp));
+    __ write_inst_b(__ ne, default_case);
+
+    // entry found -> j = offset
+    __ write_inst_regs("add %s, %s, %s, uxtx #3", j, array, i);
+    __ write_inst_ldr(__ w_reg(j), YuhuAddress(j, BytesPerInt));
+    // TODO
+//    __ profile_switch_case(i, key, array);
+    __ write_inst_regs("rev32 %s, %s", j, j);
+    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, j, YuhuAddress::sxtw(0)));
+    __ write_insts_lea(__ x22, YuhuAddress(__ x22, j, YuhuAddress::sxtw(0)));
+    __ write_insts_dispatch_only(vtos);
+
+    // default case -> j = default offset
+    __ pin_label(default_case);
+    // TODO
+//    __ profile_switch_default(i);
+    __ write_inst_ldr(__ w_reg(j), YuhuAddress(array, -2 * BytesPerInt));
+    __ write_inst_regs("rev32 %s, %s", j, j);
+    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, j, YuhuAddress::sxtw(0)));
+    __ write_insts_lea(__ x22, YuhuAddress(__ x22, j, YuhuAddress::sxtw(0)));
+    __ write_insts_dispatch_only(vtos);
+}
+
+void YuhuTemplateTable::fast_aldc(bool wide)
+{
+    transition(vtos, atos);
+
+    YuhuMacroAssembler::YuhuRegister result = __ x0;
+    YuhuMacroAssembler::YuhuRegister tmp = __ x1;
+    int index_size = wide ? sizeof(u2) : sizeof(u1);
+
+    YuhuLabel resolved;
+
+    // We are resolved if the resolved reference cache entry contains a
+    // non-null object (String, MethodType, etc.)
+//    assert_different_registers(result, tmp);
+    __ write_insts_get_cache_index_at_bcp(tmp, 1, index_size);
+    __ write_insts_load_resolved_reference_at_index(result, tmp);
+    __ write_inst_cbnz(result, resolved);
+
+    address entry = CAST_FROM_FN_PTR(address, InterpreterRuntime::resolve_ldc);
+
+    // first time invocation - must resolve first
+    __ write_insts_mov_imm32(tmp, (int)bytecode());
+    __ write_insts_final_call_VM(result, entry, tmp);
+
+    __ pin_label(resolved);
+
+    if (VerifyOops) {
+        __ write_insts_verify_oop(result, "broken oop");
+    }
+}
+
 static void do_oop_store(YuhuMacroAssembler* _masm,
                          YuhuAddress obj,
                          YuhuMacroAssembler::YuhuRegister val,

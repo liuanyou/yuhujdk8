@@ -347,42 +347,42 @@ void YuhuTemplateTable::initialize() {
 //    def(Bytecodes::_ret                 , ubcp|disp|____|iswd, vtos, vtos, wide_ret            ,  _           );
 //    def(Bytecodes::_breakpoint          , ubcp|disp|clvm|____, vtos, vtos, _breakpoint         ,  _           );
 //
-//    // JVM bytecodes
-//    def(Bytecodes::_fast_agetfield      , ubcp|____|____|____, atos, atos, fast_accessfield    ,  atos        );
-//    def(Bytecodes::_fast_bgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        );
-//    def(Bytecodes::_fast_cgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        );
-//    def(Bytecodes::_fast_dgetfield      , ubcp|____|____|____, atos, dtos, fast_accessfield    ,  dtos        );
-//    def(Bytecodes::_fast_fgetfield      , ubcp|____|____|____, atos, ftos, fast_accessfield    ,  ftos        );
-//    def(Bytecodes::_fast_igetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        );
-//    def(Bytecodes::_fast_lgetfield      , ubcp|____|____|____, atos, ltos, fast_accessfield    ,  ltos        );
-//    def(Bytecodes::_fast_sgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        );
-//
-//    def(Bytecodes::_fast_aputfield      , ubcp|____|____|____, atos, vtos, fast_storefield ,   atos        );
-//    def(Bytecodes::_fast_bputfield      , ubcp|____|____|____, itos, vtos, fast_storefield ,   itos        );
-//    def(Bytecodes::_fast_cputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        );
-//    def(Bytecodes::_fast_dputfield      , ubcp|____|____|____, dtos, vtos, fast_storefield  ,  dtos        );
-//    def(Bytecodes::_fast_fputfield      , ubcp|____|____|____, ftos, vtos, fast_storefield  ,  ftos        );
-//    def(Bytecodes::_fast_iputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        );
-//    def(Bytecodes::_fast_lputfield      , ubcp|____|____|____, ltos, vtos, fast_storefield  ,  ltos        );
-//    def(Bytecodes::_fast_sputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        );
-//
-//    def(Bytecodes::_fast_aload_0        , ____|____|____|____, vtos, atos, aload               ,  0           );
-//    def(Bytecodes::_fast_iaccess_0      , ubcp|____|____|____, vtos, itos, fast_xaccess        ,  itos        );
-//    def(Bytecodes::_fast_aaccess_0      , ubcp|____|____|____, vtos, atos, fast_xaccess        ,  atos        );
-//    def(Bytecodes::_fast_faccess_0      , ubcp|____|____|____, vtos, ftos, fast_xaccess        ,  ftos        );
-//
-//    def(Bytecodes::_fast_iload          , ubcp|____|____|____, vtos, itos, fast_iload          ,  _       );
-//    def(Bytecodes::_fast_iload2         , ubcp|____|____|____, vtos, itos, fast_iload2         ,  _       );
-//    def(Bytecodes::_fast_icaload        , ubcp|____|____|____, vtos, itos, fast_icaload        ,  _       );
-//
-//    def(Bytecodes::_fast_invokevfinal   , ubcp|disp|clvm|____, vtos, vtos, fast_invokevfinal   , f2_byte      );
-//
-//    def(Bytecodes::_fast_linearswitch   , ubcp|disp|____|____, itos, vtos, fast_linearswitch   ,  _           );
-//    def(Bytecodes::_fast_binaryswitch   , ubcp|disp|____|____, itos, vtos, fast_binaryswitch   ,  _           );
-//
-//    def(Bytecodes::_fast_aldc           , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  false       );
-//    def(Bytecodes::_fast_aldc_w         , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  true        );
-//
+    // JVM bytecodes
+    def(Bytecodes::_fast_agetfield      , ubcp|____|____|____, atos, atos, fast_accessfield    ,  atos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_bgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_cgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_dgetfield      , ubcp|____|____|____, atos, dtos, fast_accessfield    ,  dtos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_fgetfield      , ubcp|____|____|____, atos, ftos, fast_accessfield    ,  ftos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_igetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_lgetfield      , ubcp|____|____|____, atos, ltos, fast_accessfield    ,  ltos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_sgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        ); // RewriteBytecodes controls
+
+    def(Bytecodes::_fast_aputfield      , ubcp|____|____|____, atos, vtos, fast_storefield ,   atos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_bputfield      , ubcp|____|____|____, itos, vtos, fast_storefield ,   itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_cputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_dputfield      , ubcp|____|____|____, dtos, vtos, fast_storefield  ,  dtos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_fputfield      , ubcp|____|____|____, ftos, vtos, fast_storefield  ,  ftos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_iputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_lputfield      , ubcp|____|____|____, ltos, vtos, fast_storefield  ,  ltos        ); // RewriteBytecodes controls
+    def(Bytecodes::_fast_sputfield      , ubcp|____|____|____, itos, vtos, fast_storefield  ,  itos        ); // RewriteBytecodes controls
+
+    def(Bytecodes::_fast_aload_0        , ____|____|____|____, vtos, atos, aload               ,  0           ); // RewriteFrequentPairs controls
+    def(Bytecodes::_fast_iaccess_0      , ubcp|____|____|____, vtos, itos, fast_xaccess        ,  itos        ); // RewriteFrequentPairs controls
+    def(Bytecodes::_fast_aaccess_0      , ubcp|____|____|____, vtos, atos, fast_xaccess        ,  atos        ); // RewriteFrequentPairs controls
+    def(Bytecodes::_fast_faccess_0      , ubcp|____|____|____, vtos, ftos, fast_xaccess        ,  ftos        ); // RewriteFrequentPairs controls
+
+    def(Bytecodes::_fast_iload          , ubcp|____|____|____, vtos, itos, fast_iload          ,  _       ); // RewriteFrequentPairs controls
+    def(Bytecodes::_fast_iload2         , ubcp|____|____|____, vtos, itos, fast_iload2         ,  _       ); // RewriteFrequentPairs controls
+    def(Bytecodes::_fast_icaload        , ubcp|____|____|____, vtos, itos, fast_icaload        ,  _       ); // RewriteFrequentPairs controls
+
+    def(Bytecodes::_fast_invokevfinal   , ubcp|disp|clvm|____, vtos, vtos, fast_invokevfinal   , f2_byte      ); // not implemented
+
+    def(Bytecodes::_fast_linearswitch   , ubcp|disp|____|____, itos, vtos, fast_linearswitch   ,  _           ); // rewrite when loading class
+    def(Bytecodes::_fast_binaryswitch   , ubcp|disp|____|____, itos, vtos, fast_binaryswitch   ,  _           ); // rewrite when loading class
+
+    def(Bytecodes::_fast_aldc           , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  false       ); // rewrite when loading class
+    def(Bytecodes::_fast_aldc_w         , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  true        ); // rewrite when loading class
+
 //    def(Bytecodes::_return_register_finalizer , ____|disp|clvm|____, vtos, vtos, _return       ,  vtos        );
 //
 //    def(Bytecodes::_invokehandle        , ubcp|disp|clvm|____, vtos, vtos, invokehandle        , f1_byte      );

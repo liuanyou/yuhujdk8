@@ -243,6 +243,21 @@ private:
 
     static void goto_w();
     static void jsr_w();
+
+    static void fast_accessfield(TosState state);
+    static void fast_storefield(TosState state);
+    static void fast_xaccess(TosState state);
+
+    static void fast_iload();
+    static void fast_iload2();
+    static void fast_icaload();
+
+    static void fast_invokevfinal(int byte_no);
+
+    static void fast_linearswitch();
+    static void fast_binaryswitch();
+
+    static void fast_aldc(bool wide);
 public:
     static void initialize();
 
