@@ -760,6 +760,10 @@ address YuhuMacroAssembler::write_insts_dispatch_only(TosState state) {
     return write_insts_dispatch_base(state, YuhuInterpreter::dispatch_table(state));
 }
 
+address YuhuMacroAssembler::write_insts_dispatch_only_normal(TosState state) {
+    return write_insts_dispatch_base(state, YuhuInterpreter::normal_table(state));
+}
+
 address YuhuMacroAssembler::write_insts_get_dispatch() {
     uint64_t offset;
     write_insts_adrp(x21, (address) YuhuInterpreter::dispatch_table(), offset);
@@ -1886,7 +1890,7 @@ address YuhuMacroAssembler::write_insts_get_cache_and_index_and_bytecode_at_bcp(
     // little-endian machines allow us that.
     // n.b. unlike x86 cache already includes the index offset
     write_insts_lea(bytecode, YuhuAddress(cache, ConstantPoolCache::base_offset() + ConstantPoolCacheEntry::indices_offset()));
-    write_inst("ldar %s, [%s]", w_reg(bytecode), bytecode);
+    write_inst_regs("ldar %s, [%s]", w_reg(bytecode), bytecode);
     const int shift_count = (1 + byte_no) * BitsPerByte;
     write_inst_imms("ubfx %s, %s, #%d, #%d", bytecode, bytecode, shift_count, BitsPerByte);
     return current_pc();
@@ -2716,7 +2720,7 @@ address YuhuMacroAssembler::write_insts_lookup_interface_method(YuhuRegister rec
     if (return_method) {
         // Got a hit.
         write_inst_ldr(w_reg(scan_temp), YuhuAddress(scan_temp, itableOffsetEntry::offset_offset_in_bytes()));
-        write_inst_ldr(method_result, YuhuAddress(recv_klass, scan_temp, YuhuAddress::uxtw(0)));
+        write_inst_ldr(method_result, YuhuAddress(recv_klass, w_reg(scan_temp), YuhuAddress::uxtw(0)));
     }
     return current_pc();
 }
@@ -2785,7 +2789,7 @@ address YuhuMacroAssembler::write_insts_eden_allocate(YuhuRegister obj,
             // insn after an ADRP.  add() always generates an ADD insn, even
             // for add(Rn, Rn, 0).
             write_inst("add x8, x8, #%d", offset);
-            write_inst_regs("ldaxr %s, %s", obj, x8);
+            write_inst_regs("ldaxr %s, [%s]", obj, x8);
         }
 
         // Adjust it my the size of our new object
@@ -2803,7 +2807,7 @@ address YuhuMacroAssembler::write_insts_eden_allocate(YuhuRegister obj,
         write_inst_b(hi, slow_case);
 
         // If heap_top hasn't been changed by some other thread, update it.
-        write_inst_regs("stlxr x9, %s, x8", end);
+        write_inst_regs("stlxr w9, %s, [x8]", end);
         write_inst_cbnz(w9, retry);
     }
     return current_pc();

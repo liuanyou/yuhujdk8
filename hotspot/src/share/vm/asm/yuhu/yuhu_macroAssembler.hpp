@@ -350,6 +350,8 @@ public:
 
     address write_insts_dispatch_only(TosState state);
 
+    address write_insts_dispatch_only_normal(TosState state);
+
     address write_insts_get_dispatch();
 
     address write_insts_far_jump(address entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
