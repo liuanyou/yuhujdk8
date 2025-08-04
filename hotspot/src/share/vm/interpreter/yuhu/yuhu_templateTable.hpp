@@ -244,6 +244,23 @@ private:
     static void goto_w();
     static void jsr_w();
 
+    static void locals_index_wide(YuhuMacroAssembler::YuhuRegister reg);
+    static void wide_iload();
+    static void wide_lload();
+    static void wide_fload();
+    static void wide_dload();
+    static void wide_aload();
+
+    static void wide_istore();
+    static void wide_lstore();
+    static void wide_fstore();
+    static void wide_dstore();
+    static void wide_astore();
+
+    static void wide_iinc();
+    static void wide_ret();
+    static void _breakpoint();
+
     static void fast_accessfield(TosState state);
     static void fast_storefield(TosState state);
     static void fast_xaccess(TosState state);
@@ -258,6 +275,9 @@ private:
     static void fast_binaryswitch();
 
     static void fast_aldc(bool wide);
+
+    static void invokehandle(int byte_no);
+    static void shouldnotreachhere();
 public:
     static void initialize();
 

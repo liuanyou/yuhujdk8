@@ -283,6 +283,7 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_fcmpg               , ____|____|____|____, ftos, itos, float_cmp           ,  1           );
     def(Bytecodes::_dcmpl               , ____|____|____|____, dtos, itos, double_cmp          , -1           );
     def(Bytecodes::_dcmpg               , ____|____|____|____, dtos, itos, double_cmp          ,  1           );
+    def(Bytecodes::_ifeq                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , equal        );
     def(Bytecodes::_ifne                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , not_equal    );
     def(Bytecodes::_iflt                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , less         );
     def(Bytecodes::_ifge                , ubcp|____|clvm|____, itos, vtos, if_0cmp             , greater_equal);
@@ -332,21 +333,21 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_goto_w              , ubcp|____|clvm|____, vtos, vtos, goto_w              ,  _           );
     def(Bytecodes::_jsr_w               , ubcp|____|____|____, vtos, vtos, jsr_w               ,  _           );
 
-//    // wide Java spec bytecodes
-//    def(Bytecodes::_iload               , ubcp|____|____|iswd, vtos, itos, wide_iload          ,  _           );
-//    def(Bytecodes::_lload               , ubcp|____|____|iswd, vtos, ltos, wide_lload          ,  _           );
-//    def(Bytecodes::_fload               , ubcp|____|____|iswd, vtos, ftos, wide_fload          ,  _           );
-//    def(Bytecodes::_dload               , ubcp|____|____|iswd, vtos, dtos, wide_dload          ,  _           );
-//    def(Bytecodes::_aload               , ubcp|____|____|iswd, vtos, atos, wide_aload          ,  _           );
-//    def(Bytecodes::_istore              , ubcp|____|____|iswd, vtos, vtos, wide_istore         ,  _           );
-//    def(Bytecodes::_lstore              , ubcp|____|____|iswd, vtos, vtos, wide_lstore         ,  _           );
-//    def(Bytecodes::_fstore              , ubcp|____|____|iswd, vtos, vtos, wide_fstore         ,  _           );
-//    def(Bytecodes::_dstore              , ubcp|____|____|iswd, vtos, vtos, wide_dstore         ,  _           );
-//    def(Bytecodes::_astore              , ubcp|____|____|iswd, vtos, vtos, wide_astore         ,  _           );
-//    def(Bytecodes::_iinc                , ubcp|____|____|iswd, vtos, vtos, wide_iinc           ,  _           );
-//    def(Bytecodes::_ret                 , ubcp|disp|____|iswd, vtos, vtos, wide_ret            ,  _           );
-//    def(Bytecodes::_breakpoint          , ubcp|disp|clvm|____, vtos, vtos, _breakpoint         ,  _           );
-//
+    // wide Java spec bytecodes
+    def(Bytecodes::_iload               , ubcp|____|____|iswd, vtos, itos, wide_iload          ,  _           );
+    def(Bytecodes::_lload               , ubcp|____|____|iswd, vtos, ltos, wide_lload          ,  _           );
+    def(Bytecodes::_fload               , ubcp|____|____|iswd, vtos, ftos, wide_fload          ,  _           );
+    def(Bytecodes::_dload               , ubcp|____|____|iswd, vtos, dtos, wide_dload          ,  _           );
+    def(Bytecodes::_aload               , ubcp|____|____|iswd, vtos, atos, wide_aload          ,  _           );
+    def(Bytecodes::_istore              , ubcp|____|____|iswd, vtos, vtos, wide_istore         ,  _           );
+    def(Bytecodes::_lstore              , ubcp|____|____|iswd, vtos, vtos, wide_lstore         ,  _           );
+    def(Bytecodes::_fstore              , ubcp|____|____|iswd, vtos, vtos, wide_fstore         ,  _           );
+    def(Bytecodes::_dstore              , ubcp|____|____|iswd, vtos, vtos, wide_dstore         ,  _           );
+    def(Bytecodes::_astore              , ubcp|____|____|iswd, vtos, vtos, wide_astore         ,  _           );
+    def(Bytecodes::_iinc                , ubcp|____|____|iswd, vtos, vtos, wide_iinc           ,  _           );
+    def(Bytecodes::_ret                 , ubcp|disp|____|iswd, vtos, vtos, wide_ret            ,  _           );
+    def(Bytecodes::_breakpoint          , ubcp|disp|clvm|____, vtos, vtos, _breakpoint         ,  _           );
+
     // JVM bytecodes
     def(Bytecodes::_fast_agetfield      , ubcp|____|____|____, atos, atos, fast_accessfield    ,  atos        ); // RewriteBytecodes controls
     def(Bytecodes::_fast_bgetfield      , ubcp|____|____|____, atos, itos, fast_accessfield    ,  itos        ); // RewriteBytecodes controls
@@ -383,11 +384,11 @@ void YuhuTemplateTable::initialize() {
     def(Bytecodes::_fast_aldc           , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  false       ); // rewrite when loading class
     def(Bytecodes::_fast_aldc_w         , ubcp|____|clvm|____, vtos, atos, fast_aldc           ,  true        ); // rewrite when loading class
 
-//    def(Bytecodes::_return_register_finalizer , ____|disp|clvm|____, vtos, vtos, _return       ,  vtos        );
-//
-//    def(Bytecodes::_invokehandle        , ubcp|disp|clvm|____, vtos, vtos, invokehandle        , f1_byte      );
-//
-//    def(Bytecodes::_shouldnotreachhere   , ____|____|____|____, vtos, vtos, shouldnotreachhere ,  _           );
+    def(Bytecodes::_return_register_finalizer , ____|disp|clvm|____, vtos, vtos, _return       ,  vtos        ); // rewrite when loading class
+
+    def(Bytecodes::_invokehandle        , ubcp|disp|clvm|____, vtos, vtos, invokehandle        , f1_byte      );
+
+    def(Bytecodes::_shouldnotreachhere   , ____|____|____|____, vtos, vtos, shouldnotreachhere ,  _           );
     // platform specific bytecodes
 //    pd_initialize();
 
