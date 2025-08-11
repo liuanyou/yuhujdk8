@@ -974,7 +974,7 @@ address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, const char*
 
     // call indirectly to solve generation ordering problem
 //    lea(rscratch2, ExternalAddress(StubRoutines::verify_oop_subroutine_entry_address()));
-    write_insts_lea(x9, YuhuAddress(YuhuStubRoutines::verify_oop_subroutine_entry_address()));
+    write_insts_lea(x9, YuhuAddress(StubRoutines::verify_oop_subroutine_entry_address()));
 
     write_inst("ldr x9, [x9]");
     write_inst("blr x9");
@@ -1234,7 +1234,7 @@ address YuhuMacroAssembler::write_insts_final_call_VM_base(YuhuRegister oop_resu
         write_inst("ldr x8, [%s, #%d]", java_thread, in_bytes(Thread::pending_exception_offset()));
         YuhuLabel ok;
         write_inst_cbz(x8, ok);
-        write_insts_mov_imm64(x8, (uint64_t) YuhuStubRoutines::forward_exception_entry());
+        write_insts_mov_imm64(x8, (uint64_t) StubRoutines::forward_exception_entry());
         write_inst_br(x8);
         pin_label(ok);
     }

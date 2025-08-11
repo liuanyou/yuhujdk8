@@ -394,8 +394,7 @@ void JavaCalls::call_helper(JavaValue* result, methodHandle* m, JavaCallArgument
   { JavaCallWrapper link(method, receiver, result, CHECK);
     { HandleMark hm(thread);  // HandleMark used by HandleMarkCleaner
 
-    if (!UseYuhuInt) {
-        StubRoutines::call_stub()(
+      StubRoutines::call_stub()(
         (address) &link,
         // (intptr_t*)&(result->_value), // see NOTE above (compiler problem)
         result_val_address,          // see NOTE above (compiler problem)
@@ -405,19 +404,7 @@ void JavaCalls::call_helper(JavaValue* result, methodHandle* m, JavaCallArgument
         args->parameters(),
         args->size_of_parameters(),
         CHECK
-        );
-    } else {
-        YuhuStubRoutines::call_stub()(
-        (address) &link,
-        result_val_address,
-        result_type,
-        method(),
-        entry_point,
-        args->parameters(),
-        args->size_of_parameters(),
-        CHECK
-        );
-    }
+      );
 
       result = link.result();  // circumvent MS C++ 5.0 compiler bug (result is clobbered across call)
       // Preserve oop return value across possible gc points

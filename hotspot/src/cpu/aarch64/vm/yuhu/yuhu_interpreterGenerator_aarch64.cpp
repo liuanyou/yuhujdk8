@@ -1362,8 +1362,8 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
 
     // Note: the restored frame is not necessarily interpreted.
     // Use the shared runtime version of the StackOverflowError.
-    assert(YuhuStubRoutines::throw_StackOverflowError_entry() != NULL, "stub not yet generated");
-    __ write_insts_far_jump(YuhuStubRoutines::throw_StackOverflowError_entry());
+    assert(StubRoutines::throw_StackOverflowError_entry() != NULL, "stub not yet generated");
+    __ write_insts_far_jump(StubRoutines::throw_StackOverflowError_entry());
 
     // all done with frame size check
     __ pin_label(after_frame_check);
