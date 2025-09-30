@@ -185,3 +185,83 @@ address* YuhuInterpreter::invoke_return_entry_table_for(Bytecodes::Code code) {
             return NULL;
     }
 }
+
+YuhuInterpreter::MethodKind YuhuInterpreter::method_kind(methodHandle m) {
+    // Abstract method?
+    if (m->is_abstract()) return abstract;
+
+    // Method handle primitive?
+    if (m->is_method_handle_intrinsic()) {
+        vmIntrinsics::ID id = m->intrinsic_id();
+        assert(MethodHandles::is_signature_polymorphic(id), "must match an intrinsic");
+        MethodKind kind = (MethodKind)( method_handle_invoke_FIRST +
+                                        ((int)id - vmIntrinsics::FIRST_MH_SIG_POLY) );
+        assert(kind <= method_handle_invoke_LAST, "parallel enum ranges");
+        return kind;
+    }
+
+#ifndef CC_INTERP
+    if (UseCRC32Intrinsics && m->is_native()) {
+        // Use optimized stub code for CRC32 native methods.
+        switch (m->intrinsic_id()) {
+            case vmIntrinsics::_updateCRC32            : return java_util_zip_CRC32_update;
+            case vmIntrinsics::_updateBytesCRC32       : return java_util_zip_CRC32_updateBytes;
+            case vmIntrinsics::_updateByteBufferCRC32  : return java_util_zip_CRC32_updateByteBuffer;
+        }
+    }
+#endif
+
+    // Native method?
+    // Note: This test must come _before_ the test for intrinsic
+    //       methods. See also comments below.
+    if (m->is_native()) {
+        assert(!m->is_method_handle_intrinsic(), "overlapping bits here, watch out");
+        return m->is_synchronized() ? native_synchronized : native;
+    }
+
+    // Synchronized?
+    if (m->is_synchronized()) {
+        return zerolocals_synchronized;
+    }
+
+    if (RegisterFinalizersAtInit && m->code_size() == 1 &&
+        m->intrinsic_id() == vmIntrinsics::_Object_init) {
+        // We need to execute the special return bytecode to check for
+        // finalizer registration so create a normal frame.
+        return zerolocals;
+    }
+
+    // Empty method?
+    if (m->is_empty_method()) {
+        return empty;
+    }
+
+    // Special intrinsic method?
+    // Note: This test must come _after_ the test for native methods,
+    //       otherwise we will run into problems with JDK 1.2, see also
+    //       AbstractInterpreterGenerator::generate_method_entry() for
+    //       for details.
+    switch (m->intrinsic_id()) {
+        case vmIntrinsics::_dsin  : return java_lang_math_sin  ;
+        case vmIntrinsics::_dcos  : return java_lang_math_cos  ;
+        case vmIntrinsics::_dtan  : return java_lang_math_tan  ;
+        case vmIntrinsics::_dabs  : return java_lang_math_abs  ;
+        case vmIntrinsics::_dsqrt : return java_lang_math_sqrt ;
+        case vmIntrinsics::_dlog  : return java_lang_math_log  ;
+        case vmIntrinsics::_dlog10: return java_lang_math_log10;
+        case vmIntrinsics::_dpow  : return java_lang_math_pow  ;
+        case vmIntrinsics::_dexp  : return java_lang_math_exp  ;
+
+        case vmIntrinsics::_Reference_get:
+            return java_lang_ref_reference_get;
+    }
+
+    // Accessor method?
+    if (m->is_accessor()) {
+        assert(m->size_of_parameters() == 1, "fast code for accessors assumes parameter size = 1");
+        return accessor;
+    }
+
+    // Note: for now: zero locals for all non-empty methods
+    return zerolocals;
+}

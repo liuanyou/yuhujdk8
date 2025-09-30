@@ -150,6 +150,11 @@ public:
 
     static address    throw_exception_entry()                     { return _throw_exception_entry; }
 
+    // Method activation
+    static MethodKind method_kind(methodHandle m);
+    static address    entry_for_kind(MethodKind k)                { assert(0 <= k && k < number_of_method_entries, "illegal kind"); return _entry_table[k]; }
+    static address    entry_for_method(methodHandle m)            { return entry_for_kind(method_kind(m)); }
+
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"
 #endif

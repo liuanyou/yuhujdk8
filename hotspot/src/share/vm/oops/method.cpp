@@ -866,9 +866,10 @@ void Method::link_method(methodHandle h_method, TRAPS) {
   // Setup interpreter entrypoint
   assert(this == h_method(), "wrong h_method()" );
   address entry = Interpreter::entry_for_method(h_method);
+  address yuhuEntry = YuhuInterpreter::entry_for_method(h_method);
   assert(entry != NULL, "interpreter entry must be non-null");
   // Sets both _i2i_entry and _from_interpreted_entry
-  set_interpreter_entry(entry);
+  set_interpreter_entry(UseYuhuInt ? yuhuEntry : entry);
 
   // Don't overwrite already registered native entries.
   if (is_native() && !has_native_function()) {
