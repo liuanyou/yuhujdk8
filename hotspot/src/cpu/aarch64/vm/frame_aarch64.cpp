@@ -26,6 +26,7 @@
 
 #include "precompiled.hpp"
 #include "interpreter/interpreter.hpp"
+#include "interpreter/yuhu/yuhu_interpreter.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/markOop.hpp"
 #include "oops/method.hpp"
@@ -311,7 +312,7 @@ void frame::patch_pc(Thread* thread, address pc) {
 }
 
 bool frame::is_interpreted_frame() const  {
-  return Interpreter::contains(pc());
+  return Interpreter::contains(pc()) || YuhuInterpreter::contains(pc());
 }
 
 int frame::frame_size(RegisterMap* map) const {

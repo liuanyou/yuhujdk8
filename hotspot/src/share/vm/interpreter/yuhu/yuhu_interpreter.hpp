@@ -154,6 +154,9 @@ public:
     static MethodKind method_kind(methodHandle m);
     static address    entry_for_kind(MethodKind k)                { assert(0 <= k && k < number_of_method_entries, "illegal kind"); return _entry_table[k]; }
     static address    entry_for_method(methodHandle m)            { return entry_for_kind(method_kind(m)); }
+    
+    // Frame detection support - check if PC is within YuhuInterpreter generated code
+    static bool       contains(address pc);
 
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"

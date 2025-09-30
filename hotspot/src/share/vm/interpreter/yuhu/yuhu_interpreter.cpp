@@ -265,3 +265,8 @@ YuhuInterpreter::MethodKind YuhuInterpreter::method_kind(methodHandle m) {
     // Note: for now: zero locals for all non-empty methods
     return zerolocals;
 }
+
+bool YuhuInterpreter::contains(address pc) {
+    // Check if PC is within YuhuInterpreter's generated code
+    return _code != NULL && _code->contains(pc);
+}
