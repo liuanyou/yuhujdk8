@@ -21,6 +21,7 @@
 class YuhuLabel;
 class YuhuRegSet;
 class YuhuAddress;
+class YuhuExternalAddress;
 
 class YuhuMacroAssembler: public MacroAssembler {
 private:
@@ -95,6 +96,13 @@ public:
         bool is_constant() const { return _r == noreg; }
     };
 private:
+    // Validate assembly format string to prevent format string bugs
+    void validate_assembly_format_1_imm(const char* assembly_format);      // 1 param: %d/x/u/o
+    void validate_assembly_format_2_reg_imm(const char* assembly_format);  // 2 params: %s and %d/x/u/o
+    void validate_assembly_format_3_reg_reg_imm(const char* assembly_format);  // 3 params: %s, %s, and %d/x/u/o
+    void validate_assembly_format_4_reg_reg_reg_imm(const char* assembly_format);  // 4 params: %s, %s, %s, and %d/x/u/o
+    void validate_assembly_format_long(const char* assembly_format);       // 2 params: %s and %ld/lx/lu/lo
+    
     const char* reg_name(YuhuRegister reg) {
         static const char* register_names[] = {
             // w0-w30
@@ -196,6 +204,8 @@ public:
 
     address write_inst(const char* assembly_format, YuhuRegister reg, int imm32);
 
+    address write_inst_reg_imm64(const char* assembly_format, YuhuRegister reg, long imm64);
+
     address write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32);
 
     address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm32);
@@ -273,6 +283,8 @@ public:
     address write_inst_tbnz(YuhuRegister reg, int bitpos, YuhuLabel &label);
 
     address write_inst_adrp(YuhuRegister reg, address target);
+    
+    address write_inst_adrp_direct(YuhuRegister reg, int32_t page_offset);
 
     address write_inst_adr(YuhuRegister reg, address target);
 
@@ -356,7 +368,7 @@ public:
 
     address write_insts_far_jump(address entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 
-    address write_insts_adrp(YuhuRegister reg, const address &dest, uint64_t &byte_offset);
+    address write_insts_adrp(YuhuRegister reg, const YuhuExternalAddress &dest, uint64_t &byte_offset);
 
     address write_insts_set_last_java_frame(YuhuRegister last_java_sp, YuhuRegister last_java_fp, address  last_java_pc, YuhuRegister scratch);
 
@@ -829,6 +841,8 @@ private:
     enum mode _mode;
     extend _ext;
 
+    RelocationHolder _rspec;
+
     bool _is_lval;
 
     address          _target;
@@ -861,8 +875,12 @@ public:
     : _mode(pre), _base(p.reg()), _offset(p.offset()) { }
     YuhuAddress(YuhuPost p)
     : _mode(post), _base(p.reg()), _offset(p.offset()), _target(0) { }
-    YuhuAddress(address target)
-    : _mode(literal), _is_lval(false), _target(target)  { }
+    YuhuAddress(address target, RelocationHolder const& rspec)
+    : _mode(literal),
+      _rspec(rspec),
+      _is_lval(false),
+      _target(target)  { }
+    YuhuAddress(address target, relocInfo::relocType rtype = relocInfo::external_word_type);
     YuhuAddress(YuhuMacroAssembler::YuhuRegister base, YuhuMacroAssembler::YuhuRegisterOrConstant index, extend ext = lsl())
     : _base (base),
             _ext(ext), _offset(0), _target(0) {
@@ -897,8 +915,23 @@ public:
     }
     bool uses(YuhuMacroAssembler::YuhuRegister reg) const { return _base == reg || _index == reg; }
     address target() const { return _target; }
-
+    const RelocationHolder& rspec() const { return _rspec; }
     void lea(YuhuMacroAssembler *, YuhuMacroAssembler::YuhuRegister) const;
+};
+
+class YuhuExternalAddress: public YuhuAddress {
+private:
+    static relocInfo::relocType reloc_for_target(address target) {
+        // Sometimes ExternalAddress is used for values which aren't
+        // exactly addresses, like the card table base.
+        // external_word_type can't be used for values in the first page
+        // so just skip the reloc in that case.
+        return external_word_Relocation::can_be_relocated(target) ? relocInfo::external_word_type : relocInfo::none;
+    }
+
+public:
+
+    YuhuExternalAddress(address target) : YuhuAddress(target, reloc_for_target(target)) {}
 };
 
 #endif //JDK8_YUHU_MACROASSEMBLER_HPP

@@ -73,7 +73,21 @@ address YuhuMacroAssembler::write_inst(const char* assembly) {
     return write_inst(machine_code(assembly));
 }
 
+/**
+ * It requires assembly_format has 2 params:
+ * 1) first param is %s
+ * 2) second param is %d, if it uses another format such as %ld or %lx,
+ * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg
+ * @param imm32
+ * @return
+ */
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg, int imm32) {
+    // Validate assembly format string (expects 2 parameters: %s and %d/x/u/o)
+    validate_assembly_format_2_reg_imm(assembly_format);
+    
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -82,16 +96,69 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
-address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32) {
+/**
+ * It requires assembly_format has 2 params:
+ * 1) first param is %s
+ * 2) second param is %ld or %lx, if it uses another format such as %d,
+ * snprintf reads only lower 4 bytes for imm64, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg
+ * @param imm64
+ * @return
+ */
+address YuhuMacroAssembler::write_inst_reg_imm64(const char* assembly_format, YuhuRegister reg, long imm64) {
+    // Validate assembly format string (expects 2 parameters: %s and %ld/%lx/%lu/%lo)
+    validate_assembly_format_long(assembly_format);
+    
     char buffer[50];
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wformat-nonliteral"
-    snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), imm32);
-#pragma clang diagnostic pop
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg), imm64);
+    #pragma clang diagnostic pop
     return write_inst(machine_code(buffer));
 }
 
+/**
+ * It requires assembly_format has 2 params:
+ * 1) first param is %s
+ * 2) second param is %d, if it uses another format such as %ld or %lx,
+ * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg
+ * @param imm32
+ * @return
+ */
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32) {
+    // Validate assembly format string (expects 2 parameters: %s and %d/x/u/o)
+    validate_assembly_format_2_reg_imm(assembly_format);
+    
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg), imm32);
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+/**
+ * It requires assembly_format has 3 params:
+ * 1) first param is %s
+ * 2) second param is %s
+ * 3) third param is %d, if it uses another format such as %ld or %lx,
+ * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg1
+ * @param reg2
+ * @param imm32
+ * @return
+ */
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, int imm32) {
+    // Validate assembly format string (expects 3 parameters: %s, %s, and %d/x/u/o)
+    validate_assembly_format_3_reg_reg_imm(assembly_format);
+    
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -100,7 +167,25 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+/**
+ * It requires assembly_format has 4 params:
+ * 1) first param is %s
+ * 2) second param is %s
+ * 3) third param is %s
+ * 4) fourth param is %d, if it uses another format such as %ld or %lx,
+ * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg1
+ * @param reg2
+ * @param reg3
+ * @param imm32
+ * @return
+ */
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuRegister reg3, int imm32) {
+    // Validate assembly format string (expects 4 parameters: %s, %s, %s, and %d/x/u/o)
+    validate_assembly_format_4_reg_reg_reg_imm(assembly_format);
+    
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -109,7 +194,19 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+/**
+ * It requires assembly_format has 1 params:
+ * 1) first param is %d, if it uses another format such as %ld or %lx,
+ * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param imm32
+ * @return
+ */
 address YuhuMacroAssembler::write_inst(const char* assembly_format, int imm32) {
+    // Validate assembly format string (expects 1 parameter: %d/x/u/o)
+    validate_assembly_format_1_imm(assembly_format);
+    
     char buffer[50];
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wformat-nonliteral"
@@ -509,14 +606,265 @@ address YuhuMacroAssembler::write_inst_tbnz(YuhuRegister reg, int bitpos, YuhuLa
 }
 
 address YuhuMacroAssembler::write_inst_adrp(YuhuRegister reg, address target) {
-    // 确保目标地址页面对齐
-    uint64_t target_page = ((uint64_t)target >> 12) << 12;
-    return write_inst("adrp %s, 0x%lx", reg, target_page);
+    // 计算页偏移：直接计算目标页和当前页的差值
+    uint64_t current_pc_addr = (uint64_t)current_pc();
+    uint64_t target_addr = (uint64_t)target;
+    
+    // 计算页偏移（以页为单位）
+    int64_t page_offset = ((int64_t)(target_addr >> 12)) - ((int64_t)(current_pc_addr >> 12));
+    
+    // 检查是否在有效范围内
+    assert(page_offset >= -(1<<20) && page_offset < (1<<20), "ADRP immediate out of range");
+    
+    // 使用直接编码方法而不是Keystone Engine
+    return write_inst_adrp_direct(reg, (int32_t)page_offset);
+}
+
+address YuhuMacroAssembler::write_inst_adrp_direct(YuhuRegister reg, int32_t page_offset) {
+    // 直接编码ADRP指令，不依赖Keystone Engine
+    // ADRP指令格式：
+    // 31-24: 10010000 (0x90)
+    // 23-5:  高19位立即数
+    // 4-0:   目标寄存器
+    // 30-29: 低2位立即数
+    
+    uint32_t instruction = 0x90000000;  // 基础指令码
+    
+    // 设置目标寄存器 (位 4-0)
+    instruction |= (reg & 0x1F);
+    
+    // 设置立即数
+    // 高19位放在位 23-5
+    uint32_t immhi = (page_offset >> 2) & 0x7FFFF;
+    instruction |= (immhi << 5);
+    
+    // 低2位放在位 30-29
+    uint32_t immlo = page_offset & 0x3;
+    instruction |= (immlo << 29);
+    
+    // 将编码的指令写入代码缓冲区
+    emit_int32(instruction);
+    
+    return current_pc();
 }
 
 address YuhuMacroAssembler::write_inst_adr(YuhuRegister reg, address target) {
     long offset = target - current_pc();
     return write_inst("adr %s, #%d", reg, offset);
+}
+
+// Validate format string for: write_inst(assembly_format, imm32) - expects 1 parameter: %d/x/u/o
+void YuhuMacroAssembler::validate_assembly_format_1_imm(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_valid_immediate = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++;
+            if (*format_str == '\0') break;
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                assert(false, "assembly_format with 1 parameter should use %d/x/u/o, not %s");
+            } else if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                has_valid_immediate = true;
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                format_str++;
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    assert(false, "Invalid format specifier: Use %d instead of %l%c for int parameter");
+                }
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    assert(specifier_count == 1, "assembly_format must have exactly 1 format specifier for immediate value");
+    assert(has_valid_immediate, "assembly_format must contain %d, %x, %u, or %o as parameter");
+}
+
+// Validate format string for: write_inst(assembly_format, reg, imm32) - expects 2 parameters: %s and %d/x/u/o
+void YuhuMacroAssembler::validate_assembly_format_2_reg_imm(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_percent_s = false;
+    bool has_valid_immediate = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++;
+            if (*format_str == '\0') break;
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                if (specifier_count == 1) has_percent_s = true;
+                else assert(false, "assembly_format should only have %s as first parameter");
+            } else if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                if (specifier_count == 2) has_valid_immediate = true;
+                else assert(false, "assembly_format should have %d/x/u/o as second parameter");
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                format_str++;
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    assert(false, "Invalid format specifier: Use %d instead of %l%c for int parameter");
+                }
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    assert(specifier_count == 2, "assembly_format must have exactly 2 format specifiers for register + immediate");
+    assert(has_percent_s, "assembly_format must contain %s as first parameter (register)");
+    assert(has_valid_immediate, "assembly_format must contain %d, %x, %u, or %o as second parameter (immediate)");
+}
+
+// Validate format string for: write_inst(assembly_format, reg1, reg2, imm32) - expects 3 parameters: %s, %s, and %d/x/u/o
+void YuhuMacroAssembler::validate_assembly_format_3_reg_reg_imm(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_first_s = false;
+    bool has_second_s = false;
+    bool has_valid_immediate = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++;
+            if (*format_str == '\0') break;
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                if (specifier_count == 1) has_first_s = true;
+                else if (specifier_count == 2) has_second_s = true;
+                else assert(false, "assembly_format should only have %s as first two parameters");
+            } else if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                if (specifier_count == 3) has_valid_immediate = true;
+                else assert(false, "assembly_format should have %d/x/u/o as third parameter");
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                format_str++;
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    assert(false, "Invalid format specifier: Use %d instead of %l%c for int parameter");
+                }
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    assert(specifier_count == 3, "assembly_format must have exactly 3 format specifiers for register + register + immediate");
+    assert(has_first_s, "assembly_format must contain %s as first parameter (register)");
+    assert(has_second_s, "assembly_format must contain %s as second parameter (register)");
+    assert(has_valid_immediate, "assembly_format must contain %d, %x, %u, or %o as third parameter (immediate)");
+}
+
+// Validate format string for: write_inst(assembly_format, reg1, reg2, reg3, imm32) - expects 4 parameters: %s, %s, %s, and %d/x/u/o
+void YuhuMacroAssembler::validate_assembly_format_4_reg_reg_reg_imm(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_first_s = false;
+    bool has_second_s = false;
+    bool has_third_s = false;
+    bool has_valid_immediate = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++;
+            if (*format_str == '\0') break;
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                if (specifier_count == 1) has_first_s = true;
+                else if (specifier_count == 2) has_second_s = true;
+                else if (specifier_count == 3) has_third_s = true;
+                else assert(false, "assembly_format should only have %s as first three parameters");
+            } else if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                if (specifier_count == 4) has_valid_immediate = true;
+                else assert(false, "assembly_format should have %d/x/u/o as fourth parameter");
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                format_str++;
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    assert(false, "Invalid format specifier: Use %d instead of %l%c for int parameter");
+                }
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    assert(specifier_count == 4, "assembly_format must have exactly 4 format specifiers for register + register + register + immediate");
+    assert(has_first_s, "assembly_format must contain %s as first parameter (register)");
+    assert(has_second_s, "assembly_format must contain %s as second parameter (register)");
+    assert(has_third_s, "assembly_format must contain %s as third parameter (register)");
+    assert(has_valid_immediate, "assembly_format must contain %d, %x, %u, or %o as fourth parameter (immediate)");
+}
+
+void YuhuMacroAssembler::validate_assembly_format_long(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    // Check for format specifiers - expects exactly 2: %s and %ld/%lx
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_percent_s = false;
+    bool has_valid_long_specifier = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++; // Skip the %
+            if (*format_str == '\0') break; // Handle edge case of % at end
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                if (specifier_count == 1) {
+                    has_percent_s = true;
+                } else {
+                    assert(false, "assembly_format with long immediate should only have %s as first parameter");
+                }
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                // Check for %ld, %lx, %lu, %lo
+                format_str++; // Skip the 'l'
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    if (specifier_count == 2) {
+                        has_valid_long_specifier = true;
+                    } else {
+                        assert(false, "assembly_format with long immediate should have %ld/%lx as second parameter");
+                    }
+                } else {
+                    assert(false, "Invalid long format specifier");
+                }
+            } else if (*format_str == 'd') {
+                // %d is not valid for long parameter
+                assert(false, "Invalid format specifier: Use %ld instead of %d for long parameter");
+            } else if (*format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                // %x, %u, %o without 'l' are not valid for long parameter
+                assert(false, "Invalid format specifier: Use %lx/%lu/%lo instead of %x/%u/%o for long parameter");
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    // Validate format string requirements
+    assert(specifier_count == 2, "assembly_format must have exactly 2 format specifiers for register + long immediate");
+    assert(has_percent_s, "assembly_format must contain %s as first parameter (register)");
+    assert(has_valid_long_specifier, "assembly_format must contain %ld, %lx, %lu, or %lo as second parameter (long immediate)");
 }
 
 address YuhuMacroAssembler::write_inst_adr(YuhuRegister reg, YuhuLabel &label) {
@@ -804,31 +1152,31 @@ address YuhuMacroAssembler::write_insts_far_jump(address entry, CodeBuffer *cbuf
     return current_pc();
 }
 
-address YuhuMacroAssembler::write_insts_adrp(YuhuRegister reg, const address &dest, uint64_t &byte_offset) {
+address YuhuMacroAssembler::write_insts_adrp(YuhuRegister reg, const YuhuExternalAddress &dest, uint64_t &byte_offset) {
 //    relocInfo::relocType rtype = dest.rspec().reloc()->type();
     uint64_t low_page = (uint64_t)CodeCache::low_bound() >> 12;
     uint64_t high_page = (uint64_t)(CodeCache::high_bound()-1) >> 12;
-    uint64_t dest_page = (uint64_t) dest >> 12;
+    uint64_t dest_page = (uint64_t) dest.target() >> 12;
     int64_t offset_low = dest_page - low_page;
     int64_t offset_high = dest_page - high_page;
 
-    assert(is_valid_AArch64_address(dest), "bad address");
+    assert(is_valid_AArch64_address(dest.target()), "bad address");
 //    assert(dest.getMode() == Address::literal, "ADRP must be applied to a literal address");
 
-//    InstructionMark im(this);
-//    code_section()->relocate(inst_mark(), dest.rspec());
+    InstructionMark im(this);
+    code_section()->relocate(inst_mark(), dest.rspec());
     // 8143067: Ensure that the adrp can reach the dest from anywhere within
     // the code cache so that if it is relocated we know it will still reach
     if (offset_high >= -(1<<20) && offset_low < (1<<20)) {
-        write_inst_adrp(reg, dest);
+        write_inst_adrp(reg, dest.target());
     } else {
-        uint64_t target = (uint64_t)dest;
+        uint64_t target = (uint64_t)dest.target();
         uint64_t adrp_target
                 = (target & 0xffffffffUL) | ((uint64_t)current_pc() & 0xffff00000000UL);
         write_inst_adrp(reg, (address)adrp_target);
         write_inst("movk %s, #%d, lsl #32", reg, (target >> 32) & 0xffff);
     }
-    byte_offset = (uint64_t)dest & 0xfff;
+    byte_offset = (uint64_t)dest.target() & 0xfff;
     return current_pc();
 }
 
@@ -3016,6 +3364,45 @@ YuhuSkipIfEqual::~YuhuSkipIfEqual() {
 }
 
 #define __ as->
+
+YuhuAddress::YuhuAddress(address target, relocInfo::relocType rtype) : _mode(literal){
+    _is_lval = false;
+    _target = target;
+    switch (rtype) {
+        case relocInfo::oop_type:
+        case relocInfo::metadata_type:
+            // Oops are a special case. Normally they would be their own section
+            // but in cases like icBuffer they are literals in the code stream that
+            // we don't have a section for. We use none so that we get a literal address
+            // which is always patchable.
+            break;
+        case relocInfo::external_word_type:
+            _rspec = external_word_Relocation::spec(target);
+            break;
+        case relocInfo::internal_word_type:
+            _rspec = internal_word_Relocation::spec(target);
+            break;
+        case relocInfo::opt_virtual_call_type:
+            _rspec = opt_virtual_call_Relocation::spec();
+            break;
+        case relocInfo::static_call_type:
+            _rspec = static_call_Relocation::spec();
+            break;
+        case relocInfo::runtime_call_type:
+            _rspec = runtime_call_Relocation::spec();
+            break;
+        case relocInfo::poll_type:
+        case relocInfo::poll_return_type:
+            _rspec = Relocation::spec_simple(rtype);
+            break;
+        case relocInfo::none:
+            _rspec = RelocationHolder::none;
+            break;
+        default:
+            ShouldNotReachHere();
+            break;
+    }
+}
 
 void YuhuAddress::lea(YuhuMacroAssembler *as, YuhuMacroAssembler::YuhuRegister r) const {
     // TODO
