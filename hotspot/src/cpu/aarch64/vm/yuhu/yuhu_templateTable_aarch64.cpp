@@ -2073,7 +2073,7 @@ void YuhuTemplateTable::prepare_invoke(int byte_no,
 
     // load receiver if needed (note: no return address pushed yet)
     if (load_receiver) {
-        __ write_inst("add %s, %s, #%d", __ w_reg(recv), __ w_reg(flags), ConstantPoolCacheEntry::parameter_size_mask);
+        __ write_inst("and %s, %s, #%d", __ w_reg(recv), __ w_reg(flags), ConstantPoolCacheEntry::parameter_size_mask);
         // FIXME -- is this actually correct? looks like it should be 2
         // const int no_return_pc_pushed_yet = -1;  // argument slot correction before we push return address
         // const int receiver_is_at_end      = -1;  // back off one slot to get receiver
