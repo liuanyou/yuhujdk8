@@ -1467,7 +1467,7 @@ address YuhuInterpreterGenerator::generate_result_handler_for(
 address YuhuInterpreterGenerator::generate_continuation_for(TosState state) {
     address entry = __ current_pc();
     // NULL last_sp until next java call
-    __ write_inst("str xzr [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
     __ write_insts_dispatch_next(state);
     return entry;
 }
@@ -1489,7 +1489,7 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
     YuhuInterpreter::_rethrow_exception_entry = __ current_pc();
     // Restore sp to interpreter_frame_last_sp even though we are going
     // to empty the expression stack for the exception processing.
-    __ write_inst("str xzr [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
     // r0: exception
     // r3: return address/pc that threw exception
     __ write_insts_restore_bcp();    // rbcp points to call/send
