@@ -731,7 +731,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     // change thread state
     __ write_insts_mov_imm64(__ x8, _thread_in_Java);
-    __ write_insts_lea(__ x29, YuhuAddress(__ x28, JavaThread::thread_state_offset()));
+    __ write_insts_lea(__ x9, YuhuAddress(__ x28, JavaThread::thread_state_offset()));
     __ write_inst_regs("stlr %s, [%s]", __ w8, __ x9);
 
     // reset_last_Java_frame
