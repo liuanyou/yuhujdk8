@@ -265,7 +265,7 @@ void YuhuTemplateTable::ldc2_w()
     __ write_inst("cmp w2, #%d", (int)JVM_CONSTANT_Double);
     __ write_inst_b(__ ne, Long);
     // dtos
-    __ write_insts_lea(__ x2, YuhuAddress(__ x1, __ x1, YuhuAddress::lsl(3)));
+    __ write_insts_lea(__ x2, YuhuAddress(__ x1, __ x0, YuhuAddress::lsl(3)));
     __ write_inst("ldr d0, [x2, #%d]", base_offset);
     __ write_inst_push_d();
     __ write_inst_b(Done);
