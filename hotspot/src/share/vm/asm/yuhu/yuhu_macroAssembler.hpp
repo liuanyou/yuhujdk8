@@ -32,10 +32,23 @@ private:
         size_t size;
         size_t count;
         int ks_result = ks_asm(ks, assembly, 0, &encode, &size, &count);
-        assert(ks_result == KS_ERR_OK, "Failed to assemble!");
+        
+        // Check Keystone result
+        assert(ks_result == KS_ERR_OK, "Failed to assemble instruction");
+        
+        // Check instruction count
+        assert(count == 1, "Expected 1 instruction, got multiple");
+        
+        // Check instruction size
+        assert(size == 4, "Expected 4 bytes, got wrong size");
+        
         uint32_t machine_code;
         memcpy(&machine_code, encode, sizeof(uint32_t));
         ks_free(encode);
+        
+        // Check for illegal instruction (0x00000000)
+        assert(machine_code != 0, "Generated machine code is 0x00000000 - invalid instruction");
+        
         return machine_code;
     }
     // compute target according label and given address
@@ -162,7 +175,7 @@ private:
 
     const char* op_name(YuhuOperation op) {
         static const char* op_names[] = {
-                "ls", "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
+                "lsl", "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
         };
 
         // check array index
