@@ -148,6 +148,7 @@ public:
     static address*   invokedynamic_return_entry_table()          { return _invokedynamic_return_entry; }
     static address* invoke_return_entry_table_for(Bytecodes::Code code);
 
+    static address    rethrow_exception_entry()                   { return _rethrow_exception_entry; }
     static address    throw_exception_entry()                     { return _throw_exception_entry; }
 
     // Method activation

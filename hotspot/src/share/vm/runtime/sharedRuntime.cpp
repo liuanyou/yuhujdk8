@@ -34,6 +34,7 @@
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interpreterRuntime.hpp"
+#include "interpreter/yuhu/yuhu_interpreter.hpp"
 #include "memory/gcLocker.inline.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/oop.inline.hpp"
@@ -507,6 +508,11 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
   // Interpreted code
   if (Interpreter::contains(return_address)) {
     return Interpreter::rethrow_exception_entry();
+  }
+  
+  // YuhuInterpreter code
+  if (YuhuInterpreter::contains(return_address)) {
+    return YuhuInterpreter::rethrow_exception_entry();
   }
 
   guarantee(blob == NULL || !blob->is_runtime_stub(), "caller should have skipped stub");
