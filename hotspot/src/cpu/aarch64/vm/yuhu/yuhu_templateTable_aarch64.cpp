@@ -3184,7 +3184,7 @@ void YuhuTemplateTable::fast_linearswitch() {
     // below)
     __ write_inst("and x19, x19, #%d", -BytesPerInt);
     // set counter
-    __ write_inst_ldr(__ x1, YuhuAddress(__ x19, BytesPerInt));
+    __ write_inst_ldr(__ w1, YuhuAddress(__ x19, BytesPerInt));
     __ write_inst("rev32 x1, x1");
     __ write_inst_b(loop_entry);
     // table search
