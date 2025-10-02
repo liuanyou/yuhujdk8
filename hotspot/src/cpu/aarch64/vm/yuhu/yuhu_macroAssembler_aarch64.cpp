@@ -122,6 +122,30 @@ address YuhuMacroAssembler::write_inst_reg_imm64(const char* assembly_format, Yu
 /**
  * It requires assembly_format has 2 params:
  * 1) first param is %s
+ * 2) second param is %s
+ * 3) third param is %ld or %lx, if it uses another format such as %d,
+ * snprintf reads only lower 4 bytes for imm64, it gives unpredictable result
+ *
+ * @param assembly_format
+ * @param reg1
+ * @param reg2
+ * @param imm64
+ * @return
+ */
+address YuhuMacroAssembler::write_inst_regs_imm64(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, long imm64) {
+    validate_assembly_format_2_regs_imm64(assembly_format);
+    
+    char buffer[50];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+    snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), imm64);
+#pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
+/**
+ * It requires assembly_format has 2 params:
+ * 1) first param is %s
  * 2) second param is %d, if it uses another format such as %ld or %lx,
  * snprintf reads additional 4 bytes for imm32, it gives unpredictable result
  *
@@ -867,6 +891,63 @@ void YuhuMacroAssembler::validate_assembly_format_long(const char* assembly_form
     assert(has_valid_long_specifier, "assembly_format must contain %ld, %lx, %lu, or %lo as second parameter (long immediate)");
 }
 
+void YuhuMacroAssembler::validate_assembly_format_2_regs_imm64(const char* assembly_format) {
+    assert(assembly_format != NULL, "assembly_format cannot be NULL");
+    
+    // Check for format specifiers - expects exactly 3: %s, %s, and %ld/%lx
+    const char* format_str = assembly_format;
+    int specifier_count = 0;
+    bool has_first_percent_s = false;
+    bool has_second_percent_s = false;
+    bool has_valid_long_specifier = false;
+    
+    while (*format_str != '\0') {
+        if (*format_str == '%') {
+            format_str++; // Skip the %
+            if (*format_str == '\0') break; // Handle edge case of % at end
+            
+            specifier_count++;
+            
+            if (*format_str == 's') {
+                if (specifier_count == 1) {
+                    has_first_percent_s = true;
+                } else if (specifier_count == 2) {
+                    has_second_percent_s = true;
+                } else {
+                    assert(false, "assembly_format with 2 registers + long immediate should only have %s as first and second parameters");
+                }
+            } else if (*format_str == 'l' && *(format_str + 1) != '\0') {
+                // Check for %ld, %lx, %lu, %lo
+                format_str++; // Skip the 'l'
+                if (*format_str == 'd' || *format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                    if (specifier_count == 3) {
+                        has_valid_long_specifier = true;
+                    } else {
+                        assert(false, "assembly_format with 2 registers + long immediate should have %ld/%lx as third parameter");
+                    }
+                } else {
+                    assert(false, "Invalid long format specifier");
+                }
+            } else if (*format_str == 'd') {
+                // %d is not valid for long parameter
+                assert(false, "Invalid format specifier: Use %ld instead of %d for long parameter");
+            } else if (*format_str == 'x' || *format_str == 'u' || *format_str == 'o') {
+                // %x, %u, %o without 'l' are not valid for long parameter
+                assert(false, "Invalid format specifier: Use %lx/%lu/%lo instead of %x/%u/%o for long parameter");
+            } else {
+                assert(false, "Unsupported format specifier in assembly format string");
+            }
+        }
+        format_str++;
+    }
+    
+    // Validate format string requirements
+    assert(specifier_count == 3, "assembly_format must have exactly 3 format specifiers for 2 registers + long immediate");
+    assert(has_first_percent_s, "assembly_format must contain %s as first parameter (first register)");
+    assert(has_second_percent_s, "assembly_format must contain %s as second parameter (second register)");
+    assert(has_valid_long_specifier, "assembly_format must contain %ld, %lx, %lu, or %lo as third parameter (long immediate)");
+}
+
 address YuhuMacroAssembler::write_inst_adr(YuhuRegister reg, YuhuLabel &label) {
     if (label.is_bound()) {
         write_inst_adr(reg, target(label, current_pc()));
@@ -1142,7 +1223,7 @@ address YuhuMacroAssembler::write_insts_far_jump(address entry, CodeBuffer *cbuf
         // We can use ADRP here because we know that the total size of
         // the code cache cannot exceed 2Gb.
         write_insts_adrp(tmp, entry, offset);
-        write_inst("add %s, %s, %d", tmp, tmp, offset);
+        write_inst_regs_imm64("add %s, %s, %ld", tmp, tmp, offset);
 //        if (cbuf) cbuf->set_insts_mark();
         write_inst_br(tmp);
     } else {
@@ -1343,10 +1424,8 @@ address YuhuMacroAssembler::write_insts_verify_oop(YuhuRegister reg, TosState st
 
 address YuhuMacroAssembler::write_insts_load_klass(YuhuRegister dst, YuhuRegister src) {
     if (UseCompressedClassPointers) {
-        write_insts_stop("unimplemented");
-        // TODO
-//        ldrw(dst, Address(src, oopDesc::klass_offset_in_bytes()));
-//        decode_klass_not_null(dst);
+        write_inst_ldr(w_reg(dst), YuhuAddress(src, oopDesc::klass_offset_in_bytes()));
+        write_insts_decode_klass_not_null(dst);
     } else {
         write_inst("ldr %s, [%s, #%d]", dst, src, oopDesc::klass_offset_in_bytes());
     }
@@ -2192,13 +2271,12 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_post(YuhuRegister store
 }
 
 address YuhuMacroAssembler::write_insts_load_heap_oop(YuhuRegister dst, YuhuAddress src) {
-    // TODO
-//    if (UseCompressedOops) {
-//        ldrw(dst, src);
-//        decode_heap_oop(dst);
-//    } else {
+    if (UseCompressedOops) {
+        write_inst_ldr(w_reg(dst), src);
+        write_insts_decode_heap_oop(dst);
+    } else {
         write_inst_ldr(dst, src);
-//    }
+    }
     return current_pc();
 }
 
@@ -2729,6 +2807,27 @@ address YuhuMacroAssembler::write_insts_store_heap_oop_null(YuhuAddress dst) {
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_insts_decode_heap_oop(YuhuRegister d, YuhuRegister s) {
+    // TODO
+//#ifdef ASSERT
+//    write_insts_verify_heapbase("MacroAssembler::decode_heap_oop: heap base corrupted?");
+//#endif
+    if (Universe::narrow_oop_base() == NULL) {
+        if (Universe::narrow_oop_shift() != 0 || d != s) {
+            write_inst("lsl %s, %s, #%d", d, s, Universe::narrow_oop_shift());
+        }
+    } else {
+        YuhuLabel done;
+        if (d != s)
+            write_inst_mov_reg(d, s);
+        write_inst_cbz(s, done);
+        write_inst_add(d, x27, s, lsl, LogMinObjAlignmentInBytes);
+        pin_label(done);
+    }
+    write_insts_verify_oop(d, "broken oop in decode_heap_oop");
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_insts_load_byte_map_base(YuhuRegister reg) {
     jbyte *byte_map_base =
             ((CardTableModRefBS*)(Universe::heap()->barrier_set()))->byte_map_base;
@@ -2740,7 +2839,7 @@ address YuhuMacroAssembler::write_insts_load_byte_map_base(YuhuRegister reg) {
         write_insts_adrp(reg, (address)byte_map_base, offset);
         // We expect offset to be zero with most collectors.
         if (offset != 0) {
-            write_inst("add %s, %s, #%d", reg, reg, offset);
+            write_inst_regs_imm64("add %s, %s, #%ld", reg, reg, offset);
         }
     } else {
         write_insts_mov_imm64(reg, (uint64_t)byte_map_base);
@@ -3217,10 +3316,10 @@ address YuhuMacroAssembler::write_insts_encode_klass_not_null(YuhuRegister dst, 
 
     if (use_XOR_for_compressed_class_base) {
         if (Universe::narrow_klass_shift() != 0) {
-            write_inst("eor %s, %s, #%d", dst, src, (uint64_t)Universe::narrow_klass_base());
+            write_inst_regs_imm64("eor %s, %s, #%ld", dst, src, (uint64_t)Universe::narrow_klass_base());
             write_inst("lsr %s, %s, #%d", dst, dst, LogKlassAlignmentInBytes);
         } else {
-            write_inst("eor %s, %s, #%d", dst, src, (uint64_t)Universe::narrow_klass_base());
+            write_inst_regs_imm64("eor %s, %s, #%ld", dst, src, (uint64_t)Universe::narrow_klass_base());
         }
         return current_pc();
     }
@@ -3242,10 +3341,61 @@ address YuhuMacroAssembler::write_insts_encode_klass_not_null(YuhuRegister dst, 
     write_inst_regs("sub %s, %s, %s", dst, src, rbase);
     if (Universe::narrow_klass_shift() != 0) {
         assert (LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
-        write_inst("lsr, %s, %s, #%d", dst, dst, LogKlassAlignmentInBytes);
+        write_inst("lsr %s, %s, #%d", dst, dst, LogKlassAlignmentInBytes);
     }
     if (dst == src) write_insts_reinit_heapbase();
     return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_decode_klass_not_null(YuhuRegister dst, YuhuRegister src) {
+    YuhuRegister rbase = dst;
+    assert (UseCompressedClassPointers, "should only be used for compressed headers");
+
+    if (Universe::narrow_klass_base() == NULL) {
+        if (Universe::narrow_klass_shift() != 0) {
+            assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+            write_inst("lsl %s, %s, #%d", dst, src, LogKlassAlignmentInBytes);
+        } else {
+            if (dst != src) write_inst_mov_reg(dst, src);
+        }
+        return current_pc();
+    }
+
+    if (use_XOR_for_compressed_class_base) {
+        if (Universe::narrow_klass_shift() != 0) {
+            write_inst("lsl %s, %s, #%d", dst, src, LogKlassAlignmentInBytes);
+            write_inst_regs_imm64("eor %s, %s, #%ld", dst, dst, (uint64_t)Universe::narrow_klass_base());
+        } else {
+            write_inst_regs_imm64("eor %s, %s, #%ld", dst, src, (uint64_t)Universe::narrow_klass_base());
+        }
+        return current_pc();
+    }
+
+    if (((uint64_t)Universe::narrow_klass_base() & 0xffffffff) == 0
+        && Universe::narrow_klass_shift() == 0) {
+        if (dst != src)
+            write_inst_mov_reg(w_reg(dst), w_reg(src));
+        write_inst("movk %s, #%d, lsl #32", dst, (uint64_t)Universe::narrow_klass_base() >> 32);
+        return current_pc();
+    }
+
+    // Cannot assert, unverified entry point counts instructions (see .ad file)
+    // vtableStubs also counts instructions in pd_code_size_limit.
+    // Also do not verify_oop as this is called by verify_oop.
+    if (dst == src) rbase = x27;
+    write_insts_mov_imm64(rbase, (uint64_t)Universe::narrow_klass_base());
+    if (Universe::narrow_klass_shift() != 0) {
+        assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+        write_inst_add(dst, rbase, src, lsl, LogKlassAlignmentInBytes);
+    } else {
+        write_inst_regs("add %s, %s, %s", dst, rbase, src);
+    }
+    if (dst == src) write_insts_reinit_heapbase();
+    return current_pc();
+}
+
+address  YuhuMacroAssembler::write_insts_decode_klass_not_null(YuhuRegister r) {
+    return write_insts_decode_klass_not_null(r, r);
 }
 
 address YuhuMacroAssembler::write_insts_reinit_heapbase()

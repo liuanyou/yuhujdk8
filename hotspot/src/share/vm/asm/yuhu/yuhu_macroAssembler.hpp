@@ -115,6 +115,7 @@ private:
     void validate_assembly_format_3_reg_reg_imm(const char* assembly_format);  // 3 params: %s, %s, and %d/x/u/o
     void validate_assembly_format_4_reg_reg_reg_imm(const char* assembly_format);  // 4 params: %s, %s, %s, and %d/x/u/o
     void validate_assembly_format_long(const char* assembly_format);       // 2 params: %s and %ld/lx/lu/lo
+    void validate_assembly_format_2_regs_imm64(const char* assembly_format);  // 3 params: %s, %s, and %ld/lx/lu/lo
     
     const char* reg_name(YuhuRegister reg) {
         static const char* register_names[] = {
@@ -218,6 +219,8 @@ public:
     address write_inst(const char* assembly_format, YuhuRegister reg, int imm32);
 
     address write_inst_reg_imm64(const char* assembly_format, YuhuRegister reg, long imm64);
+
+    address write_inst_regs_imm64(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, long imm64);
 
     address write_inst(const char* assembly_format, YuhuFloatRegister reg, int imm32);
 
@@ -575,6 +578,9 @@ public:
     address write_insts_encode_heap_oop(YuhuRegister d, YuhuRegister s);
     address write_insts_encode_heap_oop(YuhuRegister r) { return write_insts_encode_heap_oop(r, r); }
 
+    address write_insts_decode_heap_oop(YuhuRegister d, YuhuRegister s);
+    address write_insts_decode_heap_oop(YuhuRegister r) { return write_insts_decode_heap_oop(r, r); }
+
     address write_insts_store_heap_oop(YuhuAddress dst, YuhuRegister src);
 
     address write_insts_store_heap_oop_null(YuhuAddress dst);
@@ -640,6 +646,9 @@ public:
 
     address write_insts_encode_klass_not_null(YuhuRegister r);
     address write_insts_encode_klass_not_null(YuhuRegister dst, YuhuRegister src);
+
+    address write_insts_decode_klass_not_null(YuhuRegister r);
+    address write_insts_decode_klass_not_null(YuhuRegister dst, YuhuRegister src);
 
     address write_insts_reinit_heapbase();
 
