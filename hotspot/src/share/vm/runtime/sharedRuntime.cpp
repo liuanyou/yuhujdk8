@@ -775,6 +775,13 @@ address SharedRuntime::continuation_for_implicit_exception(JavaThread* thread,
       default:                      ShouldNotReachHere();
     }
 #endif // !CC_INTERP
+  } else if (YuhuInterpreter::contains(pc)) {
+    switch (exception_kind) {
+      case IMPLICIT_NULL:           return YuhuInterpreter::throw_NullPointerException_entry();
+      case IMPLICIT_DIVIDE_BY_ZERO: return YuhuInterpreter::throw_ArithmeticException_entry();
+      case STACK_OVERFLOW:          return YuhuInterpreter::throw_StackOverflowError_entry();
+      default:                      ShouldNotReachHere();
+    }
   } else {
     switch (exception_kind) {
       case STACK_OVERFLOW: {

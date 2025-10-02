@@ -150,6 +150,9 @@ public:
 
     static address    rethrow_exception_entry()                   { return _rethrow_exception_entry; }
     static address    throw_exception_entry()                     { return _throw_exception_entry; }
+    static address    throw_NullPointerException_entry()          { return _throw_NullPointerException_entry; }
+    static address    throw_ArithmeticException_entry()           { return _throw_ArithmeticException_entry; }
+    static address    throw_StackOverflowError_entry()            { return _throw_StackOverflowError_entry; }
 
     // Method activation
     static MethodKind method_kind(methodHandle m);
