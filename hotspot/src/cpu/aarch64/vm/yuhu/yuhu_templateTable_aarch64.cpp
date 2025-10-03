@@ -1595,7 +1595,7 @@ void YuhuTemplateTable::tableswitch() {
     // continue execution
     __ pin_label(continue_execution);
     __ write_inst("rev32 x3, x3");
-    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x2, __ w3, YuhuAddress::sxtw(0)));
+    __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, __ w3, YuhuAddress::sxtw(0)));
     __ write_inst("add x22, x22, w3, sxtw #0");
     __ write_insts_dispatch_only(vtos);
     // handle default
