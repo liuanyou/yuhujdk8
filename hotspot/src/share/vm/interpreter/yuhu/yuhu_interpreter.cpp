@@ -270,3 +270,10 @@ bool YuhuInterpreter::contains(address pc) {
     // Check if PC is within YuhuInterpreter's generated code
     return _code != NULL && _code->contains(pc);
 }
+
+void YuhuInterpreter::set_entry_for_kind(YuhuInterpreter::MethodKind kind, address entry) {
+    assert(kind >= method_handle_invoke_FIRST &&
+           kind <= method_handle_invoke_LAST, "late initialization only for MH entry points");
+    assert(_entry_table[kind] == _entry_table[abstract], "previous value must be AME entry");
+    _entry_table[kind] = entry;
+}

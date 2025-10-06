@@ -2063,7 +2063,7 @@ void YuhuTemplateTable::prepare_invoke(int byte_no,
         // This must be done before we get the receiver,
         // since the parameter_size includes it.
         __ write_inst_push(__ x19);
-        __ write_insts_mov_imm64(__ x19, index);
+        __ write_inst_mov_reg(__ x19, index);
         assert(ConstantPoolCacheEntry::_indy_resolved_references_appendix_offset == 0, "appendix expected at index+0");
         __ write_insts_load_resolved_reference_at_index(index, __ x19);
         __ write_inst_pop(__ x19);

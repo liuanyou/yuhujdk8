@@ -2351,10 +2351,25 @@ methodHandle SystemDictionary::find_method_handle_invoker(Symbol* name,
   methodHandle empty;
   assert(EnableInvokeDynamic, "");
   assert(!THREAD->is_Compiler_thread(), "");
+  
+  // DEBUG: Add logging for method handle invoker lookup
+  if (TraceMethodHandles) {
+    ResourceMark rm(THREAD);
+    tty->print_cr("DEBUG: find_method_handle_invoker called with:");
+    tty->print_cr("  name: %s", name->as_C_string());
+    tty->print_cr("  signature: %s", signature->as_C_string());
+    tty->print_cr("  accessing_klass: %s", accessing_klass.is_null() ? "NULL" : accessing_klass()->external_name());
+  }
+  
   Handle method_type =
     SystemDictionary::find_method_handle_type(signature, accessing_klass, CHECK_(empty));
   if (false) {  // FIXME: Decide if the Java upcall should resolve signatures.
     method_type = java_lang_String::create_from_symbol(signature, CHECK_(empty));
+  }
+
+  // DEBUG: Log method_type result
+  if (TraceMethodHandles) {
+    tty->print_cr("  method_type: %s", method_type.is_null() ? "NULL" : "VALID");
   }
 
   KlassHandle  mh_klass = SystemDictionary::MethodHandle_klass();
@@ -2363,12 +2378,29 @@ methodHandle SystemDictionary::find_method_handle_invoker(Symbol* name,
   objArrayHandle appendix_box = oopFactory::new_objArray(SystemDictionary::Object_klass(), 1, CHECK_(empty));
   assert(appendix_box->obj_at(0) == NULL, "");
 
+  // DEBUG: Log parameters before Java call
+  if (TraceMethodHandles) {
+    tty->print_cr("  mh_klass: %s", mh_klass.is_null() ? "NULL" : mh_klass()->external_name());
+    tty->print_cr("  ref_kind: %d", ref_kind);
+    tty->print_cr("  name_str: %s", name_str.is_null() ? "NULL" : "VALID");
+    tty->print_cr("  appendix_box: %s", appendix_box.is_null() ? "NULL" : "VALID");
+  }
+
   // This should not happen.  JDK code should take care of that.
   if (accessing_klass.is_null() || method_type.is_null()) {
+    if (TraceMethodHandles) {
+      tty->print_cr("ERROR: accessing_klass.is_null()=%s, method_type.is_null()=%s", 
+                    accessing_klass.is_null() ? "true" : "false",
+                    method_type.is_null() ? "true" : "false");
+    }
     THROW_MSG_(vmSymbols::java_lang_InternalError(), "bad invokehandle", empty);
   }
 
   // call java.lang.invoke.MethodHandleNatives::linkMethod(... String, MethodType) -> MemberName
+  if (TraceMethodHandles) {
+    tty->print_cr("  Calling MethodHandleNatives.linkMethod...");
+  }
+  
   JavaCallArguments args;
   args.push_oop(accessing_klass()->java_mirror());
   args.push_int(ref_kind);
@@ -2377,12 +2409,23 @@ methodHandle SystemDictionary::find_method_handle_invoker(Symbol* name,
   args.push_oop(method_type());
   args.push_oop(appendix_box());
   JavaValue result(T_OBJECT);
+  
   JavaCalls::call_static(&result,
                          SystemDictionary::MethodHandleNatives_klass(),
                          vmSymbols::linkMethod_name(),
                          vmSymbols::linkMethod_signature(),
                          &args, CHECK_(empty));
+  
   Handle mname(THREAD, (oop) result.get_jobject());
+  
+  // DEBUG: Log result from Java call
+  if (TraceMethodHandles) {
+    tty->print_cr("  MethodHandleNatives.linkMethod returned: %s", mname.is_null() ? "NULL" : "VALID");
+    if (!mname.is_null()) {
+      tty->print_cr("  appendix_box[0]: %s", appendix_box->obj_at(0) == NULL ? "NULL" : "VALID");
+    }
+  }
+  
   (*method_type_result) = method_type;
   return unpack_method_and_appendix(mname, accessing_klass, appendix_box, appendix_result, THREAD);
 }

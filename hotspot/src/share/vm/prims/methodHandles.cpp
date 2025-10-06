@@ -31,6 +31,7 @@
 #include "memory/oopFactory.hpp"
 #include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "prims/methodHandles.hpp"
+#include "interpreter/yuhu/yuhu_interpreter.hpp"
 #include "runtime/compilationPolicy.hpp"
 #include "runtime/javaCalls.hpp"
 #include "runtime/reflection.hpp"
@@ -82,7 +83,7 @@ void MethodHandles::generate_adapters() {
 //
 void MethodHandlesAdapterGenerator::generate() {
   // Generate generic method handle adapters.
-  // Generate interpreter entries
+  // Generate interpreter entries for AbstractInterpreter
   for (Interpreter::MethodKind mk = Interpreter::method_handle_invoke_FIRST;
        mk <= Interpreter::method_handle_invoke_LAST;
        mk = Interpreter::MethodKind(1 + (int)mk)) {
@@ -91,6 +92,19 @@ void MethodHandlesAdapterGenerator::generate() {
     address entry = MethodHandles::generate_method_handle_interpreter_entry(_masm, iid);
     if (entry != NULL) {
       Interpreter::set_entry_for_kind(mk, entry);
+    }
+    // If the entry is not set, it will throw AbstractMethodError.
+  }
+  
+  // Generate interpreter entries for YuhuInterpreter
+  for (YuhuInterpreter::MethodKind mk = YuhuInterpreter::method_handle_invoke_FIRST;
+       mk <= YuhuInterpreter::method_handle_invoke_LAST;
+       mk = YuhuInterpreter::MethodKind(1 + (int)mk)) {
+    vmIntrinsics::ID iid = YuhuInterpreter::method_handle_intrinsic(mk);
+    StubCodeMark mark(this, "YuhuMethodHandle::interpreter_entry", vmIntrinsics::name_at(iid));
+    address entry = MethodHandles::generate_method_handle_interpreter_entry(_masm, iid);
+    if (entry != NULL) {
+      YuhuInterpreter::set_entry_for_kind(mk, entry);
     }
     // If the entry is not set, it will throw AbstractMethodError.
   }

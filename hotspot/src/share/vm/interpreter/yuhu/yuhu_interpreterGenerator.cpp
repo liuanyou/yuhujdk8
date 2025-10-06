@@ -151,7 +151,7 @@ void YuhuInterpreterGenerator::generate_all() {
 #define method_entry(kind)                                                                    \
     {                                                                                             \
         YuhuCodeletMark cm(_masm, "yuhu method entry point (kind = " #kind ")");                    \
-        YuhuInterpreter::_entry_table[Interpreter::kind] = generate_method_entry(YuhuInterpreter::kind);  \
+        YuhuInterpreter::_entry_table[YuhuInterpreter::kind] = generate_method_entry(YuhuInterpreter::kind);  \
     }
 
     // all non-native method kinds
@@ -254,7 +254,7 @@ void YuhuInterpreterGenerator::initialize_method_handle_entries() {
     // method handle entry kinds are generated later in MethodHandlesAdapterGenerator::generate:
     for (int i = YuhuInterpreter::method_handle_invoke_FIRST; i <= YuhuInterpreter::method_handle_invoke_LAST; i++) {
         YuhuInterpreter::MethodKind kind = (YuhuInterpreter::MethodKind) i;
-        YuhuInterpreter::_entry_table[kind] = YuhuInterpreter::_entry_table[Interpreter::abstract];
+        YuhuInterpreter::_entry_table[kind] = YuhuInterpreter::_entry_table[YuhuInterpreter::abstract];
     }
 }
 
