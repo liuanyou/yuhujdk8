@@ -1251,7 +1251,7 @@ void YuhuTemplateTable::float_cmp(bool is_float, int unordered_result)
         __ write_inst("fcmp s1, s0");
     } else {
         // XXX get rid of pop here, use ... reg, mem64
-        __ write_inst_pop_d(__ d0);
+        __ write_inst_pop_d(__ d1);
         __ write_inst("fcmp d1, d0");
     }
     if (unordered_result < 0) {
@@ -2866,6 +2866,7 @@ void YuhuTemplateTable::wide_iinc()
     __ write_inst("ubfx x2, x1, #0, #16");
     __ write_inst("neg x2, x2");
     __ write_inst("sbfx x1, x1, #16, #16");
+    __ write_inst_ldr(__ x0, iaddress(__ x2));
     __ write_inst("add w0, w0, w1");
     __ write_inst_str(__ x0, iaddress(__ x2));
 }
