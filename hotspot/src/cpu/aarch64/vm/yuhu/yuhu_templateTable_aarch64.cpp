@@ -498,8 +498,8 @@ void YuhuTemplateTable::daload()
     // r0: array
     // r1: index
     index_check(__ x0, __ x1); // leaves index in r1, kills rscratch1
-    __ write_insts_lea(__ x0, YuhuAddress(__ x0, __ w1, YuhuAddress::uxtw(3)));
-    __ write_inst("ldr s0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_DOUBLE));
+    __ write_insts_lea(__ x1, YuhuAddress(__ x0, __ w1, YuhuAddress::uxtw(3)));
+    __ write_inst("ldr d0, [x1, #%d]", arrayOopDesc::base_offset_in_bytes(T_DOUBLE));
 }
 
 void YuhuTemplateTable::aaload()
