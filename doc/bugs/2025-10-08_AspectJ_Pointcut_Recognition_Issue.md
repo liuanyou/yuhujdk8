@@ -259,12 +259,21 @@ Both bugs had to be fixed for reliable operation.
 ### 1. wide_iinc Fix
 **File:** `hotspot/src/cpu/aarch64/vm/yuhu/yuhu_templateTable_aarch64.cpp`  
 **Line:** 2869  
-**Change:** Added missing load instruction
+**Change:** Added missing load instruction  
+```cpp
+__ write_inst_ldr(__ x0, iaddress(__ x2));
+```
 
 ### 2. Double Comparison Fix
 **File:** `hotspot/src/cpu/aarch64/vm/yuhu/yuhu_templateTable_aarch64.cpp`  
 **Line:** 1254  
-**Change:** Changed `__ write_inst_pop_d(__ d0);` to `__ write_inst_pop_d(__ d1);`
+**Change:** Changed register from `d0` to `d1`  
+```cpp
+// BEFORE: __ write_inst_pop_d(__ d0);
+// AFTER:
+__ write_inst_pop_d(__ d1);
+```
+
 
 ---
 
@@ -522,8 +531,23 @@ This proved the arithmetic was correct but comparison bytecode was broken.
 
 ---
 
+## Complete Bug Summary
+
+| Bug # | Component | Issue | Impact |
+|-------|-----------|-------|--------|
+| 1 | `wide_iinc` | Missing load instruction | Integer variables corrupted in methods with > 255 locals |
+| 2 | `dcmpg`/`dcmpl` | Wrong register (d0→d1) | All double comparisons failed |
+
 ## Status: CLOSED - Both Bugs Fixed ✅
 
 **Fixed by:** Liu Anyou  
-**Date:** October 14, 2025  
-**Verification:** All test suites passing
+**Date:** October 14, 2025
+
+**Verification:**  
+- ✅ All test suites passing
+- ✅ AspectJ working correctly  
+- ✅ Spring Boot application functional
+
+## Related Issues
+
+- See `2025-10-18_YuhuInterpreter_daload_NullPointerException.md` for a separate double array access bug that affected Spring Boot Actuator
