@@ -73,6 +73,17 @@ On AArch64, C1's `LIR_Assembler::osr_entry` skipped the compiled-frame prologue.
 - Watchpoints on saved LR slots quickly reveal frame-construction bugs
 - Minimal deterministic reproduction (simple hot loop) was critical for fast iteration
 
+## Related Issues
+
+During the investigation of this OSR bug, a secondary thread-safety issue was discovered:
+
+- **TTY Thread-Safety Bug** (`2025-11-02_TTY_THREAD_SAFETY_BUG.md`)
+  - **Symptom**: `SIGSEGV at pc=0x0` when `-XX:+TraceOnStackReplacement` is enabled
+  - **Cause**: Compiler thread modifying global `tty` stream while main thread uses it
+  - **Fix**: Use direct file writing instead of redirecting `tty`
+  - **Test Cases**: `doc/bugs/C1_OSR_SIGSEGV/`
+  - **Status**: ✅ RESOLVED
+
 ---
 **Resolution Date**: October 31, 2025  
 **Status**: ✅ Fixed  

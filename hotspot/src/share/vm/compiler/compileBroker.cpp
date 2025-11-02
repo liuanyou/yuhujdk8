@@ -379,7 +379,11 @@ void CompileTask::print_compilation_impl(outputStream* st, Method* method, int c
                                          bool is_osr_method, int osr_bci, bool is_blocking,
                                          const char* msg, bool short_form) {
   if (!short_form) {
-    st->print("%7d ", (int) st->time_stamp().milliseconds());  // print timestamp
+    TimeStamp& ts = st->time_stamp();
+    if (!ts.is_updated()) {
+      ts.update();
+    }
+    st->print("%7d ", (int) ts.milliseconds());  // print timestamp
   }
   st->print("%4d ", compile_id);    // print compilation number
 
