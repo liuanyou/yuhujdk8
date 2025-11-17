@@ -462,6 +462,10 @@ protected:
   Node *Ideal_sign_extended_input(PhaseGVN *phase, int  num_bits);
 
 public:
+  // Accessor for debugging/printing memory order
+  MemOrd mo() const { return _mo; }
+  // Override size_of() to include _mo field in clone()
+  virtual uint size_of() const;
   // We must ensure that stores of object references will be visible
   // only after the object's initialization. So the callers of this
   // procedure must indicate that the store requires `release'

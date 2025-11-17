@@ -2399,6 +2399,11 @@ const Type *StoreNode::bottom_type() const {
   return Type::MEMORY;
 }
 
+//------------------------------size_of-----------------------------------------
+uint StoreNode::size_of() const {
+  return sizeof(*this);
+}
+
 //------------------------------hash-------------------------------------------
 uint StoreNode::hash() const {
   // unroll addition of interesting fields
