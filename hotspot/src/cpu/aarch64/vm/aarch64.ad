@@ -1346,9 +1346,14 @@ bool needs_acquiring_load_exclusive(const Node *n)
   }
 
   LoadStoreNode* ldst = n->as_LoadStore();
-  assert(ldst->trailing_membar() != NULL, "expected trailing membar");
+  // Only volatile CAS operations have trailing_membar.
+  // Non-volatile CAS operations should not use acquiring load.
+  if (ldst->trailing_membar() == NULL) {
+    // Non-volatile CAS: return false to use normal CAS instruction
+    return false;
+  }
 
-  // so we can just return true here
+  // Volatile CAS with trailing_membar: use acquiring load
   return true;
 }
 
