@@ -105,9 +105,12 @@ address CompiledStaticCall::emit_to_interp_stub(CodeBuffer &cbuf, address mark) 
   // static stub relocation stores the instruction address of the call
   __ relocate(static_stub_Relocation::spec(mark));
   // static stub relocation also tags the Method* in the code-stream.
-//  __ mov_metadata(rmethod, (Metadata*)NULL);
-  __ movptr(rscratch1, 0);
-  __ br(rscratch1);
+  // Load Method* into rmethod (R12) as expected by c2i adapter.
+  // NativeGeneralJump::insert_unconditional will insert the jump instruction
+  // after this movptr at method_holder->next_instruction_address().
+  __ movptr(rmethod, 0);
+  __ movptr(rscratch1, 0);  // Placeholder for jump target, will be replaced by insert_unconditional
+  __ br(rscratch1);         // Placeholder, will be replaced by insert_unconditional
 
   assert((__ offset() - offset) <= (int)to_interp_stub_size(), "stub too big");
   __ end_a_stub();
