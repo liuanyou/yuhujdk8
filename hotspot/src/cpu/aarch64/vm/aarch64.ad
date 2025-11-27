@@ -1282,6 +1282,9 @@ bool unnecessary_release(const Node *n)
 
     Node* mem = trailing_mb->in(MemBarNode::Precedent);
     if (mem->is_Store()) {
+      // For volatile stores, the Store node should be marked as release (MemOrd::release)
+      // to allow aarch64.ad optimizations. This is set when creating the Store node
+      // in library_call.cpp for volatile Unsafe accesses.
       assert(mem->as_Store()->is_release(), "");
       assert(trailing_mb->Opcode() == Op_MemBarVolatile, "");
       return true;
@@ -1306,6 +1309,11 @@ bool unnecessary_volatile(const Node *n)
   MemBarNode *mbvol = n->as_MemBar();
 
   bool release = mbvol->trailing_store();
+  // For volatile stores, the Precedent should be a Store node marked as release.
+  // This is set when creating the Store node in library_call.cpp for volatile
+  // Unsafe accesses. The Store node's _mo field (MemOrd::release) is used by
+  // aarch64.ad to optimize volatile store patterns (e.g., eliding membars when
+  // using stlr instructions).
   assert(!release || (mbvol->in(MemBarNode::Precedent)->is_Store() && mbvol->in(MemBarNode::Precedent)->as_Store()->is_release()), "");
 #ifdef ASSERT
   if (release) {

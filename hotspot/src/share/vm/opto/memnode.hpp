@@ -983,6 +983,19 @@ public:
                           int alias_idx = Compile::AliasIdxBot,
                           Node* precedent = NULL);
 
+  // Setter methods for _kind field
+  // Note: _kind is initialized to Standalone in constructor, so no set_standalone() needed
+  void set_trailing_load() { _kind = TrailingLoad; }
+  void set_trailing_store() { _kind = TrailingStore; }
+  void set_leading_store() { _kind = LeadingStore; }
+  void set_trailing_load_store() { _kind = TrailingLoadStore; }
+  void set_leading_load_store() { _kind = LeadingLoadStore; }
+#ifdef ASSERT
+  // Setter for _pair_idx (used for pairing leading/trailing membars)
+  void set_pair_idx(uint idx) { _pair_idx = idx; }
+  uint pair_idx() const { return _pair_idx; }
+#endif
+
   MemBarNode* trailing_membar() const;
   MemBarNode* leading_membar() const;
 

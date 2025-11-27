@@ -33,6 +33,7 @@
 #include "opto/cfgnode.hpp"
 #include "opto/idealKit.hpp"
 #include "opto/mathexactnode.hpp"
+#include "opto/memnode.hpp"
 #include "opto/mulnode.hpp"
 #include "opto/parse.hpp"
 #include "opto/runtime.hpp"
@@ -2618,6 +2619,8 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
   // and it is not possible to fully distinguish unintended nulls
   // from intended ones in this API.
 
+  Node* p = NULL;
+  Node* store = NULL;
   if (is_volatile) {
     // We need to emit leading and trailing CPU membars (see below) in
     // addition to memory membars when is_volatile. This is a little
@@ -2626,9 +2629,9 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
     // we cannot do effectively here because we probably only have a
     // rough approximation of type.
     need_mem_bar = true;
-    // For Stores, place a memory ordering barrier now.
+    // For Stores, place a memory ordering barrier now (before store).
     if (is_store)
-      insert_mem_bar(Op_MemBarRelease);
+      insert_mem_bar_leading_store(Op_MemBarRelease);
   }
 
   // Memory barrier to prevent normal and 'unsafe' accesses from
@@ -2640,7 +2643,7 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
   if (need_mem_bar) insert_mem_bar(Op_MemBarCPUOrder);
 
   if (!is_store) {
-    Node* p = make_load(control(), adr, value_type, type, adr_type, is_volatile);
+    p = make_load(control(), adr, value_type, type, adr_type, is_volatile);
     // load value
     switch (type) {
     case T_BOOLEAN:
@@ -2685,12 +2688,25 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
     }
 
     if (type != T_OBJECT ) {
-      (void) store_to_memory(control(), adr, val, type, adr_type, is_volatile);
+      // For volatile stores, create a Store node with release memory order
+      // to satisfy aarch64.ad's assert that expects is_release() Store nodes
+      // for volatile accesses. This allows aarch64.ad to optimize volatile
+      // store patterns (e.g., eliding membars when using stlr instructions).
+      if (is_volatile) {
+        store = store_to_memory_release(control(), adr, val, type, adr_type);
+      } else {
+        store = store_to_memory(control(), adr, val, type, adr_type, false);
+      }
     } else {
       // Possibly an oop being stored to Java heap or native memory
       if (!TypePtr::NULL_PTR->higher_equal(_gvn.type(heap_base_oop))) {
         // oop to Java heap.
-        (void) store_oop_to_unknown(control(), heap_base_oop, adr, adr_type, val, type);
+        // For volatile stores, use release memory order to satisfy aarch64.ad's assert
+        if (is_volatile) {
+          store = store_oop_to_unknown_release(control(), heap_base_oop, adr, adr_type, val, type);
+        } else {
+          store = store_oop_to_unknown(control(), heap_base_oop, adr, adr_type, val, type);
+        }
       } else {
         // We can't tell at compile time if we are storing in the Java heap or outside
         // of it. So we need to emit code to conditionally do the proper type of
@@ -2702,14 +2718,37 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
         __ if_then(heap_base_oop, BoolTest::ne, null(), PROB_UNLIKELY(0.999)); {
           // Sync IdealKit and graphKit.
           sync_kit(ideal);
-          Node* st = store_oop_to_unknown(control(), heap_base_oop, adr, adr_type, val, type);
+          // For volatile stores, use release memory order to satisfy aarch64.ad's assert
+          if (is_volatile) {
+            store = store_oop_to_unknown_release(control(), heap_base_oop, adr, adr_type, val, type);
+          } else {
+            store = store_oop_to_unknown(control(), heap_base_oop, adr, adr_type, val, type);
+          }
           // Update IdealKit memory.
           __ sync_kit(this);
         } __ else_(); {
-          __ store(__ ctrl(), adr, val, type, alias_type->index(), is_volatile);
+          // For volatile stores, use release memory order to satisfy aarch64.ad's assert
+          if (is_volatile) {
+            Node* ideal_store = __ store_release(__ ctrl(), adr, val, type, alias_type->index());
+            // Store the Store node for later use as precedent in trailing membar
+            // In IdealKit, the Store node is managed internally, but we need it for the membar
+            // We'll get it from memory state after final_sync
+            (void) ideal_store; // Store node is in IdealKit's memory state
+          } else {
+            __ store(__ ctrl(), adr, val, type, alias_type->index(), false);
+          }
         } __ end_if();
         // Final sync IdealKit and GraphKit.
         final_sync(ideal);
+        // After final_sync, get the Store node from memory state for trailing membar
+        // The Store node should be the memory state at the alias index
+        if (is_volatile && is_store && store == NULL) {
+          Node* mem = memory(alias_type->index());
+          // The memory state should be the Store node we just created
+          if (mem->is_Store()) {
+            store = mem;
+          }
+        }
 #undef __
       }
     }
@@ -2717,9 +2756,16 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
 
   if (is_volatile) {
     if (!is_store)
-      insert_mem_bar(Op_MemBarAcquire);
-    else
-      insert_mem_bar(Op_MemBarVolatile);
+      // Volatile load: insert trailing membar after load
+      // Pass load node as precedent to ensure membar follows the load
+      insert_mem_bar_trailing_load(Op_MemBarAcquire, p);
+    else {
+      // Volatile store: insert trailing membar after store
+      // Pass store node as precedent to ensure membar follows the store
+      // For IdealKit case, store should be set from memory state after final_sync
+      assert(store != NULL, "store should not be NULL for volatile store");
+      insert_mem_bar_trailing_store(Op_MemBarVolatile, store);
+    }
   }
 
   if (need_mem_bar) insert_mem_bar(Op_MemBarCPUOrder);
@@ -2910,7 +2956,8 @@ bool LibraryCallKit::inline_unsafe_load_store(BasicType type, LoadStoreKind kind
   // into actual barriers on most machines, but we still need rest of
   // compiler to respect ordering.
 
-  insert_mem_bar(Op_MemBarRelease);
+  // Set _kind = LeadingLoadStore for CAS operation (before CAS)
+  insert_mem_bar_leading_load_store(Op_MemBarRelease, NULL);
   insert_mem_bar(Op_MemBarCPUOrder);
 
   // 4984716: MemBars must be inserted before this
@@ -3028,7 +3075,9 @@ bool LibraryCallKit::inline_unsafe_load_store(BasicType type, LoadStoreKind kind
 
   // Add the trailing membar surrounding the access
   insert_mem_bar(Op_MemBarCPUOrder);
-  insert_mem_bar(Op_MemBarAcquire);
+  // Set _kind = TrailingLoadStore for CAS operation (after CAS)
+  // Pass load_store as precedent to ensure membar follows the LoadStore node
+  insert_mem_bar_trailing_load_store(Op_MemBarAcquire, load_store);
 
   assert(type2size[load_store->bottom_type()->basic_type()] == type2size[rtype], "result type should match");
   set_result(load_store);
@@ -3084,6 +3133,7 @@ bool LibraryCallKit::inline_unsafe_ordered_store(BasicType type) {
   const Type *value_type = Type::get_const_basic_type(type);
   Compile::AliasType* alias_type = C->alias_type(adr_type);
 
+  // putOrdered: insert release barrier before store (not volatile, so use Standalone)
   insert_mem_bar(Op_MemBarRelease);
   insert_mem_bar(Op_MemBarCPUOrder);
   // Ensure that the store is atomic for longs:
@@ -5886,6 +5936,18 @@ Node * LibraryCallKit::load_field_from_object(Node * fromObj, const char * field
 
   // Build the load.
   Node* loadedField = make_load(NULL, adr, type, bt, adr_type, is_vol);
+  
+  // If reference is volatile, prevent following memory ops from
+  // floating up past the volatile read.  Also prevents commoning
+  // another volatile read.
+  // This matches the behavior in Parse::do_get_xxx()
+  if (is_vol) {
+    // Memory barrier includes bogus read of value to force load BEFORE membar
+    // Set _kind = TrailingLoad for volatile field load
+    // Pass load node as precedent to ensure membar follows the load
+    insert_mem_bar_trailing_load(Op_MemBarAcquire, loadedField);
+  }
+  
   return loadedField;
 }
 

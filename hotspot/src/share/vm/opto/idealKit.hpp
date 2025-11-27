@@ -228,6 +228,13 @@ class IdealKit: public StackObj {
               int adr_idx,
               bool require_atomic_access = false);
 
+  // Store with release memory order (for volatile stores)
+  Node* store_release(Node* ctl,
+                      Node* adr,
+                      Node* val,
+                      BasicType bt,
+                      int adr_idx);
+
   // Store a card mark ordered after store_oop
   Node* storeCM(Node* ctl,
                 Node* adr,

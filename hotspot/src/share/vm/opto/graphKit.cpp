@@ -34,6 +34,7 @@
 #include "opto/idealKit.hpp"
 #include "opto/locknode.hpp"
 #include "opto/machnode.hpp"
+#include "opto/memnode.hpp"
 #include "opto/parse.hpp"
 #include "opto/rootnode.hpp"
 #include "opto/runtime.hpp"
@@ -1525,6 +1526,66 @@ Node* GraphKit::store_to_memory(Node* ctl, Node* adr, Node *val, BasicType bt,
   return st;
 }
 
+// Store to memory with release memory order (for volatile stores)
+Node* GraphKit::store_to_memory_release(Node* ctl, Node* adr, Node* val, BasicType bt,
+                                         const TypePtr* adr_type) {
+  assert(adr_type != NULL, "adr_type must not be NULL");
+  int adr_idx = C->get_alias_index(adr_type);
+  assert(adr_idx != Compile::AliasIdxTop, "use other store_to_memory factory");
+  Node *mem = memory(adr_idx);
+  Node* st;
+  switch (bt) {
+  case T_BOOLEAN:
+  case T_BYTE:
+    st = new (C) StoreBNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_CHAR:
+  case T_SHORT:
+    st = new (C) StoreCNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_INT:
+    st = new (C) StoreINode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_LONG:
+    st = new (C) StoreLNode(ctl, mem, adr, adr_type, val, MemNode::release, false);
+    break;
+  case T_FLOAT:
+    st = new (C) StoreFNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_DOUBLE:
+    st = new (C) StoreDNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_METADATA:
+  case T_ADDRESS:
+  case T_OBJECT:
+#ifdef _LP64
+    if (adr->bottom_type()->is_ptr_to_narrowoop()) {
+      val = _gvn.transform(new (C) EncodePNode(val, val->bottom_type()->make_narrowoop()));
+      st = new (C) StoreNNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    } else if (adr->bottom_type()->is_ptr_to_narrowklass() ||
+               (UseCompressedClassPointers && val->bottom_type()->isa_klassptr() &&
+                adr->bottom_type()->isa_rawptr())) {
+      val = _gvn.transform(new (C) EncodePKlassNode(val, val->bottom_type()->make_narrowklass()));
+      st = new (C) StoreNKlassNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    } else
+#endif
+    {
+      st = new (C) StorePNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    }
+    break;
+  default:
+    ShouldNotReachHere();
+    st = NULL;
+  }
+  st = _gvn.transform(st);
+  set_memory(st, adr_idx);
+  // Back-to-back stores can only remove intermediate store with DU info
+  // so push on worklist for optimizer.
+  if (mem->req() > MemNode::Address && adr == mem->in(MemNode::Address))
+    record_for_igvn(st);
+  return st;
+}
+
 
 void GraphKit::pre_barrier(bool do_load,
                            Node* ctl,
@@ -1638,6 +1699,41 @@ Node* GraphKit::store_oop(Node* ctl,
   return store;
 }
 
+// Store oop with release memory order (for volatile stores)
+Node* GraphKit::store_oop_release(Node* ctl,
+                                   Node* obj,
+                                   Node* adr,
+                                   const TypePtr* adr_type,
+                                   Node* val,
+                                   const TypeOopPtr* val_type,
+                                   BasicType bt,
+                                   bool use_precise) {
+  // Transformation of a value which could be NULL pointer (CastPP #NULL)
+  // could be delayed during Parse (for example, in adjust_map_after_if()).
+  // Execute transformation here to avoid barrier generation in such case.
+  if (_gvn.type(val) == TypePtr::NULL_PTR)
+    val = _gvn.makecon(TypePtr::NULL_PTR);
+
+  set_control(ctl);
+  if (stopped()) return top(); // Dead path ?
+
+  assert(bt == T_OBJECT, "sanity");
+  assert(val != NULL, "not dead path");
+  uint adr_idx = C->get_alias_index(adr_type);
+  assert(adr_idx != Compile::AliasIdxTop, "use other store_to_memory factory" );
+
+  pre_barrier(true /* do_load */,
+              control(), obj, adr, adr_idx, val, val_type,
+              NULL /* pre_val */,
+              bt);
+
+  // For volatile stores, use release memory order to satisfy aarch64.ad's assert
+  // that expects is_release() Store nodes for volatile accesses.
+  Node* store = store_to_memory_release(control(), adr, val, bt, adr_type);
+  post_barrier(control(), store, obj, adr, adr_idx, val, bt, use_precise);
+  return store;
+}
+
 // Could be an array or object we don't know at compile time (unsafe ref.)
 Node* GraphKit::store_oop_to_unknown(Node* ctl,
                              Node* obj,   // containing obj
@@ -1664,6 +1760,34 @@ Node* GraphKit::store_oop_to_unknown(Node* ctl,
     val_type = TypeInstPtr::BOTTOM;
   }
   return store_oop(ctl, obj, adr, adr_type, val, val_type, bt, true);
+}
+
+// Store oop to unknown location with release memory order (for volatile stores)
+Node* GraphKit::store_oop_to_unknown_release(Node* ctl,
+                                             Node* obj,   // containing obj
+                                             Node* adr,  // actual address to store val at
+                                             const TypePtr* adr_type,
+                                             Node* val,
+                                             BasicType bt) {
+  Compile::AliasType* at = C->alias_type(adr_type);
+  const TypeOopPtr* val_type = NULL;
+  if (adr_type->isa_instptr()) {
+    if (at->field() != NULL) {
+      // known field.  This code is a copy of the do_put_xxx logic.
+      ciField* field = at->field();
+      if (!field->type()->is_loaded()) {
+        val_type = TypeInstPtr::BOTTOM;
+      } else {
+        val_type = TypeOopPtr::make_from_klass(field->type()->as_klass());
+      }
+    }
+  } else if (adr_type->isa_aryptr()) {
+    val_type = adr_type->is_aryptr()->elem()->make_oopptr();
+  }
+  if (val_type == NULL) {
+    val_type = TypeInstPtr::BOTTOM;
+  }
+  return store_oop_release(ctl, obj, adr, adr_type, val, val_type, bt, true);
 }
 
 
@@ -3072,8 +3196,111 @@ int GraphKit::next_monitor() {
 // The membar serves as a pinch point between both control and all memory slices.
 Node* GraphKit::insert_mem_bar(int opcode, Node* precedent) {
   MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
-  mb->init_req(TypeFunc::Control, control());
-  mb->init_req(TypeFunc::Memory,  reset_memory());
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+  Node* membar = _gvn.transform(mb);
+  set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
+  set_all_memory_call(membar);
+  return membar;
+}
+
+//------------------------------insert_mem_bar_trailing_load-------------------
+// Insert membar with TrailingLoad kind (for volatile field load)
+Node* GraphKit::insert_mem_bar_trailing_load(int opcode, Node* precedent) {
+  MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
+  mb->set_trailing_load();
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+  Node* membar = _gvn.transform(mb);
+  set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
+  set_all_memory_call(membar);
+  return membar;
+}
+
+//------------------------------insert_mem_bar_leading_store-------------------
+// Insert membar with LeadingStore kind (for volatile field store, before store)
+Node* GraphKit::insert_mem_bar_leading_store(int opcode, Node* precedent) {
+  MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
+  mb->set_leading_store();
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+  Node* membar = _gvn.transform(mb);
+#ifdef ASSERT
+  // Set _pair_idx to this node's idx so trailing membar can match it
+  mb->as_MemBar()->set_pair_idx(mb->_idx);
+#endif
+  set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
+  set_all_memory_call(membar);
+  return membar;
+}
+
+//------------------------------insert_mem_bar_trailing_store------------------
+// Insert membar with TrailingStore kind (for volatile field store, after store)
+Node* GraphKit::insert_mem_bar_trailing_store(int opcode, Node* precedent) {
+  MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
+  mb->set_trailing_store();
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+#ifdef ASSERT
+  // Find the corresponding leading membar and set _pair_idx to match
+  // Search through control flow to find the leading membar
+  Node* leading = control();
+  while (leading != NULL && (!leading->is_MemBar() || !leading->as_MemBar()->leading_store())) {
+    if (leading->is_Region()) {
+      leading = leading->in(1);  // Take first path
+    } else {
+      leading = leading->in(0);
+    }
+  }
+  if (leading != NULL && leading->is_MemBar() && leading->as_MemBar()->leading_store()) {
+    mb->set_pair_idx(leading->as_MemBar()->pair_idx());
+  }
+#endif
+  Node* membar = _gvn.transform(mb);
+  set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
+  set_all_memory_call(membar);
+  return membar;
+}
+
+//------------------------------insert_mem_bar_leading_load_store---------------
+// Insert membar with LeadingLoadStore kind (for CAS operation, before CAS)
+Node* GraphKit::insert_mem_bar_leading_load_store(int opcode, Node* precedent) {
+  MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
+  mb->set_leading_load_store();
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+  Node* membar = _gvn.transform(mb);
+#ifdef ASSERT
+  // Set _pair_idx to this node's idx so trailing membar can match it
+  mb->as_MemBar()->set_pair_idx(mb->_idx);
+#endif
+  set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
+  set_all_memory_call(membar);
+  return membar;
+}
+
+//------------------------------insert_mem_bar_trailing_load_store--------------
+// Insert membar with TrailingLoadStore kind (for CAS operation, after CAS)
+Node* GraphKit::insert_mem_bar_trailing_load_store(int opcode, Node* precedent) {
+  MemBarNode* mb = MemBarNode::make(C, opcode, Compile::AliasIdxBot, precedent);
+  mb->set_trailing_load_store();
+  mb->set_req(TypeFunc::Control, control());
+  mb->set_req(TypeFunc::Memory,  reset_memory());
+#ifdef ASSERT
+  // Find the corresponding leading membar and set _pair_idx to match
+  // Search through control flow to find the leading membar
+  Node* leading = control();
+  while (leading != NULL && (!leading->is_MemBar() || !leading->as_MemBar()->leading_load_store())) {
+    if (leading->is_Region()) {
+      leading = leading->in(1);  // Take first path
+    } else {
+      leading = leading->in(0);
+    }
+  }
+  if (leading != NULL && leading->is_MemBar() && leading->as_MemBar()->leading_load_store()) {
+    mb->set_pair_idx(leading->as_MemBar()->pair_idx());
+  }
+#endif
   Node* membar = _gvn.transform(mb);
   set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
   set_all_memory_call(membar);
@@ -3096,6 +3323,7 @@ Node* GraphKit::insert_mem_bar_volatile(int opcode, int alias_idx, Node* precede
   // from sliding up past the just-emitted store.
 
   MemBarNode* mb = MemBarNode::make(C, opcode, alias_idx, precedent);
+  // _kind is already initialized to Standalone in constructor
   mb->set_req(TypeFunc::Control,control());
   if (alias_idx == Compile::AliasIdxBot) {
     mb->set_req(TypeFunc::Memory, merged_memory()->base_memory());

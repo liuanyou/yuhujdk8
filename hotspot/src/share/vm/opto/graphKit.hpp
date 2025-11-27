@@ -42,6 +42,7 @@ class FastLockNode;
 class FastUnlockNode;
 class IdealKit;
 class LibraryCallKit;
+class MemBarNode;
 class Parse;
 class RootNode;
 
@@ -542,6 +543,12 @@ class GraphKit : public Phase {
                         int adr_idx,
                         bool require_atomic_access = false);
 
+  // Store to memory with release memory order (for volatile stores)
+  // This creates a Store node with MemOrd::release to satisfy aarch64.ad's
+  // assert that expects is_release() Store nodes for volatile accesses.
+  Node* store_to_memory_release(Node* ctl, Node* adr, Node* val, BasicType bt,
+                                const TypePtr* adr_type);
+
 
   // All in one pre-barrier, store, post_barrier
   // Insert a write-barrier'd store.  This is to let generational GC
@@ -564,6 +571,18 @@ class GraphKit : public Phase {
                   BasicType bt,
                   bool use_precise);
 
+  // Store oop with release memory order (for volatile stores)
+  // This creates a StoreP node with MemOrd::release to satisfy aarch64.ad's
+  // assert that expects is_release() Store nodes for volatile accesses.
+  Node* store_oop_release(Node* ctl,
+                          Node* obj,   // containing obj
+                          Node* adr,  // actual address to store val at
+                          const TypePtr* adr_type,
+                          Node* val,
+                          const TypeOopPtr* val_type,
+                          BasicType bt,
+                          bool use_precise);
+
   Node* store_oop_to_object(Node* ctl,
                             Node* obj,   // containing obj
                             Node* adr,  // actual adress to store val at
@@ -572,6 +591,17 @@ class GraphKit : public Phase {
                             const TypeOopPtr* val_type,
                             BasicType bt) {
     return store_oop(ctl, obj, adr, adr_type, val, val_type, bt, false);
+  }
+
+  // Store oop to object with release memory order (for volatile stores)
+  Node* store_oop_to_object_release(Node* ctl,
+                                     Node* obj,   // containing obj
+                                     Node* adr,  // actual address to store val at
+                                     const TypePtr* adr_type,
+                                     Node* val,
+                                     const TypeOopPtr* val_type,
+                                     BasicType bt) {
+    return store_oop_release(ctl, obj, adr, adr_type, val, val_type, bt, false);
   }
 
   Node* store_oop_to_array(Node* ctl,
@@ -591,6 +621,14 @@ class GraphKit : public Phase {
                              const TypePtr* adr_type,
                              Node* val,
                              BasicType bt);
+
+  // Store oop to unknown location with release memory order (for volatile stores)
+  Node* store_oop_to_unknown_release(Node* ctl,
+                                      Node* obj,   // containing obj
+                                      Node* adr,  // actual address to store val at
+                                      const TypePtr* adr_type,
+                                      Node* val,
+                                      BasicType bt);
 
   // For the few case where the barriers need special help
   void pre_barrier(bool do_load, Node* ctl,
@@ -788,6 +826,12 @@ class GraphKit : public Phase {
   // Helper functions to build synchronizations
   int next_monitor();
   Node* insert_mem_bar(int opcode, Node* precedent = NULL);
+  // Specialized methods for membar with specific _kind
+  Node* insert_mem_bar_trailing_load(int opcode, Node* precedent = NULL);
+  Node* insert_mem_bar_leading_store(int opcode, Node* precedent = NULL);
+  Node* insert_mem_bar_trailing_store(int opcode, Node* precedent = NULL);
+  Node* insert_mem_bar_leading_load_store(int opcode, Node* precedent = NULL);
+  Node* insert_mem_bar_trailing_load_store(int opcode, Node* precedent = NULL);
   Node* insert_mem_bar_volatile(int opcode, int alias_idx, Node* precedent = NULL);
   // Optional 'precedent' is appended as an extra edge, to force ordering.
   FastLockNode* shared_lock(Node* obj);

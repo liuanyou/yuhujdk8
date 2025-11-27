@@ -267,7 +267,8 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
   // another volatile read.
   if (field->is_volatile()) {
     // Memory barrier includes bogus read of value to force load BEFORE membar
-    insert_mem_bar(Op_MemBarAcquire, ld);
+    // Set _kind = TrailingLoad for volatile field load
+    insert_mem_bar_trailing_load(Op_MemBarAcquire, ld);
   }
 }
 
@@ -276,7 +277,10 @@ void Parse::do_put_xxx(Node* obj, ciField* field, bool is_field) {
   // If reference is volatile, prevent following memory ops from
   // floating down past the volatile write.  Also prevents commoning
   // another volatile read.
-  if (is_vol)  insert_mem_bar(Op_MemBarRelease);
+  if (is_vol) {
+    // Set _kind = LeadingStore for volatile field store (before store)
+    insert_mem_bar_leading_store(Op_MemBarRelease, NULL);
+  }
 
   // Compute address and memory type.
   int offset = field->offset_in_bytes();
@@ -297,15 +301,31 @@ void Parse::do_put_xxx(Node* obj, ciField* field, bool is_field) {
     } else {
       field_type = TypeOopPtr::make_from_klass(field->type()->as_klass());
     }
-    store = store_oop_to_object( control(), obj, adr, adr_type, val, field_type, bt);
+    // For volatile stores, create a Store node with release memory order
+    // to satisfy aarch64.ad's assert that expects is_release() Store nodes
+    // for volatile accesses.
+    if (is_vol) {
+      store = store_oop_to_object_release(control(), obj, adr, adr_type, val, field_type, bt);
+    } else {
+      store = store_oop_to_object(control(), obj, adr, adr_type, val, field_type, bt);
+    }
   } else {
-    store = store_to_memory( control(), adr, val, bt, adr_type, is_vol );
+    // For volatile stores, create a Store node with release memory order
+    // to satisfy aarch64.ad's assert that expects is_release() Store nodes
+    // for volatile accesses.
+    if (is_vol) {
+      store = store_to_memory_release(control(), adr, val, bt, adr_type);
+    } else {
+      store = store_to_memory(control(), adr, val, bt, adr_type, false);
+    }
   }
 
   // If reference is volatile, prevent following volatiles ops from
   // floating up before the volatile write.
   if (is_vol) {
-    insert_mem_bar(Op_MemBarVolatile); // Use fat membar
+    // Set _kind = TrailingStore for volatile field store (after store)
+    // Pass store node as precedent to ensure membar follows the store
+    insert_mem_bar_trailing_store(Op_MemBarVolatile, store); // Use fat membar
   }
 
   // If the field is final, the rules of Java say we are in <init> or <clinit>.

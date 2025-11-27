@@ -27,6 +27,7 @@
 #include "opto/callnode.hpp"
 #include "opto/cfgnode.hpp"
 #include "opto/idealKit.hpp"
+#include "opto/memnode.hpp"
 #include "opto/runtime.hpp"
 
 // Static initialization
@@ -382,6 +383,61 @@ Node* IdealKit::store(Node* ctl, Node* adr, Node *val, BasicType bt,
   st = transform(st);
   set_memory(st, adr_idx);
 
+  return st;
+}
+
+// Store with release memory order (for volatile stores)
+Node* IdealKit::store_release(Node* ctl, Node* adr, Node* val, BasicType bt, int adr_idx) {
+  assert(adr_idx != Compile::AliasIdxTop, "use other store factory");
+  const TypePtr* adr_type = NULL;
+  debug_only(adr_type = C->get_adr_type(adr_idx));
+  Node *mem = memory(adr_idx);
+  Node* st;
+  switch (bt) {
+  case T_BOOLEAN:
+  case T_BYTE:
+    st = new (C) StoreBNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_CHAR:
+  case T_SHORT:
+    st = new (C) StoreCNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_INT:
+    st = new (C) StoreINode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_LONG:
+    st = new (C) StoreLNode(ctl, mem, adr, adr_type, val, MemNode::release, false);
+    break;
+  case T_FLOAT:
+    st = new (C) StoreFNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_DOUBLE:
+    st = new (C) StoreDNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    break;
+  case T_METADATA:
+  case T_ADDRESS:
+  case T_OBJECT:
+#ifdef _LP64
+    if (adr->bottom_type()->is_ptr_to_narrowoop()) {
+      val = transform(new (C) EncodePNode(val, val->bottom_type()->make_narrowoop()));
+      st = new (C) StoreNNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    } else if (adr->bottom_type()->is_ptr_to_narrowklass() ||
+               (UseCompressedClassPointers && val->bottom_type()->isa_klassptr() &&
+                adr->bottom_type()->isa_rawptr())) {
+      val = transform(new (C) EncodePKlassNode(val, val->bottom_type()->make_narrowklass()));
+      st = new (C) StoreNKlassNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    } else
+#endif
+    {
+      st = new (C) StorePNode(ctl, mem, adr, adr_type, val, MemNode::release);
+    }
+    break;
+  default:
+    ShouldNotReachHere();
+    st = NULL;
+  }
+  st = transform(st);
+  set_memory(st, adr_idx);
   return st;
 }
 

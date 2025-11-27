@@ -3012,7 +3012,12 @@ const Type *EncodeISOArrayNode::Value(PhaseTransform *phase) const {
 //=============================================================================
 MemBarNode::MemBarNode(Compile* C, int alias_idx, Node* precedent)
   : MultiNode(TypeFunc::Parms + (precedent == NULL? 0: 1)),
-    _adr_type(C->get_adr_type(alias_idx))
+    _adr_type(C->get_adr_type(alias_idx)),
+    // _kind defaults to Standalone (first enum value)
+    _kind(Standalone)
+#ifdef ASSERT
+    , _pair_idx(0)
+#endif
 {
   init_class_id(Class_MemBar);
   Node* top = C->top();
