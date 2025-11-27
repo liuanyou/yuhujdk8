@@ -1,7 +1,7 @@
 # AArch64 CAS trailing_membar Assertion Failure
 
 **Date**: November 3, 2025  
-**Status**: ✅ RESOLVED  
+**Status**: ✅ RESOLVED (Defensive fix proposed, but current code unchanged)  
 **Severity**: HIGH  
 **Platform**: AArch64 (ARM64) only  
 **JDK Version**: OpenJDK 8 custom build  
@@ -15,7 +15,9 @@ An assertion failure in the AArch64 architecture description file (`aarch64.ad`)
 
 **Root Cause**: The predicate function `needs_acquiring_load_exclusive()` had an overly strict assertion that all CAS operations must have a `trailing_membar`, but non-volatile CAS operations (e.g., `Unsafe.compareAndSwapObject()`) do not have memory barriers.
 
-**Resolution**: Modified the predicate to return `false` (use normal CAS instruction) when `trailing_membar()` is `NULL`, instead of asserting failure.
+**Current Status**: The assertion is currently not triggered because all CAS operations (including non-volatile ones) go through `inline_unsafe_load_store()`, which always inserts membar nodes. However, a defensive programming fix is recommended to handle potential future code changes or other CAS creation paths.
+
+**Resolution**: The proposed fix modifies the predicate to return `false` (use normal CAS instruction) when `trailing_membar()` is `NULL`, instead of asserting failure. However, the current code still uses the assertion, which is acceptable given the current implementation.
 
 ---
 
@@ -125,7 +127,38 @@ The AArch64 architecture description file defines two sets of CAS instructions:
 
 ## Resolution
 
-### The Fix
+### Current Status
+
+**Note**: The fix described below is a defensive programming approach. However, the current code still uses an assertion, which is acceptable because all CAS operations (both volatile and non-volatile) currently have membar nodes in the Ideal Graph.
+
+### Current Code
+
+```cpp
+// hotspot/src/cpu/aarch64/vm/aarch64.ad
+bool needs_acquiring_load_exclusive(const Node *n)
+{
+  assert(is_CAS(n->Opcode()), "expecting a compare and swap");
+  if (UseBarriersForVolatile) {
+    return false;
+  }
+
+  LoadStoreNode* ldst = n->as_LoadStore();
+  assert(ldst->trailing_membar() != NULL, "expected trailing membar");
+  
+  // so we can just return true here
+  return true;
+}
+```
+
+**Why the assert doesn't fail**:
+- All CAS operations (including non-volatile ones) go through `inline_unsafe_load_store()`
+- `inline_unsafe_load_store()` always inserts `LeadingLoadStore` and `TrailingLoadStore` membar nodes
+- Therefore, `trailing_membar()` always returns non-NULL for all CAS operations
+- The assert is not triggered because the assumption holds true
+
+### Proposed Fix (Defensive Programming)
+
+The following fix would make the code more robust, but is not currently applied:
 
 ```cpp
 // hotspot/src/cpu/aarch64/vm/aarch64.ad
@@ -149,13 +182,19 @@ bool needs_acquiring_load_exclusive(const Node *n)
 }
 ```
 
-### What Changed
+**Why this fix is defensive programming**:
+1. **Future-proofing**: If code changes in the future and some CAS operations no longer have membar, the fix prevents crashes
+2. **Robustness**: Handling NULL cases makes the code more robust
+3. **Other paths**: There might be other code paths that create CAS nodes without membar
+4. **Optimization phases**: Membar might be removed in optimization phases before instruction selection
+
+### What Would Change (If Applied)
 
 1. **Removed the assertion**: No longer asserts that `trailing_membar()` must be non-NULL
 2. **Added NULL check**: If `trailing_membar()` is `NULL`, return `false` to use normal CAS
 3. **Preserved volatile behavior**: If `trailing_membar()` exists, return `true` to use acquiring CAS
 
-### Result
+### Result (If Fix Applied)
 
 - **Non-volatile CAS** (`trailing_membar() == NULL`):
   - Returns `false` → Matches `compareAndSwapP` → Uses `cmpxchg` (normal CAS)
@@ -226,6 +265,8 @@ This bug is related to the broader topic of memory ordering in concurrent operat
 1. **Don't assume all operations of a type have the same semantics**: Not all CAS operations are volatile
 2. **Use predicates to select instructions, not to validate assumptions**: Predicates should return `true`/`false`, not assert
 3. **Check similar predicates for patterns**: `needs_releasing_store()` correctly handles NULL `trailing_membar()` by returning `false`
+4. **Defensive programming vs. current implementation**: While a defensive fix is recommended, the current code uses assert because all CAS operations currently have membar nodes, making the assert safe
+5. **Understand the full code path**: All CAS operations go through `inline_unsafe_load_store()`, which always inserts membar nodes, so the assert assumption holds true
 
 ---
 
@@ -234,4 +275,8 @@ This bug is related to the broader topic of memory ordering in concurrent operat
 - AArch64 Architecture Reference Manual: Load-Exclusive and Store-Exclusive instructions
 - OpenJDK HotSpot C2 Compiler: Architecture Description Language (ADLC)
 - Java Memory Model: Volatile semantics vs. atomic operations
+
+## Related Documentation
+
+- **[Volatile vs Non-Volatile CAS: Assembly Code Examples](./VOLATILE_VS_NONVOLATILE_CAS_ASSEMBLY_EXAMPLES.md)**: Detailed assembly code examples showing the actual difference between volatile and non-volatile CAS operations
 
