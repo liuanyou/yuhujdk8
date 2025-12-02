@@ -230,7 +230,8 @@ struct Flag {
     KIND_ARCH               = 1 << 14,
     KIND_SHARK              = 1 << 15,
     KIND_LP64_PRODUCT       = 1 << 16,
-    KIND_COMMERCIAL         = 1 << 17,
+    KIND_YUHU               = 1 << 17,
+    KIND_COMMERCIAL         = 1 << 18,
 
     KIND_MASK = ~VALUE_ORIGIN_MASK
   };

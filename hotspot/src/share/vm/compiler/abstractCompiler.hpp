@@ -58,6 +58,7 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   virtual bool is_c1   ()                        { return false; }
   virtual bool is_c2   ()                        { return false; }
   virtual bool is_shark()                        { return false; }
+  virtual bool is_yuhu()                         { return false; }
 #else
 #ifdef COMPILER1
   bool is_c1   ()                                { return true; }

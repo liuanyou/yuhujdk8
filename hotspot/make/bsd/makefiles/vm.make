@@ -29,6 +29,7 @@
 MAKEFILES_DIR=$(GAMMADIR)/make/$(Platform_os_family)/makefiles
 include $(MAKEFILES_DIR)/rules.make
 include $(GAMMADIR)/make/altsrc.make
+include $(MAKEFILES_DIR)/yuhu.make
 
 default: build
 
@@ -299,6 +300,19 @@ endif
 ifeq ($(JVM_VARIANT_ZEROSHARK), true)
   LIBS_VM   += $(LIBFFI_LIBS) $(LLVM_LIBS)
   LFLAGS_VM += $(LLVM_LDFLAGS)
+endif
+ifeq ($(USE_YUHU_COMPILER), true)
+  # Yuhu compiler requires LLVM libraries
+  # LLVM_LIBS and LLVM_LDFLAGS are set in yuhu.make
+  ifdef LLVM_LIBS
+    LIBS_VM += $(LLVM_LIBS)
+  endif
+  ifdef LLVM_SYSTEM_LIBS
+    LIBS_VM += $(LLVM_SYSTEM_LIBS)
+  endif
+  ifdef LLVM_LDFLAGS
+    LFLAGS_VM += $(LLVM_LDFLAGS)
+  endif
 endif
 
 

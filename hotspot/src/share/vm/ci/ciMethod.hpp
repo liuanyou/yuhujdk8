@@ -198,6 +198,9 @@ class ciMethod : public ciMetadata {
 #ifdef SHARK
   int           itable_index();
 #endif // SHARK
+#ifdef YUHU
+  int           itable_index();
+#endif // YUHU
   address       native_entry();
   address       interpreter_entry();
 

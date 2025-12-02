@@ -834,6 +834,8 @@ enum CompLevel {
   CompLevel_limited_profile   = 2,         // C1, invocation & backedge counters
   CompLevel_full_profile      = 3,         // C1, invocation & backedge counters + mdo
   CompLevel_full_optimization = 4,         // C2 or Shark
+  CompLevel_yuhu_fast         = 5,         // Yuhu fast compilation
+  CompLevel_yuhu_optimized    = 6,         // Yuhu optimized compilation
 
 #if defined(COMPILER2) || defined(SHARK)
   CompLevel_highest_tier      = CompLevel_full_optimization,  // pure C2 and tiered
@@ -862,12 +864,16 @@ inline bool is_c2_compile(int comp_level) {
   return comp_level == CompLevel_full_optimization;
 }
 
+inline bool is_yuhu_compile(int comp_level) {
+  return comp_level == CompLevel_yuhu_fast || comp_level == CompLevel_yuhu_optimized;
+}
+
 inline bool is_highest_tier_compile(int comp_level) {
   return comp_level == CompLevel_highest_tier;
 }
 
 inline bool is_compile(int comp_level) {
-  return is_c1_compile(comp_level) || is_c2_compile(comp_level);
+  return is_c1_compile(comp_level) || is_c2_compile(comp_level) || is_yuhu_compile(comp_level);
 }
 
 //----------------------------------------------------------------------------------------------------

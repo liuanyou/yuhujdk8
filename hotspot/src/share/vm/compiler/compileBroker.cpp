@@ -55,6 +55,9 @@
 #ifdef SHARK
 #include "shark/sharkCompiler.hpp"
 #endif
+#ifdef YUHU
+#include "yuhu/yuhuCompiler.hpp"
+#endif
 
 #ifdef DTRACE_ENABLED
 
@@ -130,7 +133,8 @@ volatile jint CompileBroker::_print_compilation_warning = 0;
 volatile jint CompileBroker::_should_compile_new_jobs = run_compilation;
 
 // The installed compiler(s)
-AbstractCompiler* CompileBroker::_compilers[2];
+// [0] = C1, [1] = C2, [2] = YUHU
+AbstractCompiler* CompileBroker::_compilers[3] = {NULL, NULL, NULL};
 
 // These counters are used for assigning id's to each compilation
 uint CompileBroker::_compilation_id        = 0;
@@ -185,6 +189,7 @@ long CompileBroker::_peak_compilation_time       = 0;
 
 CompileQueue* CompileBroker::_c2_method_queue    = NULL;
 CompileQueue* CompileBroker::_c1_method_queue    = NULL;
+CompileQueue* CompileBroker::_yuhu_method_queue  = NULL;
 CompileTask*  CompileBroker::_task_free_list     = NULL;
 
 GrowableArray<CompilerThread*>* CompileBroker::_compiler_threads = NULL;
@@ -791,8 +796,11 @@ void CompileBroker::compilation_init() {
   }
 #ifndef SHARK
   // Set the interface to the current compiler(s).
+  // YUHU can coexist with C1 and C2
   int c1_count = CompilationPolicy::policy()->compiler_count(CompLevel_simple);
   int c2_count = CompilationPolicy::policy()->compiler_count(CompLevel_full_optimization);
+  int yuhu_count = 0;
+
 #ifdef COMPILER1
   if (c1_count > 0) {
     _compilers[0] = new Compiler();
@@ -805,9 +813,19 @@ void CompileBroker::compilation_init() {
   }
 #endif // COMPILER2
 
+#ifdef YUHU
+  // YUHU compiler can coexist with C1 and C2
+  // Get YUHU compiler count from policy (if supported) or use default
+  // For now, use a simple approach: if YUHU is defined, create one compiler
+  // TODO: Add policy support for YUHU compiler count
+  yuhu_count = 1;  // Default to 1 YUHU compiler thread
+  _compilers[2] = new YuhuCompiler();
+#endif // YUHU
+
 #else // SHARK
   int c1_count = 0;
   int c2_count = 1;
+  int yuhu_count = 0;
 
   _compilers[1] = new SharkCompiler();
 #endif // SHARK
@@ -816,7 +834,7 @@ void CompileBroker::compilation_init() {
   _task_free_list = NULL;
 
   // Start the CompilerThreads
-  init_compiler_threads(c1_count, c2_count);
+  init_compiler_threads(c1_count, c2_count, yuhu_count);
   // totalTime performance counter is always created as it is required
   // by the implementation of java.lang.management.CompilationMBean.
   {
@@ -1000,12 +1018,12 @@ CompilerThread* CompileBroker::make_compiler_thread(const char* name, CompileQue
 }
 
 
-void CompileBroker::init_compiler_threads(int c1_compiler_count, int c2_compiler_count) {
+void CompileBroker::init_compiler_threads(int c1_compiler_count, int c2_compiler_count, int yuhu_compiler_count) {
   EXCEPTION_MARK;
-#if !defined(ZERO) && !defined(SHARK)
+#if !defined(ZERO) && !defined(SHARK) && !defined(YUHU)
   assert(c2_compiler_count > 0 || c1_compiler_count > 0, "No compilers?");
-#endif // !ZERO && !SHARK
-  // Initialize the compilation queue
+#endif // !ZERO && !SHARK && !YUHU
+  // Initialize the compilation queues
   if (c2_compiler_count > 0) {
     _c2_method_queue  = new CompileQueue("C2MethodQueue",  MethodCompileQueue_lock);
     _compilers[1]->set_num_compiler_threads(c2_compiler_count);
@@ -1014,29 +1032,48 @@ void CompileBroker::init_compiler_threads(int c1_compiler_count, int c2_compiler
     _c1_method_queue  = new CompileQueue("C1MethodQueue",  MethodCompileQueue_lock);
     _compilers[0]->set_num_compiler_threads(c1_compiler_count);
   }
+#ifdef YUHU
+  if (yuhu_compiler_count > 0) {
+    _yuhu_method_queue = new CompileQueue("YuhuMethodQueue", MethodCompileQueue_lock);
+    _compilers[2]->set_num_compiler_threads(yuhu_compiler_count);
+  }
+#endif // YUHU
 
-  int compiler_count = c1_compiler_count + c2_compiler_count;
+  int compiler_count = c1_compiler_count + c2_compiler_count + yuhu_compiler_count;
 
   _compiler_threads =
     new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<CompilerThread*>(compiler_count, true);
 
   char name_buffer[256];
+  int thread_index = 0;
+  
+  // Create C2 compiler threads
   for (int i = 0; i < c2_compiler_count; i++) {
-    // Create a name for our thread.
     sprintf(name_buffer, "C2 CompilerThread%d", i);
-    CompilerCounters* counters = new CompilerCounters("compilerThread", i, CHECK);
-    // Shark and C2
+    CompilerCounters* counters = new CompilerCounters("compilerThread", thread_index, CHECK);
     CompilerThread* new_thread = make_compiler_thread(name_buffer, _c2_method_queue, counters, _compilers[1], CHECK);
     _compiler_threads->append(new_thread);
+    thread_index++;
   }
 
-  for (int i = c2_compiler_count; i < compiler_count; i++) {
-    // Create a name for our thread.
+#ifdef YUHU
+  // Create YUHU compiler threads
+  for (int i = 0; i < yuhu_compiler_count; i++) {
+    sprintf(name_buffer, "Yuhu CompilerThread%d", i);
+    CompilerCounters* counters = new CompilerCounters("compilerThread", thread_index, CHECK);
+    CompilerThread* new_thread = make_compiler_thread(name_buffer, _yuhu_method_queue, counters, _compilers[2], CHECK);
+    _compiler_threads->append(new_thread);
+    thread_index++;
+  }
+#endif // YUHU
+
+  // Create C1 compiler threads
+  for (int i = 0; i < c1_compiler_count; i++) {
     sprintf(name_buffer, "C1 CompilerThread%d", i);
-    CompilerCounters* counters = new CompilerCounters("compilerThread", i, CHECK);
-    // C1
+    CompilerCounters* counters = new CompilerCounters("compilerThread", thread_index, CHECK);
     CompilerThread* new_thread = make_compiler_thread(name_buffer, _c1_method_queue, counters, _compilers[0], CHECK);
     _compiler_threads->append(new_thread);
+    thread_index++;
   }
 
   if (UsePerfData) {
@@ -1054,6 +1091,11 @@ void CompileBroker::mark_on_stack() {
   if (_c1_method_queue != NULL) {
     _c1_method_queue->mark_on_stack();
   }
+#ifdef YUHU
+  if (_yuhu_method_queue != NULL) {
+    _yuhu_method_queue->mark_on_stack();
+  }
+#endif // YUHU
 }
 
 // ------------------------------------------------------------------
@@ -1269,7 +1311,7 @@ nmethod* CompileBroker::compile_method(methodHandle method, int osr_bci,
 
   assert(!HAS_PENDING_EXCEPTION, "No exception should be present");
   // some prerequisites that are compiler specific
-  if (comp->is_c2() || comp->is_shark()) {
+  if (comp->is_c2() || comp->is_shark() || comp->is_yuhu()) {
     method->constants()->resolve_string_constants(CHECK_AND_CLEAR_NULL);
     // Resolve all classes seen in the signature of the method
     // we are compiling.
@@ -1591,7 +1633,7 @@ bool CompileBroker::init_compiler_runtime() {
     ResetNoHandleMark rnhm;
 
 
-    if (!comp->is_shark()) {
+    if (!comp->is_shark() && !comp->is_yuhu()) {
       // Perform per-thread and global initializations
       comp->initialize();
     }

@@ -293,6 +293,22 @@ int ciMethod::itable_index() {
 }
 #endif // SHARK
 
+#ifdef YUHU
+// ------------------------------------------------------------------
+// ciMethod::itable_index
+//
+// Get the position of this method's entry in the itable, if any.
+int ciMethod::itable_index() {
+  check_is_loaded();
+  assert(holder()->is_linked(), "must be linked");
+  VM_ENTRY_MARK;
+  Method* m = get_Method();
+  if (!m->has_itable_index())
+    return Method::nonvirtual_vtable_index;
+  return m->itable_index();
+}
+#endif // YUHU
+
 
 // ------------------------------------------------------------------
 // ciMethod::native_entry

@@ -255,7 +255,8 @@ class CompileBroker: AllStatic {
   static volatile jint _should_compile_new_jobs;
 
   // The installed compiler(s)
-  static AbstractCompiler* _compilers[2];
+  // [0] = C1, [1] = C2, [2] = YUHU
+  static AbstractCompiler* _compilers[3];
 
   // These counters are used for assigning id's to each compilation
   static uint _compilation_id;
@@ -268,6 +269,7 @@ class CompileBroker: AllStatic {
 
   static CompileQueue* _c2_method_queue;
   static CompileQueue* _c1_method_queue;
+  static CompileQueue* _yuhu_method_queue;
   static CompileTask* _task_free_list;
 
   static GrowableArray<CompilerThread*>* _compiler_threads;
@@ -318,7 +320,7 @@ class CompileBroker: AllStatic {
   static volatile jint _print_compilation_warning;
 
   static CompilerThread* make_compiler_thread(const char* name, CompileQueue* queue, CompilerCounters* counters, AbstractCompiler* comp, TRAPS);
-  static void init_compiler_threads(int c1_compiler_count, int c2_compiler_count);
+  static void init_compiler_threads(int c1_compiler_count, int c2_compiler_count, int yuhu_compiler_count = 0);
   static bool compilation_is_complete  (methodHandle method, int osr_bci, int comp_level);
   static bool compilation_is_prohibited(methodHandle method, int osr_bci, int comp_level);
   static uint assign_compile_id        (methodHandle method, int osr_bci);
@@ -353,6 +355,7 @@ class CompileBroker: AllStatic {
                                   const char* comment,
                                   Thread* thread);
   static CompileQueue* compile_queue(int comp_level) {
+    if (is_yuhu_compile(comp_level)) return _yuhu_method_queue;
     if (is_c2_compile(comp_level)) return _c2_method_queue;
     if (is_c1_compile(comp_level)) return _c1_method_queue;
     return NULL;
@@ -367,6 +370,7 @@ class CompileBroker: AllStatic {
   };
 
   static AbstractCompiler* compiler(int comp_level) {
+    if (is_yuhu_compile(comp_level)) return _compilers[2]; // YUHU
     if (is_c2_compile(comp_level)) return _compilers[1]; // C2
     if (is_c1_compile(comp_level)) return _compilers[0]; // C1
     return NULL;
