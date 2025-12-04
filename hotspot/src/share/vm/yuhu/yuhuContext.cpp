@@ -38,6 +38,14 @@ YuhuContext::YuhuContext(const char* name)
     _free_queue(NULL) {
   // Create a module to build our functions into
   _module = new Module(name, *this);
+  
+  // Set the target triple for AArch64
+#ifdef TARGET_ARCH_aarch64
+  _module->setTargetTriple("aarch64-apple-darwin");
+#else
+  // For other architectures, use the default or detect from host
+  _module->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+#endif
 
   // Create basic types
   // Use llvm::Type explicitly to avoid conflict with HotSpot's Type class

@@ -39,21 +39,31 @@ ifeq ($(USE_YUHU_COMPILER), true)
   #   --with-llvm=PREFIX (sets both include and lib paths)
   #   --with-llvm-include=DIR (overrides include path)
   #   --with-llvm-lib=DIR (overrides lib path)
-  ifneq ($(LLVM_INCLUDE_PATH),)
-    CFLAGS += -I$(LLVM_INCLUDE_PATH)
-  endif
+        ifneq ($(LLVM_INCLUDE_PATH),)
+          CFLAGS += -I$(LLVM_INCLUDE_PATH)
+        endif
 
-  ifneq ($(LLVM_LIB_PATH),)
-    LDFLAGS += -L$(LLVM_LIB_PATH)
-  endif
+        ifneq ($(LLVM_LIB_PATH),)
+          LDFLAGS += -L$(LLVM_LIB_PATH)
+        endif
+
+        # ZSTD library path from configure script
+        ifneq ($(ZSTD_LIB_PATH),)
+          LDFLAGS += -L$(ZSTD_LIB_PATH)
+        endif
 
   # Try to use llvm-config for additional flags if available
   # First try common installation paths, then fall back to PATH
   # Check if LLVM_CONFIG was set by configure script, otherwise try common paths
+  # According to LLVM_JIT_FIX_GUIDE.md, use /opt/homebrew/opt/llvm@20/bin/llvm-config or similar
   ifeq ($(LLVM_CONFIG),)
     LLVM_CONFIG := $(shell \
-      if [ -x "/opt/homebrew/opt/llvm/bin/llvm-config" ]; then \
+      if [ -x "/opt/homebrew/opt/llvm@20/bin/llvm-config" ]; then \
+        echo "/opt/homebrew/opt/llvm@20/bin/llvm-config"; \
+      elif [ -x "/opt/homebrew/opt/llvm/bin/llvm-config" ]; then \
         echo "/opt/homebrew/opt/llvm/bin/llvm-config"; \
+      elif [ -x "/opt/homebrew/Cellar/llvm/20.1.5/bin/llvm-config" ]; then \
+        echo "/opt/homebrew/Cellar/llvm/20.1.5/bin/llvm-config"; \
       elif [ -x "/usr/local/opt/llvm/bin/llvm-config" ]; then \
         echo "/usr/local/opt/llvm/bin/llvm-config"; \
       elif [ -x "/opt/homebrew/bin/llvm-config" ]; then \
@@ -69,14 +79,60 @@ ifeq ($(USE_YUHU_COMPILER), true)
     ifneq ($(shell test -x "$(LLVM_CONFIG)" 2>/dev/null && echo "ok"),)
       LLVM_CXXFLAGS_RAW := $(shell $(LLVM_CONFIG) --cxxflags 2>/dev/null)
       LLVM_LDFLAGS := $(shell $(LLVM_CONFIG) --ldflags 2>/dev/null)
-      # Get core LLVM libraries
-      LLVM_LIBS_CORE := $(shell $(LLVM_CONFIG) --libs core executionengine jit native 2>/dev/null)
-      # Get AArch64 backend libraries (needed for LLVMInitializeAArch64Target)
-      LLVM_LIBS_AARCH64 := $(shell $(LLVM_CONFIG) --libs aarch64 2>/dev/null)
-      # Combine all LLVM libraries
-      LLVM_LIBS := $(LLVM_LIBS_CORE) $(LLVM_LIBS_AARCH64)
-      # Also get system libraries that LLVM depends on
+      
+      # Get LLVM libraries using the same components as documented in LLVM_JIT_FIX_GUIDE.md
+      # Use --link-static to get individual library names (ensures all components are linked)
+      # Components: executionengine, mcjit, interpreter, aarch64
+      LLVM_LIBS_RAW := $(shell $(LLVM_CONFIG) --libs --link-static executionengine mcjit interpreter aarch64 2>/dev/null)
+      
+      # Note: Keystone has been replaced with LLVM MC framework
+      # No longer need to filter out conflicting libraries
+      LLVM_LIBS := $(LLVM_LIBS_RAW)
+      
+      # If --link-static fails or returns empty, fall back to dynamic linking
+      ifeq ($(LLVM_LIBS_RAW),)
+        # Fallback: try dynamic linking with specific components
+        LLVM_LIBS_CORE := $(shell $(LLVM_CONFIG) --libs core executionengine jit native 2>/dev/null)
+        LLVM_LIBS_AARCH64 := $(shell $(LLVM_CONFIG) --libs aarch64 2>/dev/null)
+        LLVM_LIBS := $(LLVM_LIBS_CORE) $(LLVM_LIBS_AARCH64)
+        $(warning Using dynamic LLVM libraries, static linking failed)
+      endif
+      
+      # Note: Keystone library has been replaced with LLVM MC framework
+      # All LLVM libraries are now linked without conflicts
+      
+      # Get system libraries that LLVM depends on
       LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) --system-libs 2>/dev/null)
+      
+      # Add required third-party libraries as documented in LLVM_JIT_FIX_GUIDE.md
+      # These are needed for LLVM to work properly on macOS
+      # zstd, z, and ffi are required for LLVM static linking
+      # Note: llvm-config --system-libs may not include all required libraries for static linking
+      # So we explicitly add them
+      
+      # Add zstd library path if specified
+      ifneq ($(ZSTD_LIB_PATH),)
+        ZSTD_LDFLAGS := -L$(ZSTD_LIB_PATH) -lzstd
+      else
+        # Fallback: try common Homebrew paths
+        ifneq ($(shell test -d /opt/homebrew/Cellar/zstd && echo "ok"),)
+          ZSTD_LDFLAGS := -L/opt/homebrew/Cellar/zstd/1.5.7/lib -lzstd
+        else ifneq ($(shell test -d /usr/local/Cellar/zstd && echo "ok"),)
+          ZSTD_LDFLAGS := -L/usr/local/Cellar/zstd/$(shell ls -1 /usr/local/Cellar/zstd 2>/dev/null | head -1)/lib -lzstd
+        else
+          ZSTD_LDFLAGS := -lzstd
+        endif
+      endif
+      
+      # Required libraries for LLVM static linking
+      # Note: zstd is already added via ZSTD_LDFLAGS, so we don't add it here to avoid duplicates
+      # z: zlib compression library (compress2, compressBound, uncompress, crc32)
+      # ffi: Foreign Function Interface library (ffi_* functions)
+      YUHU_REQUIRED_LIBS := -lz -lffi
+      
+      # Combine LLVM system libs with required libraries
+      # zstd is handled separately via ZSTD_LDFLAGS to avoid duplicates
+      LLVM_SYSTEM_LIBS := $(LLVM_SYSTEM_LIBS) $(YUHU_REQUIRED_LIBS)
 
       # Filter out C++ standard flags from LLVM (JDK uses C++11, not C++17)
       # Remove -std=c++17, -std=c++14, -std=c++11, -std=c++98, etc.
@@ -84,7 +140,13 @@ ifeq ($(USE_YUHU_COMPILER), true)
 
       # Add LLVM flags (without C++ standard)
       CFLAGS += $(LLVM_CXXFLAGS)
-      # Export LLVM_LIBS and LLVM_LDFLAGS for vm.make to use
+      
+      # Add zstd library path to LDFLAGS
+      ifneq ($(ZSTD_LIB_PATH),)
+        LDFLAGS += -L$(ZSTD_LIB_PATH)
+      endif
+      
+      # Export LLVM_LIBS, LLVM_LDFLAGS, and LLVM_SYSTEM_LIBS for vm.make to use
       # Note: These variables will be used in vm.make similar to JVM_VARIANT_ZEROSHARK
     else
       # llvm-config not found or not executable
@@ -101,7 +163,21 @@ ifeq ($(USE_YUHU_COMPILER), true)
     # Note: This may not work for all LLVM installations
     LLVM_LIBS := -lLLVM-20
     LLVM_LDFLAGS :=
-    LLVM_SYSTEM_LIBS :=
+      # Still need zstd, z, and ffi even with dynamic linking
+      ifneq ($(ZSTD_LIB_PATH),)
+        ZSTD_LDFLAGS := -L$(ZSTD_LIB_PATH) -lzstd
+      else
+        # Fallback: try common Homebrew paths
+        ifneq ($(shell test -d /opt/homebrew/Cellar/zstd && echo "ok"),)
+          ZSTD_LDFLAGS := -L/opt/homebrew/Cellar/zstd/1.5.7/lib -lzstd
+        else ifneq ($(shell test -d /usr/local/Cellar/zstd && echo "ok"),)
+          ZSTD_LDFLAGS := -L/usr/local/Cellar/zstd/$(shell ls -1 /usr/local/Cellar/zstd 2>/dev/null | head -1)/lib -lzstd
+        else
+          ZSTD_LDFLAGS := -lzstd
+        endif
+      endif
+      # Note: zstd is already in ZSTD_LDFLAGS, so we don't add it here to avoid duplicates
+      LLVM_SYSTEM_LIBS := -lz -lffi
     $(warning llvm-config not found, using fallback -lLLVM-20. This may not work correctly.)
   endif
 
@@ -119,28 +195,42 @@ ifeq ($(USE_YUHU_COMPILER), true)
   # This warning occurs because some HotSpot code uses string literal concatenation
   # without spaces (e.g., "string"MACRO"string"), which is valid in C++11 but
   # triggers a warning in C++17. We disable it for Yuhu files only.
-  CXXFLAGS/yuhuCompiler.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuContext.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuBuilder.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuStack.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuRuntime.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuType.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuFunction.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuEntry.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuCodeBuffer.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuMemoryManager.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuNativeWrapper.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuValue.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhu_globals.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuCacheDecache.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuInvariants.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuIntrinsics.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuConstant.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuInliner.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuTopLevelBlock.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuStateScanner.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuBlock.o += -std=c++17 -Wno-reserved-user-defined-literal
-  CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal
+  # Disable format-nonliteral warning for LLVM headers (LLVM uses non-literal format strings)
+  # Use CFLAGS_WARN mechanism to add -Wno-format-nonliteral
+  # CFLAGS_WARN/BYFILE formula: $(CFLAGS_WARN/$@)$(CFLAGS_WARN/DEFAULT$(CFLAGS_WARN/$@))
+  # If CFLAGS_WARN/$@ is defined, it replaces DEFAULT, so we need to include DEFAULT
+  # But we can simply add -Wno-format-nonliteral to CXXFLAGS which is applied after CFLAGS_WARN
+  # Actually, the simplest is to add it directly to CXXFLAGS for each file
+  
+  # Set C++17 and disable warnings for LLVM headers
+  # Note: -Wno-format-nonliteral must come AFTER -Wformat=2, so we add it to CXXFLAGS
+  # which is applied after CFLAGS_WARN (which includes WARNING_FLAGS with -Wformat=2)
+  # Also use -Wno-error=format-nonliteral to prevent -Werror from making it an error
+  CXXFLAGS/yuhuCompiler.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuContext.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuBuilder.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuStack.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuRuntime.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuType.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuFunction.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuEntry.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuCodeBuffer.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuMemoryManager.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuNativeWrapper.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuValue.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhu_globals.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuCacheDecache.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuInvariants.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuIntrinsics.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuConstant.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuInliner.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuTopLevelBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuStateScanner.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
+  CXXFLAGS/yuhu_macroAssembler_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhu_templateTable_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   # Note: compileBroker.cpp does NOT need C++17 because yuhuCompiler.hpp uses forward declarations
 
   # Disable PCH (Precompiled Headers) for all Yuhu .cpp files

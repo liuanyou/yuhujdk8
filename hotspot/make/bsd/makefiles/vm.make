@@ -303,15 +303,31 @@ ifeq ($(JVM_VARIANT_ZEROSHARK), true)
 endif
 ifeq ($(USE_YUHU_COMPILER), true)
   # Yuhu compiler requires LLVM libraries
-  # LLVM_LIBS and LLVM_LDFLAGS are set in yuhu.make
+  # LLVM_LIBS, LLVM_LDFLAGS, LLVM_SYSTEM_LIBS, and ZSTD_LDFLAGS are set in yuhu.make
+  # IMPORTANT: Link order matters! Keystone must be linked BEFORE LLVM libraries
+  # when using -flat_namespace, so Keystone's symbols are used for conflicts
+  # However, macOS ld does not support -allow-multiple-definition, so duplicate symbols
+  # will still cause errors. We need to filter out conflicting libraries in yuhu.make
+  ifdef LLVM_LDFLAGS
+    LFLAGS_VM += $(LLVM_LDFLAGS)
+  endif
   ifdef LLVM_LIBS
     LIBS_VM += $(LLVM_LIBS)
   endif
   ifdef LLVM_SYSTEM_LIBS
     LIBS_VM += $(LLVM_SYSTEM_LIBS)
   endif
-  ifdef LLVM_LDFLAGS
-    LFLAGS_VM += $(LLVM_LDFLAGS)
+  ifdef ZSTD_LDFLAGS
+    # ZSTD_LDFLAGS contains both -L path and -lzstd
+    # Split them: -L goes to LFLAGS_VM, -l goes to LIBS_VM
+    ZSTD_LDFLAGS_PATH := $(filter -L%,$(ZSTD_LDFLAGS))
+    ZSTD_LDFLAGS_LIBS := $(filter -l%,$(ZSTD_LDFLAGS))
+    ifneq ($(ZSTD_LDFLAGS_PATH),)
+      LFLAGS_VM += $(ZSTD_LDFLAGS_PATH)
+    endif
+    ifneq ($(ZSTD_LDFLAGS_LIBS),)
+      LIBS_VM += $(ZSTD_LDFLAGS_LIBS)
+    endif
   endif
 endif
 

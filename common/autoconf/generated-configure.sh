@@ -1078,6 +1078,7 @@ enable_yuhu_compiler
 with_llvm
 with_llvm_include
 with_llvm_lib
+with_zstd_lib
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1838,6 +1839,7 @@ Optional Packages:
   --with-llvm             specify prefix directory for llvm
   --with-llvm-include     specify directory for llvm include files
   --with-llvm-lib         specify directory for llvm library
+  --with-zstd-lib         specify directory for zstd library (required for Yuhu compiler)
   --with-alsa             specify prefix directory for the alsa package
                           (expecting the libraries under PATH/lib and the
                           headers under PATH/include)
@@ -27859,6 +27861,13 @@ else
   with_llvm_lib=
 fi
 
+# Check whether --with-zstd-lib was given.
+if test "${with_zstd_lib+set}" = set; then :
+  withval=$with_zstd_lib;
+else
+  with_zstd_lib=
+fi
+
 # Check whether --enable-yuhu-compiler was given.
 if test "${enable_yuhu_compiler+set}" = set; then :
   enableval=$enable_yuhu_compiler;
@@ -27892,6 +27901,27 @@ else
   USE_YUHU_COMPILER=false
   LLVM_INCLUDE_PATH=""
   LLVM_LIB_PATH=""
+  ZSTD_LIB_PATH=""
+fi
+
+# Handle zstd library path
+if test "x$enable_yuhu_compiler" = xyes; then
+  if test "x$with_zstd_lib" != x; then
+    ZSTD_LIB_PATH="$with_zstd_lib"
+  else
+    # Try to auto-detect zstd library path
+    # Common locations on macOS with Homebrew
+    if test -d "/opt/homebrew/lib" && test -f "/opt/homebrew/lib/libzstd.dylib" -o -f "/opt/homebrew/lib/libzstd.a"; then
+      ZSTD_LIB_PATH="/opt/homebrew/lib"
+    elif test -d "/usr/local/lib" && test -f "/usr/local/lib/libzstd.dylib" -o -f "/usr/local/lib/libzstd.a"; then
+      ZSTD_LIB_PATH="/usr/local/lib"
+    else
+      # If not found, try to use system library (may be in default search path)
+      ZSTD_LIB_PATH=""
+    fi
+  fi
+else
+  ZSTD_LIB_PATH=""
 fi
 
   ###############################################################################

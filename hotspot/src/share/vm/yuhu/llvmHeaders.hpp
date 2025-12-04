@@ -139,10 +139,13 @@
 #if LLVM_VERSION_MAJOR >= 4
   // LLVM 4.0+ uses MCJIT (MCJIT.h and JIT.h merged)
   #include <llvm/ExecutionEngine/MCJIT.h>
+  // Include Interpreter.h for LLVMLinkInInterpreter
+  #include <llvm/ExecutionEngine/Interpreter.h>
 #else
   // LLVM 3.x - separate MCJIT and JIT headers
   #include <llvm/ExecutionEngine/MCJIT.h>
   #include <llvm/ExecutionEngine/JIT.h>
+  #include <llvm/ExecutionEngine/Interpreter.h>
 #endif
 #include <llvm/ADT/StringMap.h>
 #include <llvm/Support/Debug.h>

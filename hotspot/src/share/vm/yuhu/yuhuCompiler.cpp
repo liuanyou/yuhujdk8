@@ -73,18 +73,51 @@ YuhuCompiler::YuhuCompiler()
 #endif
 
   // Initialize the native target (AArch64)
+  // CRITICAL: Must initialize targets before creating ExecutionEngine
 #ifdef TARGET_ARCH_aarch64
   // LLVM 20+ uses LLVMInitialize*Target() instead of Initialize*Target()
 #if LLVM_VERSION_MAJOR >= 20
+  // Explicitly initialize AArch64 target components
   LLVMInitializeAArch64Target();
+  LLVMInitializeAArch64TargetInfo();
+  LLVMInitializeAArch64TargetMC();
   LLVMInitializeAArch64AsmPrinter();  // Note: No "Target" in the middle
-#else
-  InitializeAArch64Target();
-  InitializeAArch64TargetAsmPrinter();
-#endif
-#else
+  LLVMInitializeAArch64AsmParser();
+  LLVMInitializeAArch64Disassembler();
+  
+  // Also initialize native target (may be needed for some components)
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
+  InitializeNativeTargetAsmParser();
+#else
+  InitializeAArch64Target();
+  InitializeAArch64TargetInfo();
+  InitializeAArch64TargetMC();
+  InitializeAArch64TargetAsmPrinter();
+  InitializeAArch64AsmParser();
+  InitializeAArch64Disassembler();
+  
+  // Also initialize native target
+  InitializeNativeTarget();
+  InitializeNativeTargetAsmPrinter();
+  InitializeNativeTargetAsmParser();
+#endif
+  
+  // CRITICAL: Force link MCJIT and Interpreter to ensure they are available
+  // This is required when using static libraries or to ensure proper linking
+  LLVMLinkInMCJIT();
+  LLVMLinkInInterpreter();
+#else
+  InitializeNativeTarget();
+  InitializeNativeTargetInfo();
+  InitializeNativeTargetMC();
+  InitializeNativeTargetAsmPrinter();
+  InitializeNativeTargetAsmParser();
+  InitializeNativeTargetDisassembler();
+  
+  // Force link MCJIT and Interpreter
+  LLVMLinkInMCJIT();
+  LLVMLinkInInterpreter();
 #endif
 
   // Create the two contexts which we'll use
@@ -146,6 +179,10 @@ YuhuCompiler::YuhuCompiler()
 #else
   EngineBuilder builder(_normal_context->module());
 #endif
+  
+  // Note: Target triple is already set in YuhuContext when creating the Module
+  // No need to set it again in EngineBuilder
+  
   builder.setMCPU(MCPU);
   builder.setMAttrs(MAttrs);
   // LLVM 20+ uses setMCJITMemoryManager with std::unique_ptr
