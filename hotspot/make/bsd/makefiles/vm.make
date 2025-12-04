@@ -276,9 +276,8 @@ else
     LFLAGS_VM += -Xlinker -rpath -Xlinker @loader_path/.
     LFLAGS_VM += -Xlinker -rpath -Xlinker @loader_path/..
     LFLAGS_VM += -Xlinker -install_name -Xlinker @rpath/$(@F)
-    ifneq ($(strip $(KEYSTONE_LIB_PATH)),)
-      LFLAGS_VM += $(KEYSTONE_LIB_PATH:%=-L%) -lkeystone
-    endif
+    # Note: Keystone library has been replaced with LLVM MC framework
+    # No longer need to link Keystone library
   endif
 
   # JVM is statically linked with libgcc[_s] and libstdc++; this is needed to
@@ -448,3 +447,5 @@ endif
 install: install_jvm install_jsig install_saproc install_hsdis
 
 .PHONY: default build install install_jvm
+
+

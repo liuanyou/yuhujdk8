@@ -351,9 +351,11 @@ ifeq ($(OS_VENDOR), Darwin)
   CFLAGS += -DMAC_OS_X_VERSION_MAX_ALLOWED=$(subst .,,$(MACOSX_VERSION_MIN)) \
             -mmacosx-version-min=$(MACOSX_VERSION_MIN)
   LDFLAGS += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
-  ifneq ($(strip $(KEYSTONE_INCLUDE_PATH)),)
-    CFLAGS += $(KEYSTONE_INCLUDE_PATH:%=-I%)
-  endif
+  # Note: Keystone has been replaced with LLVM MC framework
+  # No longer need to include Keystone headers
+  # ifneq ($(strip $(KEYSTONE_INCLUDE_PATH)),)
+  #   CFLAGS += $(KEYSTONE_INCLUDE_PATH:%=-I%)
+  # endif
 endif
 
 

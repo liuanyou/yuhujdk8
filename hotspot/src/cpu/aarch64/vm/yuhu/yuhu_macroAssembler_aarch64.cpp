@@ -20,6 +20,289 @@
 #include "gc_implementation/g1/g1SATBCardTableModRefBS.hpp"
 #include "gc_implementation/g1/heapRegion.hpp"
 
+// 在包含 LLVM 头文件之前，需要 undef assert 以避免与系统 assert 宏冲突
+// llvmHeaders.hpp 已经处理了这个问题，但这里直接包含 LLVM MC 头文件，需要再次处理
+#ifdef assert
+  #undef assert
+#endif
+
+#include "yuhu/llvmHeaders.hpp"
+#include <llvm/MC/MCContext.h>
+#include <llvm/MC/MCInst.h>
+#include <llvm/MC/MCInstrInfo.h>
+#include <llvm/MC/MCCodeEmitter.h>
+#include <llvm/MC/MCFixup.h>
+#include <llvm/MC/MCParser/MCAsmParser.h>
+#include <llvm/MC/MCParser/MCTargetAsmParser.h>
+#include <llvm/MC/MCStreamer.h>
+#include <llvm/MC/MCSubtargetInfo.h>
+#include <llvm/MC/MCTargetOptions.h>
+#include <llvm/MC/MCObjectFileInfo.h>
+#include <llvm/MC/MCRegisterInfo.h>
+#include <llvm/MC/MCAsmInfo.h>
+#include <llvm/Support/SourceMgr.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <memory>
+#include <vector>
+
+// 在包含所有 LLVM 头文件后，确保 assert 宏被正确恢复（使用 HotSpot 的 assert 宏）
+// 因为系统 assert 宏可能被 LLVM 头文件激活
+#ifdef assert
+  #undef assert
+#endif
+// 重新定义 HotSpot 的 assert 宏（从 debug.hpp）
+#ifdef ASSERT
+#ifndef USE_REPEATED_ASSERTS
+#define assert(p, msg)                                                       \
+do {                                                                         \
+  if (!(p)) {                                                                \
+    report_vm_error(__FILE__, __LINE__, "assert(" #p ") failed", msg);       \
+    BREAKPOINT;                                                              \
+  }                                                                          \
+} while (0)
+#else
+#define assert(p, msg)
+do {                                                                         \
+  for (int __i = 0; __i < AssertRepeat; __i++) {                             \
+    if (!(p)) {                                                              \
+      report_vm_error(__FILE__, __LINE__, "assert(" #p ") failed", msg);     \
+      BREAKPOINT;                                                            \
+    }                                                                        \
+  }                                                                          \
+} while (0)
+#endif
+#else
+  #define assert(p, msg)
+#endif
+
+// 实现 SimpleMCStreamer 类（参考成功的 LLVM MC 实现）
+class YuhuMacroAssembler::SimpleMCStreamer : public llvm::MCStreamer {
+private:
+    llvm::MCCodeEmitter* _code_emitter;
+    const llvm::MCSubtargetInfo* _subtarget_info;
+public:
+    llvm::SmallVector<char, 32> CodeBuffer;
+
+    SimpleMCStreamer(llvm::MCContext &Ctx, 
+                    llvm::MCCodeEmitter* code_emitter,
+                    const llvm::MCSubtargetInfo* subtarget_info)
+        : llvm::MCStreamer(Ctx), 
+          _code_emitter(code_emitter),
+          _subtarget_info(subtarget_info) {}
+    
+    // 实现必需的纯虚函数（最小化实现，参考成功实现）
+    bool emitSymbolAttribute(llvm::MCSymbol *Symbol, llvm::MCSymbolAttr Attribute) override {
+        return true;
+    }
+
+    void emitCommonSymbol(llvm::MCSymbol *Symbol, uint64_t Size,
+                         llvm::Align ByteAlignment) override {}
+
+    void emitZerofill(llvm::MCSection *Section, llvm::MCSymbol *Symbol, uint64_t Size,
+                     llvm::Align ByteAlignment, llvm::SMLoc Loc = llvm::SMLoc()) override {}
+
+    void emitValueImpl(const llvm::MCExpr *Value, unsigned Size,
+                      llvm::SMLoc Loc = llvm::SMLoc()) override {}
+
+    // 关键方法：当解析到指令时调用，编码指令
+    void emitInstruction(const llvm::MCInst &Inst, const llvm::MCSubtargetInfo &STI) override {
+        if (_code_emitter) {
+            llvm::SmallVector<llvm::MCFixup, 4> Fixups;
+            _code_emitter->encodeInstruction(Inst, CodeBuffer, Fixups, STI);
+        }
+    }
+
+    void emitBytes(llvm::StringRef Data) override {
+        for (char C : Data) {
+            CodeBuffer.push_back(C);
+        }
+    }
+
+    const llvm::SmallVector<char, 32> &getCode() const { return CodeBuffer; }
+    void clearCode() { CodeBuffer.clear(); }
+};
+
+// 声明初始化函数（参考成功实现）
+extern "C" {
+void LLVMInitializeAArch64Target();
+void LLVMInitializeAArch64TargetInfo();
+void LLVMInitializeAArch64TargetMC();
+void LLVMInitializeAArch64AsmPrinter();
+void LLVMInitializeAArch64AsmParser();
+void LLVMInitializeAArch64Disassembler();
+}
+
+// 构造函数：初始化可复用的组件（参考 llvm_mc_assembler.cpp）
+YuhuMacroAssembler::YuhuMacroAssembler(CodeBuffer* code) : MacroAssembler(code),
+    _target(nullptr),
+    _triple_str("aarch64-apple-darwin"),
+    _mc_options(std::make_unique<llvm::MCTargetOptions>()),
+    _initialized(false) {
+    
+    // 初始化目标
+    if (!initializeTargets()) {
+        return;
+    }
+    
+    // 创建可复用的组件
+    if (!createReusableComponents()) {
+        return;
+    }
+    
+    _initialized = true;
+}
+
+// 析构函数：使用 unique_ptr 自动清理
+YuhuMacroAssembler::~YuhuMacroAssembler() = default;
+
+// 初始化目标（只调用一次，参考成功实现）
+bool YuhuMacroAssembler::initializeTargets() {
+    static bool targetsInitialized = false;
+    if (targetsInitialized) return true;
+
+    // 只初始化我们需要的 AArch64 目标
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetInfo();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
+    LLVMInitializeAArch64Disassembler();
+
+    targetsInitialized = true;
+    return true;
+}
+
+// 创建可复用的组件（只调用一次，参考成功实现）
+bool YuhuMacroAssembler::createReusableComponents() {
+    // 查找目标
+    std::string Error;
+    _target = llvm::TargetRegistry::lookupTarget("aarch64", Error);
+    if (!_target) {
+        fatal(err_msg("Error: %s", Error.c_str()));
+        return false;
+    }
+
+    std::string CPU = "generic";
+    std::string Features = "";
+
+    // 创建必要的组件（这些是只读的，可以复用）
+    llvm::Triple TheTriple(_triple_str);
+    _mri.reset(_target->createMCRegInfo(TheTriple.str()));
+    if (!_mri) {
+        fatal("Unable to create register info");
+        return false;
+    }
+
+    _mai.reset(_target->createMCAsmInfo(*_mri, TheTriple.str(), *_mc_options));
+    if (!_mai) {
+        fatal("Unable to create asm info");
+        return false;
+    }
+
+    _sti.reset(_target->createMCSubtargetInfo(TheTriple.str(), CPU, Features));
+    if (!_sti) {
+        fatal("Unable to create subtarget info");
+        return false;
+    }
+
+    _mcii.reset(_target->createMCInstrInfo());
+    if (!_mcii) {
+        fatal("Unable to create instruction info");
+        return false;
+    }
+
+    // 创建 MCObjectFileInfo（这也是只读配置，可以复用）
+    _mofi = std::make_unique<llvm::MCObjectFileInfo>();
+
+    return true;
+}
+
+// 使用 LLVM MC 框架汇编指令（完全参考 llvm_mc_assembler.cpp 的实现）
+uint32_t YuhuMacroAssembler::machine_code(const char* assembly) {
+    if (!_initialized) {
+        fatal("Assembler not initialized");
+        return 0;
+    }
+
+    // 每次调用时创建新的状态组件（这些不是线程安全的）
+    
+    // 创建 Triple
+    llvm::Triple TheTriple(_triple_str);
+    
+    // 创建上下文（每次都需要新的，因为管理符号表等状态）
+    llvm::MCContext Ctx(TheTriple, _mai.get(), _mri.get(), _sti.get());
+    
+    // 初始化 MCObjectFileInfo（需要上下文）
+    _mofi->initMCObjectFileInfo(Ctx, /*PIC*/ false, /*LargeCodeModel*/ false);
+    Ctx.setObjectFileInfo(_mofi.get());
+
+    // 创建 MCCodeEmitter（依赖上下文，每次创建新的）
+    std::unique_ptr<llvm::MCCodeEmitter> MCE(_target->createMCCodeEmitter(*_mcii, Ctx));
+    if (!MCE) {
+        fatal("Unable to create code emitter");
+        return 0;
+    }
+
+    // 创建我们的收集流（有状态，每次创建新的）
+    SimpleMCStreamer Streamer(Ctx, MCE.get(), _sti.get());
+
+    // 创建源管理器（有状态，每次创建新的）
+    llvm::SourceMgr SrcMgr;
+
+    // 创建内存缓冲区
+    std::string asm_str = std::string(assembly);
+    std::unique_ptr<llvm::MemoryBuffer> Buffer = llvm::MemoryBuffer::getMemBuffer(asm_str);
+    SrcMgr.AddNewSourceBuffer(std::move(Buffer), llvm::SMLoc());
+
+    // 创建解析器（有状态，每次创建新的）
+    std::unique_ptr<llvm::MCAsmParser> Parser(
+        llvm::createMCAsmParser(SrcMgr, Ctx, Streamer, *_mai));
+    if (!Parser) {
+        fatal("Unable to create asm parser");
+        return 0;
+    }
+
+    // 创建目标特定的解析器（有状态，每次创建新的）
+    std::unique_ptr<llvm::MCTargetAsmParser> TAP(
+        _target->createMCAsmParser(*_sti, *Parser, *_mcii, *_mc_options));
+    if (!TAP) {
+        fatal("Unable to create target asm parser");
+        return 0;
+    }
+    Parser->setTargetParser(*TAP);
+
+    // 解析汇编
+    if (Parser->Run(false)) {
+        fatal(err_msg("Failed to parse assembly: %s", assembly));
+        return 0;
+    }
+
+    // 获取编码的字节
+    const llvm::SmallVector<char, 32> &Code = Streamer.getCode();
+    
+    if (Code.size() >= 4) {
+        // 将字节转换为32位值（小端序）
+        uint32_t Result = 0;
+        for (size_t i = 0; i < 4; ++i) {
+            Result |= (static_cast<uint8_t>(Code[i]) << (i * 8));
+        }
+        return Result;
+    } else if (!Code.empty()) {
+        fatal(err_msg("Expected 4 bytes, got %zu bytes", Code.size()));
+    } else {
+        fatal(err_msg("No code generated for: %s", assembly));
+    }
+
+    return 0;
+}
+
 address YuhuMacroAssembler::target(YuhuLabel& L, address branch_pc) {
     if (L.is_bound()) {
         int loc = L.loc();

@@ -10,6 +10,7 @@
 - [构建说明](BUILD_INSTRUCTIONS.md) - LLVM 安装和构建配置
 - [配置选项](CONFIGURE_OPTIONS.md) - configure 脚本选项说明
 - [LLVM 20 配置](LLVM_20_CONFIG.md) - LLVM 20.1.5 专用配置指南
+- [开发活动](activities/) - 重要开发活动的详细记录
 
 ## 快速开始
 

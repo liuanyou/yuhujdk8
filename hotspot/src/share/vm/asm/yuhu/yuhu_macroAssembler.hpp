@@ -16,41 +16,66 @@
 #include "utilities/debug.hpp"
 #include "utilities/growableArray.hpp"
 #include "utilities/top.hpp"
-#include <keystone/keystone.h>
+// Note: Do NOT include LLVM MC headers here!
+// This header is included in precompiled.hpp which is compiled with C++11,
+// but LLVM 20 headers require C++17.
+// We use forward declarations instead, and include LLVM MC headers only in .cpp files.
+#include <vector>
+#include <memory>
 
 class YuhuLabel;
 class YuhuRegSet;
 class YuhuAddress;
 class YuhuExternalAddress;
 
+// Forward declarations for LLVM MC types
+// 注意：不能在头文件中包含 LLVM 头文件，因为 precompiled.hpp 使用 C++11 编译
+// 而 LLVM 20 头文件需要 C++17。所有 LLVM 头文件只在 .cpp 文件中包含。
+namespace llvm {
+  class Target;
+  class MCRegisterInfo;
+  class MCAsmInfo;
+  class MCSubtargetInfo;
+  class MCInstrInfo;
+  class MCObjectFileInfo;
+  class Triple;
+  class MCTargetOptions;
+}
+
+#include <memory>
+#include <string>
+
 class YuhuMacroAssembler: public MacroAssembler {
+    // SimpleMCStreamer 前向声明（定义在 .cpp 文件中）
+    class SimpleMCStreamer;
+    
 private:
-    ks_engine *ks;
+    // LLVM MC 可复用组件（在构造函数中创建一次，线程安全，只读）
+    // 参考 llvm_mc_assembler.h 的设计
+    // 注意：使用指针或字符串存储，避免在头文件中包含 LLVM 类型
+    const llvm::Target* _target;
+    std::unique_ptr<llvm::MCRegisterInfo> _mri;
+    std::unique_ptr<llvm::MCAsmInfo> _mai;
+    std::unique_ptr<llvm::MCSubtargetInfo> _sti;
+    std::unique_ptr<llvm::MCInstrInfo> _mcii;
+    std::unique_ptr<llvm::MCObjectFileInfo> _mofi;
+    // 使用字符串存储 triple，在 .cpp 中转换为 llvm::Triple
+    std::string _triple_str;
+    // MCTargetOptions 使用指针，在 .cpp 中创建
+    std::unique_ptr<llvm::MCTargetOptions> _mc_options;
+    
+    // 初始化标志
+    bool _initialized;
+    
+    // 初始化目标（只调用一次）
+    bool initializeTargets();
+    
+    // 创建可复用的组件（只调用一次）
+    bool createReusableComponents();
+    
 private:
-    uint32_t machine_code(const char* assembly) {
-        unsigned char *encode;
-        size_t size;
-        size_t count;
-        int ks_result = ks_asm(ks, assembly, 0, &encode, &size, &count);
-        
-        // Check Keystone result
-        assert(ks_result == KS_ERR_OK, "Failed to assemble instruction");
-        
-        // Check instruction count
-        assert(count == 1, "Expected 1 instruction, got multiple");
-        
-        // Check instruction size
-        assert(size == 4, "Expected 4 bytes, got wrong size");
-        
-        uint32_t machine_code;
-        memcpy(&machine_code, encode, sizeof(uint32_t));
-        ks_free(encode);
-        
-        // Check for illegal instruction (0x00000000)
-        assert(machine_code != 0, "Generated machine code is 0x00000000 - invalid instruction");
-        
-        return machine_code;
-    }
+    // 使用 LLVM MC 框架汇编指令
+    uint32_t machine_code(const char* assembly);
     // compute target according label and given address
     address target(YuhuLabel& L, address branch_pc);
 public:
@@ -198,17 +223,8 @@ public:
         return (int) (reg - x0);
     }
 public:
-    YuhuMacroAssembler(CodeBuffer* code) : MacroAssembler(code) {
-        ks_err err = ks_open(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN, &ks);
-        assert(err == KS_ERR_OK, "Failed to initialize Keystone!");
-    }
-
-    ~YuhuMacroAssembler() {
-        if (ks != nullptr) {
-            ks_close(ks);
-            ks = nullptr;
-        }
-    }
+    YuhuMacroAssembler(CodeBuffer* code);
+    ~YuhuMacroAssembler();
 
     // Store oop and metadata into code buffer (similar to Zero architecture)
     void store_oop(jobject obj) {

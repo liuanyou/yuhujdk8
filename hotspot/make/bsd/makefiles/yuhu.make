@@ -260,9 +260,13 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuStateScanner.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuBlock.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuState.o = $(PCH_FLAG/NO_PCH)
+    # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
+    PCH_FLAG/yuhu_macroAssembler_aarch64.o = $(PCH_FLAG/NO_PCH)
+    PCH_FLAG/yuhu_templateTable_aarch64.o = $(PCH_FLAG/NO_PCH)
   endif
 else
   # YUHU compiler is disabled, do not define YUHU macro
   # All YUHU code will be excluded by #ifdef YUHU guards
 endif
+
 
