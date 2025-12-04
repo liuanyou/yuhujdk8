@@ -61,7 +61,12 @@ namespace {
 YuhuCompiler::YuhuCompiler()
   : AbstractCompiler() {
   // Create the lock to protect the memory manager and execution engine
-  _execution_engine_lock = new Monitor(Mutex::leaf, "YuhuExecutionEngineLock");
+  // CRITICAL: This lock must have a rank higher than CompileThread_lock (nonleaf+5)
+  // to avoid deadlock detection errors. The lock is acquired in generate_native_code()
+  // which is called from compile_method() that runs in a compiler thread that may
+  // already hold CompileThread_lock. Therefore, this lock must be acquired AFTER
+  // CompileThread_lock in the lock order, meaning it needs a higher rank.
+  _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
   MutexLocker locker(execution_engine_lock());
 
   // Make LLVM safe for multithreading
