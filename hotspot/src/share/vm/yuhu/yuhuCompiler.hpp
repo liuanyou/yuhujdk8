@@ -126,7 +126,8 @@ class YuhuCompiler : public AbstractCompiler {
  public:
   static YuhuCompiler* compiler() {
     AbstractCompiler *compiler =
-      CompileBroker::compiler(CompLevel_full_optimization);
+      CompileBroker::compiler(CompLevel_yuhu_optimized);
+    assert(compiler != NULL, "Yuhu compiler should be initialized");
     assert(compiler->is_yuhu() && compiler->is_initialized(), "should be");
     return (YuhuCompiler *) compiler;
   }

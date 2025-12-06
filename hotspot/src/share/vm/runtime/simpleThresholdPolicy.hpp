@@ -73,6 +73,18 @@ protected:
   // Simple methods are as good being compiled with C1 as C2.
   // This function tells if it's such a function.
   inline bool is_trivial(Method* method);
+  
+  // Calculate complexity score for a method.
+  // Complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
+  // This helps identify methods that may benefit from LLVM optimizations.
+  int calculate_complexity_score(Method* method);
+  
+  // Check if method should be compiled with Yuhu compiler.
+  // Returns true if:
+  //   1. UseYuhuCompiler is enabled
+  //   2. Method meets invocation/backedge thresholds
+  //   3. Method complexity exceeds YuhuComplexityThreshold
+  bool should_compile_with_yuhu(Method* method);
 
   // Predicate helpers are used by .*_predicate() methods as well as others.
   // They check the given counter values, multiplied by the scale against the thresholds.

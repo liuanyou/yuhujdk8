@@ -24,12 +24,106 @@
 
 #include "precompiled.hpp"
 #include "compiler/compileBroker.hpp"
+#include "compiler/compilerOracle.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/simpleThresholdPolicy.hpp"
 #include "runtime/simpleThresholdPolicy.inline.hpp"
 #include "code/scopeDesc.hpp"
 
+
+// Calculate complexity score for a method.
+// Complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
+// This helps identify methods that may benefit from LLVM optimizations.
+int SimpleThresholdPolicy::calculate_complexity_score(Method* method) {
+  if (method == NULL) {
+    return 0;
+  }
+  
+  // Get code size (bytecode size)
+  int code_size = method->code_size();
+  if (code_size == 0) {
+    return 0;
+  }
+  
+  // Get number of blocks and loops from MethodData if available
+  int num_blocks = 1;  // Default to 1 if not available
+  int num_loops = 0;
+  bool has_loops = method->has_loops();
+  
+  MethodData* mdo = method->method_data();
+  if (mdo != NULL) {
+    num_blocks = mdo->num_blocks();
+    num_loops = mdo->num_loops();
+    // If num_blocks is 0, it means it hasn't been computed yet, use default
+    if (num_blocks == 0) {
+      num_blocks = 1;
+    }
+  }
+  
+  // Calculate complexity score
+  // Formula: code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
+  // This gives higher scores to:
+  //   - Larger methods (more code_size)
+  //   - Methods with more basic blocks (more control flow)
+  //   - Methods with loops (more optimization opportunities)
+  int complexity = code_size * (num_blocks + 1);
+  if (has_loops) {
+    complexity *= 2;
+  }
+  
+  return complexity;
+}
+
+// Check if method should be compiled with Yuhu compiler.
+// Returns true if:
+//   1. UseYuhuCompiler is enabled
+//   2. Method meets invocation/backedge thresholds (is hot)
+//   3. Method complexity exceeds YuhuComplexityThreshold
+bool SimpleThresholdPolicy::should_compile_with_yuhu(Method* method) {
+  if (method == NULL) {
+    return false;
+  }
+  
+  // Check if Yuhu compiler is enabled
+  if (!UseYuhuCompiler) {
+    return false;
+  }
+  
+  // Check if complexity-based selection is enabled
+  if (!YuhuUseComplexityBased) {
+    return false;
+  }
+  
+  // Check if method is hot (meets basic invocation/backedge thresholds)
+  int invocation_count = method->invocation_count();
+  int backedge_count = method->backedge_count();
+  
+  // Method must meet at least one of the basic thresholds
+  bool is_hot = (invocation_count >= Tier3InvocationThreshold) ||
+                (backedge_count >= Tier3BackEdgeThreshold);
+  
+  if (!is_hot) {
+    return false;
+  }
+  
+  // Calculate complexity score
+  int complexity = calculate_complexity_score(method);
+  
+  // Check if complexity exceeds threshold
+  if (complexity >= YuhuComplexityThreshold) {
+    if (PrintTieredEvents) {
+      ResourceMark rm;
+      tty->print_cr("Yuhu compilation candidate: %s complexity=%d (threshold=%d) invocation=%d backedge=%d",
+                    method->name_and_sig_as_C_string(),
+                    complexity, YuhuComplexityThreshold,
+                    invocation_count, backedge_count);
+    }
+    return true;
+  }
+  
+  return false;
+}
 
 void SimpleThresholdPolicy::print_counters(const char* prefix, methodHandle mh) {
   int invocation_count = mh->invocation_count();
@@ -335,6 +429,22 @@ CompLevel SimpleThresholdPolicy::common(Predicate p, Method* method, CompLevel c
 
 // Determine if a method should be compiled with a normal entry point at a different level.
 CompLevel SimpleThresholdPolicy::call_event(Method* method,  CompLevel cur_level) {
+#ifdef YUHU
+  // Check if method is forced to use Yuhu compiler via CompilerOracle
+  methodHandle mh(method);
+  if (CompilerOracle::should_compile_with_yuhu_only(mh)) {
+    // Force use Yuhu optimized compilation level, but respect TieredStopAtLevel
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+  // Yuhu trigger: allow Yuhu to intercept before C1/C2 decisions
+  if (should_compile_with_yuhu(method)) {
+    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+#endif
+  
   CompLevel osr_level = MIN2((CompLevel) method->highest_osr_comp_level(),
                              common(&SimpleThresholdPolicy::loop_predicate, method, cur_level));
   CompLevel next_level = common(&SimpleThresholdPolicy::call_predicate, method, cur_level);
@@ -357,6 +467,22 @@ CompLevel SimpleThresholdPolicy::call_event(Method* method,  CompLevel cur_level
 
 // Determine if we should do an OSR compilation of a given method.
 CompLevel SimpleThresholdPolicy::loop_event(Method* method, CompLevel cur_level) {
+#ifdef YUHU
+  // Check if method is forced to use Yuhu compiler via CompilerOracle
+  methodHandle mh(method);
+  if (CompilerOracle::should_compile_with_yuhu_only(mh)) {
+    // Force use Yuhu optimized compilation level for OSR as well, but respect TieredStopAtLevel
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+  // Yuhu trigger for OSR path
+  if (should_compile_with_yuhu(method)) {
+    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+#endif
+  
   CompLevel next_level = common(&SimpleThresholdPolicy::loop_predicate, method, cur_level);
   if (cur_level == CompLevel_none) {
     // If there is a live OSR method that means that we deopted to the interpreter

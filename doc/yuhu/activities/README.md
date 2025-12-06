@@ -42,6 +42,35 @@
 
 ---
 
+### [活动 003: Yuhu 触发机制实现（阶段 1）](003_yuhu_trigger_implementation.md)
+
+**日期**: 2024-12-XX  
+**功能**: 实现基于调用次数 + 回边次数 + 复杂度评估的 Yuhu 编译器触发机制
+
+**摘要**: 实现了阶段 1 的 Yuhu 编译器触发机制，当方法满足热点条件（调用次数 >= 200 或回边次数 >= 60000）且复杂度超过阈值（默认 5000）时，自动触发 Yuhu 编译器。
+
+**关键修改**:
+- 在 `globals.hpp` 中添加三个命令行选项：
+  - `UseYuhuCompiler`: 启用 Yuhu 编译器
+  - `YuhuComplexityThreshold`: 复杂度阈值（默认 5000）
+  - `YuhuUseComplexityBased`: 启用基于复杂度的选择
+- 在 `simpleThresholdPolicy.cpp` 中实现：
+  - `calculate_complexity_score()`: 计算方法的复杂度分数
+  - `should_compile_with_yuhu()`: 判断是否应该使用 Yuhu 编译器
+- 修改 `call_event()` 和 `loop_event()` 集成 Yuhu 选择逻辑
+
+**复杂度计算公式**:
+```
+complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
+```
+
+**触发条件**:
+1. Yuhu 编译器已启用（`-XX:+UseYuhuCompiler`）
+2. 方法为热点（调用次数 >= 200 或回边次数 >= 60000）
+3. 复杂度 >= 5000（可通过 `-XX:YuhuComplexityThreshold` 调整）
+
+---
+
 ## 活动记录格式
 
 每个活动文档包含以下部分：

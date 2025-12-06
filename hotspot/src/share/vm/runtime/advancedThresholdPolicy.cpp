@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "compiler/compilerOracle.hpp"
 #include "runtime/advancedThresholdPolicy.hpp"
 #include "runtime/simpleThresholdPolicy.inline.hpp"
 
@@ -402,6 +403,22 @@ CompLevel AdvancedThresholdPolicy::common(Predicate p, Method* method, CompLevel
 
 // Determine if a method should be compiled with a normal entry point at a different level.
 CompLevel AdvancedThresholdPolicy::call_event(Method* method, CompLevel cur_level) {
+#ifdef YUHU
+  // Check if method is forced to use Yuhu compiler via CompilerOracle
+  methodHandle mh(method);
+  if (CompilerOracle::should_compile_with_yuhu_only(mh)) {
+    // Force use Yuhu optimized compilation level, but respect TieredStopAtLevel
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+  // Yuhu trigger: reuse base-class hook so advanced policy也支持 Yuhu 选择
+  if (should_compile_with_yuhu(method)) {
+    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+#endif
+
   CompLevel osr_level = MIN2((CompLevel) method->highest_osr_comp_level(),
                              common(&AdvancedThresholdPolicy::loop_predicate, method, cur_level, true));
   CompLevel next_level = common(&AdvancedThresholdPolicy::call_predicate, method, cur_level);
@@ -423,6 +440,22 @@ CompLevel AdvancedThresholdPolicy::call_event(Method* method, CompLevel cur_leve
 
 // Determine if we should do an OSR compilation of a given method.
 CompLevel AdvancedThresholdPolicy::loop_event(Method* method, CompLevel cur_level) {
+#ifdef YUHU
+  // Check if method is forced to use Yuhu compiler via CompilerOracle
+  methodHandle mh(method);
+  if (CompilerOracle::should_compile_with_yuhu_only(mh)) {
+    // Force use Yuhu optimized compilation level for OSR as well, but respect TieredStopAtLevel
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+  // Yuhu trigger for OSR path
+  if (should_compile_with_yuhu(method)) {
+    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
+    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+    return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
+  }
+#endif
+
   CompLevel next_level = common(&AdvancedThresholdPolicy::loop_predicate, method, cur_level, true);
   if (cur_level == CompLevel_none) {
     // If there is a live OSR method that means that we deopted to the interpreter

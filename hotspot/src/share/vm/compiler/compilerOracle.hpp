@@ -64,11 +64,19 @@ class CompilerOracle : AllStatic {
   // Check to see if this method has option set for it
   static bool has_option_string(methodHandle method, const char * option);
 
+#ifdef YUHU
+  // Tells whether we should compile this method with Yuhu compiler only
+  static bool should_compile_with_yuhu_only(methodHandle method);
+#endif
+
   // Reads from string instead of file
   static void parse_from_string(const char* command_string, void (*parser)(char*));
 
   static void parse_from_line(char* line);
   static void parse_compile_only(char * line);
+#ifdef YUHU
+  static void parse_yuhu_only(char * line);
+#endif
 
   // For updating the oracle file
   static void append_comment_to_file(const char* message);

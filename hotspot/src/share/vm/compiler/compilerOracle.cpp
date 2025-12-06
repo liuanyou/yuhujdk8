@@ -220,6 +220,9 @@ enum OracleCommand {
   OptionCommand,
   QuietCommand,
   HelpCommand,
+#ifdef YUHU
+  YuhuOnlyCommand,
+#endif
   OracleCommandCount
 };
 
@@ -234,7 +237,10 @@ static const char * command_names[] = {
   "log",
   "option",
   "quiet",
-  "help"
+  "help",
+#ifdef YUHU
+  "yuhuonly",
+#endif
 };
 
 class MethodMatcher;
@@ -318,6 +324,12 @@ bool CompilerOracle::should_log(methodHandle method) {
 bool CompilerOracle::should_break_at(methodHandle method) {
   return check_predicate(BreakCommand, method);
 }
+
+#ifdef YUHU
+bool CompilerOracle::should_compile_with_yuhu_only(methodHandle method) {
+  return check_predicate(YuhuOnlyCommand, method);
+}
+#endif
 
 
 static OracleCommand parse_command_name(const char * line, int* bytes_read) {
@@ -633,6 +645,10 @@ void CompilerOracle::append_exclude_to_file(methodHandle method) {
 void compilerOracle_init() {
   CompilerOracle::parse_from_string(CompileCommand, CompilerOracle::parse_from_line);
   CompilerOracle::parse_from_string(CompileOnly, CompilerOracle::parse_compile_only);
+#ifdef YUHU
+  // Parse yuhuonly commands from CompileCommand
+  // yuhuonly is handled in parse_from_line, but we can also add a dedicated parser if needed
+#endif
   if (CompilerOracle::has_command_file()) {
     CompilerOracle::parse_from_file();
   } else {

@@ -3585,6 +3585,16 @@ class CommandLineFlags {
   product_pd(bool, TieredCompilation,                                       \
           "Enable tiered compilation")                                      \
                                                                             \
+  product(bool, UseYuhuCompiler, false,                                    \
+          "Use Yuhu compiler for methods that meet complexity threshold")   \
+                                                                            \
+  product(intx, YuhuComplexityThreshold, 5000,                            \
+          "Complexity score threshold for Yuhu compilation. "              \
+          "Complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)") \
+                                                                            \
+  product(bool, YuhuUseComplexityBased, true,                             \
+          "Use complexity-based selection for Yuhu compiler")              \
+                                                                            \
   product(bool, PrintTieredEvents, false,                                   \
           "Print tiered events notifications")                              \
                                                                             \

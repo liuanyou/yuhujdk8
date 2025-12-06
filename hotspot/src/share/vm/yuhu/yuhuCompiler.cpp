@@ -236,6 +236,28 @@ YuhuCompiler::YuhuCompiler()
     exit(1);
   }
 
+  // LLVM 20+: Set DataLayout for modules from ExecutionEngine's TargetMachine
+  // This is critical to avoid SIGSEGV in getABITypeAlign
+#if LLVM_VERSION_MAJOR >= 20
+  if (execution_engine()) {
+    // Get the TargetMachine from ExecutionEngine
+    llvm::TargetMachine* TM = execution_engine()->getTargetMachine();
+    if (TM) {
+      const llvm::DataLayout& DL = TM->createDataLayout();
+      // Set DataLayout for normal context module
+      // Note: ExecutionEngine owns the module now, but we can still set DataLayout
+      // The module pointer in YuhuContext is still valid (ExecutionEngine keeps it alive)
+      if (_normal_context->module()) {
+        _normal_context->module()->setDataLayout(DL);
+      }
+      // Set DataLayout for native context module (will be added later)
+      if (_native_context->module()) {
+        _native_context->module()->setDataLayout(DL);
+      }
+    }
+  }
+#endif
+
   // LLVM 20+ requires std::unique_ptr<Module> for addModule
 #if LLVM_VERSION_MAJOR >= 20
   std::unique_ptr<llvm::Module> native_module_ptr(_native_context->module());
