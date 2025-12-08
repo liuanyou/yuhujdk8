@@ -94,6 +94,32 @@ complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
 
 ---
 
+### [活动 005: 帧大小不匹配错误](005_frame_size_mismatch.md)
+
+**日期**: 2025-12-06  
+**问题**: `assert(offset == extended_frame_size()) failed: should do` - 帧大小计算与实际分配不匹配
+
+**摘要**: 发现 `header_words = 2` 的定义不正确，导致 `extended_frame_size` 计算错误。实际分配的帧头包含 6 个 slot（oop_tmp, method, unextended_sp, pc, frame_marker, frame_pointer_addr），但 `header_words` 只计算了 2 个（frame_marker + frame_pointer_addr）。
+
+**根本原因**:
+- `header_words = 2` 只包含了 Frame marker 和 Frame pointer address
+- 但实际分配的帧头包含 6 个 slot
+- `extended_frame_size = 2 + monitor_words + stack_words + locals_words`
+- 实际 `offset = stack_words + monitor_words + 6 + locals_words`
+- 差异：多 4 个 slot
+
+**解决方案**:
+- 将 `header_words` 从 2 改为 6，以匹配实际分配的 slot 数量
+- 参考 Shark 的实现，`SharkFrame::header_words = 6`
+
+**关键发现**:
+- Shark 的 `header_words = 6` 包含了所有帧头元数据
+- Yuhu 的注释错误地认为 `header_words = 2` 是 "frame pointer + return address"
+- 实际上，AArch64 的 frame pointer 和 return address 由 ABI 管理，不在 Java 帧布局中
+- Java 帧布局中的 "header" 是指 Java 运行时需要的元数据
+
+---
+
 ## 活动记录格式
 
 每个活动文档包含以下部分：

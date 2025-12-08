@@ -37,9 +37,15 @@ void YuhuStack::initialize(Value* method) {
 
   int locals_words  = max_locals();
   int extra_locals  = locals_words - arg_size();
-  // For AArch64, header_words = 2 (frame pointer + return address)
-  // This matches the frame layout: [fp, lr, ...]
-  int header_words  = 2;
+  // For AArch64, header_words includes all frame header metadata:
+  //   - oop_tmp (1 word)
+  //   - method (1 word)
+  //   - unextended_sp (1 word)
+  //   - pc (1 word)
+  //   - frame_marker (1 word)
+  //   - frame_pointer_addr (1 word)
+  // This matches SharkFrame::header_words = 6
+  int header_words  = 6;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
   int frame_words   = header_words + monitor_words + stack_words;
