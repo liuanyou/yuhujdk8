@@ -120,6 +120,81 @@ complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
 
 ---
 
+### [活动 006: getPointerToFunction 返回 NULL](006_getpointertofunction_returns_null.md)
+
+**日期**: 2025-12-06  
+**问题**: `assert(code != NULL) failed: code must be != NULL` - `ExecutionEngine::getPointerToFunction()` 返回 NULL
+
+**摘要**: 发现 `execution_engine()->getPointerToFunction(function)` 返回 NULL，导致代码生成失败。可能的原因包括：Function 不在 ExecutionEngine 的 Module 中、Module 所有权转移问题、IR 验证失败、代码生成错误、或 MemoryManager 实现问题。
+
+**根本原因分析**:
+- **Module 所有权问题**：在 LLVM 20 中，`ExecutionEngine` 通过 `EngineBuilder` 取得 Module 的所有权，但 `YuhuContext` 仍持有指向 Module 的指针，可能失效
+- **Function 添加时机**：Function 在创建时添加到 Module，但 Module 的所有权已转移给 `ExecutionEngine`，可能导致指针失效
+- **IR 验证或代码生成失败**：LLVM IR 可能存在错误，导致代码生成失败
+- **MemoryManager 实现**：`YuhuMemoryManager` 的 `allocateCodeSection` 和 `finalizeMemory` 可能未正确实现
+
+**调试建议**:
+- 验证 Function 是否在 Module 中
+- 验证 Module 指针的有效性
+- 检查 ExecutionEngine 的错误信息
+- 验证 IR 的正确性
+- 检查 MemoryManager 实现
+
+**关键发现**:
+- `getPointerToFunction` 返回 NULL 通常表示代码生成失败
+- 需要检查 Module 所有权、Function 添加时机、IR 验证、和 MemoryManager 实现
+- 与 Shark 的差异：Shark 显式调用 `add_function()`，Yuhu 移除了这个调用
+
+---
+
+### [活动 007: execution_engine_lock 断言失败](007_execution_engine_lock_assertion_failure.md)
+
+**日期**: 2025-12-06  
+**问题**: `assert(execution_engine_lock()->owned_by_self()) failed: should be` - 调试代码在锁外调用了 `execution_engine()`
+
+**摘要**: 发现调试代码在 `MutexLocker` 块外调用了 `execution_engine()` 方法，但该方法要求调用者必须持有 `execution_engine_lock()`。调试代码被放在了锁外（第 455-513 行），但锁的获取在第 515 行，导致断言失败。
+
+**根本原因**:
+- 调试代码在锁外执行（第 455-513 行）
+- 第 484 和 487 行调用了 `execution_engine()`
+- 但 `execution_engine()` 方法要求持有锁（`yuhuCompiler.hpp:121`）
+- 锁在第 515 行才被获取
+
+**解决方案**:
+- 方案 1（推荐）：将需要访问 `execution_engine()` 的调试代码移到 `MutexLocker` 块内
+- 方案 2：直接访问 `_execution_engine` 成员变量（不推荐，违反封装）
+- 方案 3：创建无锁检查方法（不推荐，增加复杂度）
+
+**关键发现**:
+- `execution_engine()` 和 `memory_manager()` 方法都要求持有锁，这是为了避免 LLVM 锁和 HotSpot 锁交错导致死锁
+- 调试代码应该遵循与正常代码相同的锁规则
+- 需要将需要锁的调试代码和不需要锁的调试代码分开
+
+---
+
+### [活动 008: LLVM frameaddress intrinsic 名称 mangling 错误](008_llvm_frameaddress_intrinsic_name_mangling.md)
+
+**日期**: 2025-12-06  
+**问题**: `Intrinsic name not mangled correctly for type arguments! Should be: llvm.frameaddress.p0` - IR 验证失败
+
+**摘要**: 发现 `llvm.frameaddress` intrinsic 在 LLVM 20 中需要使用新的命名规则，必须包含类型信息（`.p0` 表示指针类型）。当前代码使用旧的名称 `"llvm.frameaddress"`，导致 IR 验证失败。
+
+**根本原因**:
+- LLVM 20 引入了 opaque pointer types，intrinsic 的类型信息不再可以从指针类型推断
+- Intrinsic 名称必须显式包含类型信息，如 `llvm.frameaddress.p0`
+- 当前代码使用旧的名称 `"llvm.frameaddress"`，缺少类型后缀
+
+**解决方案**:
+- 方案 1（推荐）：修改 `frame_address()` 方法，使用正确的名称 `"llvm.frameaddress.p0"`
+- 方案 2：使用 `Intrinsic::getDeclaration` API（更标准但需要更多代码）
+
+**关键发现**:
+- LLVM 20 的 intrinsic 命名规则发生了变化，必须包含类型信息
+- `llvm.memset` 已经使用了正确的名称（`llvm.memset.p0i8.i32`）
+- 其他数学 intrinsic（`llvm.sin.f64` 等）也使用了正确的命名
+
+---
+
 ## 活动记录格式
 
 每个活动文档包含以下部分：

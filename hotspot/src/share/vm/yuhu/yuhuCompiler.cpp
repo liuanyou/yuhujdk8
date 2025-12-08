@@ -451,8 +451,73 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   // Note: Function is already added to Module in YuhuFunction::initialize()
   // via Function::Create() with Module parameter, so add_function() is no longer needed
   // context()->add_function(function);  // Removed: Function already in Module
+  
+  // ========== Debug: Verify Function and Module state (from 006_getpointertofunction_returns_null.md) ==========
+  // Debug 1-2, 4: 锁外的检查（不需要 execution_engine()）
+  tty->print_cr("=== Yuhu: generate_native_code for %s ===", name);
+  
+  // Debug 1: Verify Function is in Module
+  llvm::Module* func_mod = function->getParent();
+  if (func_mod == NULL) {
+    fatal(err_msg("Function %s has no parent Module!", name));
+  }
+  tty->print_cr("Function name: %s, address: %p", function->getName().str().c_str(), function);
+  tty->print_cr("Function's Module: %p, name: %s", func_mod, func_mod->getName().str().c_str());
+  tty->print_cr("Module TargetTriple: %s", func_mod->getTargetTriple().c_str());
+  tty->print_cr("Module DataLayout: %s", func_mod->getDataLayout().getStringRepresentation().c_str());
+  
+  // Debug 2: Verify Module pointer validity
+  llvm::Module* normal_mod = _normal_context->module();
+  llvm::Module* native_mod = _native_context->module();
+  tty->print_cr("_normal_context->module(): %p", normal_mod);
+  tty->print_cr("_native_context->module(): %p", native_mod);
+  if (func_mod != normal_mod && func_mod != native_mod) {
+    tty->print_cr("WARNING: Function's Module is neither normal nor native context!");
+    tty->print_cr("  Function Module: %p", func_mod);
+    tty->print_cr("  Normal Module: %p", normal_mod);
+    tty->print_cr("  Native Module: %p", native_mod);
+  } else {
+    tty->print_cr("Function's Module matches context: %s", 
+                   (func_mod == normal_mod) ? "normal" : "native");
+  }
+  
+  // Debug 4: Verify IR correctness (不需要锁)
+  tty->print_cr("Verifying Function IR...");
+  if (llvm::verifyFunction(*function, &llvm::errs())) {
+    fatal(err_msg("Function %s failed IR verification!", name));
+  }
+  tty->print_cr("IR verification passed");
+  
+  // Check if Function is in Module's function list (不需要锁)
+  bool found_in_module = false;
+  for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
+    if (&*I == function) {
+      found_in_module = true;
+      break;
+    }
+  }
+  tty->print_cr("Function found in Module function list: %s", found_in_module ? "YES" : "NO");
+  
+  // Print Function details (不需要锁)
+  tty->print_cr("Function linkage: %d", (int)function->getLinkage());
+  tty->print_cr("Function isDeclaration: %s", function->isDeclaration() ? "YES" : "NO");
+  tty->print_cr("Function hasBody: %s", function->empty() ? "NO" : "YES");
+  if (!function->empty()) {
+    tty->print_cr("Function basic blocks: %d", (int)function->size());
+  }
+  // ========== End of 锁外调试代码 ==========
+  
   {
     MutexLocker locker(execution_engine_lock());
+    
+    // ========== Debug 3: 锁内的检查（需要访问 execution_engine()）==========
+    // Debug 3: Check ExecutionEngine state
+    if (!execution_engine()) {
+      fatal(err_msg("ExecutionEngine is NULL!"));
+    }
+    tty->print_cr("ExecutionEngine: %p", execution_engine());
+    // ========== End of 锁内调试代码 ==========
+    
     free_queued_methods();
 
 #ifndef NDEBUG
@@ -469,9 +534,27 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     }
 #endif // !NDEBUG
     memory_manager()->set_entry_for_function(function, entry);
+    
+    // Debug: Before calling getPointerToFunction
+    tty->print_cr("Calling getPointerToFunction for %s...", name);
+    
     code = (address) execution_engine()->getPointerToFunction(function);
+    
+    // Debug: After calling getPointerToFunction
+    tty->print_cr("getPointerToFunction returned: %p", code);
+    if (code == NULL) {
+      tty->print_cr("ERROR: getPointerToFunction returned NULL for %s!", name);
+      tty->print_cr("  Function: %p", function);
+      tty->print_cr("  Function Module: %p", func_mod);
+      tty->print_cr("  ExecutionEngine: %p", execution_engine());
+      // Note: LLVM 20's ExecutionEngine may not directly expose error messages
+      // But we can check if there are any obvious issues
+    }
   }
-  assert(code != NULL, "code must be != NULL");
+  
+  if (code == NULL) {
+    fatal(err_msg("getPointerToFunction returned NULL for %s. Check debug output above for details.", name));
+  }
   entry->set_entry_point(code);
   entry->set_function(function);
   entry->set_context(context());
