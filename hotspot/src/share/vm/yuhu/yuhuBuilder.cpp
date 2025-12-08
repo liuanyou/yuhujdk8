@@ -412,7 +412,13 @@ Value* YuhuBuilder::check_special_condition_for_native_trans() {
 }
 
 Value* YuhuBuilder::frame_address() {
+#if LLVM_VERSION_MAJOR >= 20
+  // LLVM 20+ requires type information in intrinsic name
+  // llvm.frameaddress.p0: returns pointer type (p0)
+  return make_function("llvm.frameaddress.p0", "i", "C");
+#else
   return make_function("llvm.frameaddress", "i", "C");
+#endif
 }
 
 Value* YuhuBuilder::memset() {
