@@ -121,16 +121,22 @@ unsigned char *YuhuMemoryManager::allocateSpace(intptr_t Size,
 // LLVM 4.0+ (including LLVM 20) - RTDyldMemoryManager implementation
 #if LLVM_VERSION_MAJOR >= 4
 uint8_t *YuhuMemoryManager::allocateCodeSection(uintptr_t Size, unsigned Alignment, unsigned SectionID, llvm::StringRef SectionName) {
-  // Use SectionMemoryManager as a base implementation
-  // For now, we use a simple malloc-based allocation
-  // TODO: Implement proper memory management
-  return (uint8_t*)os::malloc(Size, mtCode);
+  // Scheme 1: allocate executable memory directly from CodeCache so LLVM
+  // emits code into CodeCache, then we hand the same bytes to nmethod.
+  size_t align = Alignment == 0 ? (size_t)CodeEntryAlignment : (size_t)Alignment;
+  size_t alloc_size = align_size_up((size_t)Size, align);
+  BufferBlob* blob = BufferBlob::create("yuhu-llvm-code", alloc_size);
+  if (blob == NULL) {
+    fatal(err_msg("YuhuMemoryManager::allocateCodeSection: failed to allocate BufferBlob from CodeCache (size=%u)", (unsigned)alloc_size));
+  }
+  _last_code.base = (uint8_t*)blob->content_begin();
+  _last_code.size = alloc_size;
+  _last_code.blob = blob;
+  return _last_code.base;
 }
 
 uint8_t *YuhuMemoryManager::allocateDataSection(uintptr_t Size, unsigned Alignment, unsigned SectionID, llvm::StringRef SectionName, bool IsReadOnly) {
-  // Use SectionMemoryManager as a base implementation
-  // For now, we use a simple malloc-based allocation
-  // TODO: Implement proper memory management
+  // Data sections are small; malloc is sufficient for now.
   return (uint8_t*)os::malloc(Size, mtCode);
 }
 
@@ -167,5 +173,12 @@ bool YuhuMemoryManager::finalizeMemory(std::string *ErrMsg) {
   // For now, we just return true (success)
   // TODO: Implement proper memory finalization
   return true;
+}
+
+void YuhuMemoryManager::release_last_code_blob() {
+  if (_last_code.blob != NULL) {
+    CodeCache::free(_last_code.blob);
+    clear_last_code_allocation();
+  }
 }
 #endif

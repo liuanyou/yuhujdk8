@@ -369,11 +369,18 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   ExceptionHandlerTable handler_table;
   ImplicitExceptionTable inc_table;
 
+  // Wrap LLVM-emitted code (already in CodeCache via YuhuMemoryManager) into a CodeBuffer
+  size_t llvm_code_size = (size_t)(entry->code_limit() - entry->code_start());
+  CodeBuffer llvm_cb(entry->code_start(), (CodeBuffer::csize_t)llvm_code_size);
+  // CodeBuffer constructor initializes _end to _start, so we need to set it to the actual end
+  llvm_cb.insts()->set_end(entry->code_limit());
+  llvm_cb.initialize_oop_recorder(env->oop_recorder());
+
   env->register_method(target,
                        entry_bci,
                        &offsets,
                        0,
-                       &hscb,
+                       &llvm_cb,
                        0,
                        &oopmaps,
                        &handler_table,
@@ -382,6 +389,12 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                        env->comp_level(),
                        false,
                        false);
+
+#if LLVM_VERSION_MAJOR >= 4
+  // Free the temporary BufferBlob allocated in YuhuMemoryManager once nmethod is installed.
+  // Safe to call without lock since nmethod has already copied the code.
+  release_last_code_blob_unlocked();
+#endif
 }
 
 nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
@@ -507,6 +520,10 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   }
   // ========== End of 锁外调试代码 ==========
   
+  // Declare variables outside the lock for use after lock is released
+  uint8_t* mm_base = NULL;
+  uintptr_t mm_size = 0;
+  
   {
     MutexLocker locker(execution_engine_lock());
     
@@ -550,12 +567,29 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       // Note: LLVM 20's ExecutionEngine may not directly expose error messages
       // But we can check if there are any obvious issues
     }
+    
+    // Get MemoryManager code section info while still holding the lock
+    // (memory_manager() requires execution_engine_lock)
+    mm_base = memory_manager()->last_code_base();
+    mm_size = memory_manager()->last_code_size();
   }
   
   if (code == NULL) {
     fatal(err_msg("getPointerToFunction returned NULL for %s. Check debug output above for details.", name));
   }
-  entry->set_entry_point(code);
+  // Prefer the address/size recorded by YuhuMemoryManager (CodeCache allocation)
+  // Note: mm_base and mm_size were obtained inside the lock above
+  if (mm_base != NULL && mm_size > 0) {
+    // Sanity: LLVM should have returned the same entry
+    if (code != (address)mm_base) {
+      tty->print_cr("WARNING: getPointerToFunction (%p) differs from MemoryManager base (%p); using MemoryManager base", code, mm_base);
+    }
+    entry->set_entry_point((address)mm_base);
+    entry->set_code_limit((address)(mm_base + mm_size));
+  } else {
+    entry->set_entry_point(code);
+    entry->set_code_limit(code);
+  }
   entry->set_function(function);
   entry->set_context(context());
   address code_start = entry->code_start();
@@ -584,6 +618,14 @@ void YuhuCompiler::free_compiled_method(address code) {
 
   YuhuEntry *entry = (YuhuEntry *) code;
   entry->context()->push_to_free_queue(entry->function());
+}
+
+void YuhuCompiler::release_last_code_blob_unlocked() {
+    if (_memory_manager != NULL) {
+        // CodeCache::free() requires CodeCache_lock
+        MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+        _memory_manager->release_last_code_blob();
+    }
 }
 
 void YuhuCompiler::free_queued_methods() {

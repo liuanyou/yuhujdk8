@@ -117,6 +117,8 @@ class YuhuCompiler : public AbstractCompiler {
     assert(execution_engine_lock()->owned_by_self(), "should be");
     return _memory_manager;
   }
+  // Release last code blob without requiring lock (safe after nmethod installation)
+  void release_last_code_blob_unlocked();
   llvm::ExecutionEngine* execution_engine() const {
     assert(execution_engine_lock()->owned_by_self(), "should be");
     return _execution_engine;

@@ -26,6 +26,11 @@
 #ifndef SHARE_VM_YUHU_YUHUMEMORYMANAGER_HPP
 #define SHARE_VM_YUHU_YUHUMEMORYMANAGER_HPP
 
+#include "code/codeCache.hpp"
+#include "code/relocInfo.hpp"
+#include "code/debugInfo.hpp"
+#include "code/codeBlob.hpp"
+#include "code/compiledIC.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuEntry.hpp"
 
@@ -43,6 +48,13 @@
   class YuhuMemoryManager : public llvm::RTDyldMemoryManager {
    private:
     std::map<const llvm::Function*, YuhuEntry*> _entry_map;
+    struct CodeAllocation {
+      uint8_t*    base;
+      uintptr_t   size;
+      BufferBlob* blob;
+      CodeAllocation() : base(NULL), size(0), blob(NULL) {}
+    };
+    CodeAllocation _last_code;
 
    public:
     YuhuMemoryManager() : llvm::RTDyldMemoryManager() {}
@@ -65,6 +77,17 @@
     uint64_t getSymbolAddress(const std::string &Name) override;
     void *getPointerToNamedFunction(const std::string &Name, bool AbortOnFailure = true) override;
     bool finalizeMemory(std::string *ErrMsg = nullptr) override;
+
+    // Helpers for YuhuCompiler to query/write back code address range
+    uint8_t*  last_code_base() const { return _last_code.base; }
+    uintptr_t last_code_size() const { return _last_code.size; }
+    BufferBlob* last_code_blob() const { return _last_code.blob; }
+    void clear_last_code_allocation() {
+      _last_code.base = NULL;
+      _last_code.size = 0;
+      _last_code.blob = NULL;
+    }
+    void release_last_code_blob();
   };
 #else
   // LLVM 3.x - old JITMemoryManager API
