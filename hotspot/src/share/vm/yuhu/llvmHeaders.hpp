@@ -116,6 +116,11 @@
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/Support/Threading.h>
 #include <llvm/Support/TargetSelect.h>
+#if LLVM_VERSION_MAJOR >= 20
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/TargetParser/Triple.h>
+#endif
 // JITMemoryManager was deprecated in LLVM 3.7 and removed in LLVM 3.9+
 // For LLVM 4.0+, we need to use RTDyldMemoryManager or SectionMemoryManager
 #if LLVM_VERSION_MAJOR >= 4

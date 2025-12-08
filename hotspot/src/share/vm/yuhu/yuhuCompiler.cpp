@@ -166,6 +166,60 @@ YuhuCompiler::YuhuCompiler()
   // Create the JIT
   std::string ErrorMsg;
 
+  // LLVM 20+: Set DataLayout for modules BEFORE creating ExecutionEngine
+  // This is critical to avoid SIGSEGV in getABITypeAlign
+  // We need to create a TargetMachine to get the DataLayout
+#if LLVM_VERSION_MAJOR >= 20
+  {
+    // Get target triple from module
+    std::string TripleStr = _normal_context->module()->getTargetTriple();
+    if (TripleStr.empty()) {
+      TripleStr = llvm::sys::getDefaultTargetTriple();
+    }
+    
+    // Look up target
+    std::string Error;
+    const llvm::Target* Target = llvm::TargetRegistry::lookupTarget(TripleStr, Error);
+    if (!Target) {
+      fatal(err_msg("Failed to lookup target: %s", Error.c_str()));
+    }
+    
+    // Create TargetMachine to get DataLayout
+    llvm::TargetOptions Options;
+    llvm::Reloc::Model RM = llvm::Reloc::Model::PIC_;
+    // Extract mattr string (remove "-mattr=" prefix if present)
+    std::string mattrStr;
+    if (gotCpuFeatures && !mattr.empty() && mattr != "-mattr=") {
+      mattrStr = mattr.substr(7);  // Remove "-mattr=" prefix
+    }
+    std::unique_ptr<llvm::TargetMachine> TM(
+      Target->createTargetMachine(TripleStr, MCPU, mattrStr, Options, RM));
+    
+    if (TM) {
+      // Get DataLayout string from TargetMachine
+      const llvm::DataLayout& DL = TM->createDataLayout();
+      std::string DLStr = DL.getStringRepresentation();
+      
+      // DEBUG: Print DataLayout string
+      tty->print_cr("Yuhu: Setting DataLayout: %s", DLStr.c_str());
+      
+      // Set DataLayout for both modules BEFORE creating ExecutionEngine
+      _normal_context->module()->setDataLayout(DLStr);
+      _native_context->module()->setDataLayout(DLStr);
+      
+      // DEBUG: Verify DataLayout was set
+      std::string verify1 = _normal_context->module()->getDataLayout().getStringRepresentation();
+      std::string verify2 = _native_context->module()->getDataLayout().getStringRepresentation();
+      tty->print_cr("Yuhu: Normal module DataLayout verified: %s", verify1.c_str());
+      tty->print_cr("Yuhu: Native module DataLayout verified: %s", verify2.c_str());
+      if (verify1 != DLStr || verify2 != DLStr) {
+        fatal(err_msg("DataLayout mismatch! Expected: %s, Got normal: %s, Got native: %s", 
+                      DLStr.c_str(), verify1.c_str(), verify2.c_str()));
+      }
+    }
+  }
+#endif
+
   // LLVM 20+ requires std::unique_ptr<Module> for EngineBuilder
   // EngineBuilder will take ownership of the Module, but YuhuContext still needs access
   // We'll create a new unique_ptr with default deleter, but we need to ensure
@@ -235,28 +289,6 @@ YuhuCompiler::YuhuCompiler()
       printf("Unknown error while creating Yuhu JIT\n");
     exit(1);
   }
-
-  // LLVM 20+: Set DataLayout for modules from ExecutionEngine's TargetMachine
-  // This is critical to avoid SIGSEGV in getABITypeAlign
-#if LLVM_VERSION_MAJOR >= 20
-  if (execution_engine()) {
-    // Get the TargetMachine from ExecutionEngine
-    llvm::TargetMachine* TM = execution_engine()->getTargetMachine();
-    if (TM) {
-      const llvm::DataLayout& DL = TM->createDataLayout();
-      // Set DataLayout for normal context module
-      // Note: ExecutionEngine owns the module now, but we can still set DataLayout
-      // The module pointer in YuhuContext is still valid (ExecutionEngine keeps it alive)
-      if (_normal_context->module()) {
-        _normal_context->module()->setDataLayout(DL);
-      }
-      // Set DataLayout for native context module (will be added later)
-      if (_native_context->module()) {
-        _native_context->module()->setDataLayout(DL);
-      }
-    }
-  }
-#endif
 
   // LLVM 20+ requires std::unique_ptr<Module> for addModule
 #if LLVM_VERSION_MAJOR >= 20
@@ -416,7 +448,9 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
 
   // Compile to native code
   address code = NULL;
-  context()->add_function(function);
+  // Note: Function is already added to Module in YuhuFunction::initialize()
+  // via Function::Create() with Module parameter, so add_function() is no longer needed
+  // context()->add_function(function);  // Removed: Function already in Module
   {
     MutexLocker locker(execution_engine_lock());
     free_queued_methods();

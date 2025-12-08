@@ -71,6 +71,29 @@ complexity = code_size * (num_blocks + 1) * (has_loops ? 2 : 1)
 
 ---
 
+### [活动 004: Function 没有 parent Module 导致 DataLayout 无法访问](004_function_no_parent_module.md)
+
+**日期**: 2025-12-06  
+**问题**: `Function has no parent Module` - Function 创建时没有指定 Module，导致 IRBuilder 无法访问 DataLayout
+
+**摘要**: 发现 `Function::Create` 使用了不包含 Module 参数的重载版本，导致 Function 没有 parent Module。当 IRBuilder 尝试通过 `func->getParent()->getDataLayout()` 访问 DataLayout 时失败。
+
+**根本原因**:
+- `Function::Create` 有两个重载版本：一个会自动添加到 Module，另一个不会
+- 当前代码使用了不会自动添加的版本
+- Function 要等到编译完成后才通过 `add_function` 添加到 Module，但此时已经在生成 IR 了
+
+**解决方案**:
+- 方案 1（推荐）：在创建 Function 时传入 Module 参数
+- 方案 2：创建 Function 后立即调用 `add_function` 添加到 Module
+
+**关键发现**:
+- DataLayout 已正确设置到 Module（已验证）
+- 问题在于 Function 没有 parent Module，无法通过 `func->getParent()` 访问 Module
+- IRBuilder 在 LLVM 20 中需要 Module 的 DataLayout 来计算对齐
+
+---
+
 ## 活动记录格式
 
 每个活动文档包含以下部分：

@@ -64,6 +64,35 @@ LoadInst* YuhuBuilder::CreateValueOfStructEntry(Value*      base,
                                                  ByteSize    offset,
                                                  llvm::Type* type,
                                                  const char* name) {
+  // DEBUG: Check DataLayout availability before CreateLoad
+  // This is where the crash happens, so we check everything step by step
+  static bool debug_printed = false;
+  if (!debug_printed) {
+    llvm::BasicBlock* bb = GetInsertBlock();
+    if (bb) {
+      llvm::Function* func = bb->getParent();
+      if (func) {
+        llvm::Module* mod = func->getParent();
+        if (mod) {
+          // Directly access DataLayout - this might crash if DataLayout is invalid
+          const llvm::DataLayout& dl = mod->getDataLayout();
+          std::string dlStr = dl.getStringRepresentation();
+          tty->print_cr("Yuhu: CreateLoad - Module DataLayout available: %s", dlStr.c_str());
+          debug_printed = true;
+        } else {
+          tty->print_cr("Yuhu: ERROR - Function has no parent Module!");
+          fatal("Function has no parent Module");
+        }
+      } else {
+        tty->print_cr("Yuhu: ERROR - BasicBlock has no parent Function!");
+        fatal("BasicBlock has no parent Function");
+      }
+    } else {
+      tty->print_cr("Yuhu: ERROR - IRBuilder has no insert block!");
+      fatal("IRBuilder has no insert block");
+    }
+  }
+  
   // LLVM 20+ requires explicit type parameter for CreateLoad
   return CreateLoad(
     type,

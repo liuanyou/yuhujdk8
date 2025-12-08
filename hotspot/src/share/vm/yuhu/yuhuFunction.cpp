@@ -39,11 +39,14 @@
 using namespace llvm;
 
 void YuhuFunction::initialize(const char *name) {
-  // Create the function
+  // Create the function and add it to the Module immediately
+  // This ensures the Function has a parent Module, which is required
+  // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _function = Function::Create(
     entry_point_type(),
     GlobalVariable::InternalLinkage,
-    name);
+    name,
+    YuhuContext::current().module());  // Pass Module so Function is added automatically
 
   // Get our arguments
   Function::arg_iterator ai = function()->arg_begin();
