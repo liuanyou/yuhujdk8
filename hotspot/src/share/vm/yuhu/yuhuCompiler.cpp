@@ -412,6 +412,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Build the LLVM IR for the method
   Function *function = YuhuFunction::build(env, &builder, flow, name);
   if (env->failing()) {
+    tty->print_cr("Yuhu: compile failing during IR build for %s entry_bci=%d comp_level=%d",
+                  name, entry_bci, env->comp_level());
     return;
   }
 
@@ -446,6 +448,19 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::Verified_Entry,
                       target->is_static() ? 0 : wordSize);
 
+    env->register_method(target,
+                         entry_bci,
+                         &offsets,
+                         0,
+                         &llvm_cb,
+                         0,
+                         &oopmaps,
+                         &handler_table,
+                         &inc_table,
+                         this,
+                         env->comp_level(),
+                         false,
+                         false);
   } else {
     // OSR method: build adapter + LLVM code into a combined CodeCache blob.
 
