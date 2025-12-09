@@ -46,6 +46,7 @@
 #include "utilities/debug.hpp"
 
 #include <fnmatch.h>
+#include <cstring>
 
 using namespace llvm;
 
@@ -306,6 +307,51 @@ void YuhuCompiler::initialize() {
   ShouldNotCallThis();
 }
 
+// Emit OSR adapter into the given CodeBuffer using YuhuMacroAssembler.
+// Arguments expected by LLVM function: (Method*, osr_buf, base_pc, thread)
+// Incoming from interpreter OSR jump: x0 = osr_buf
+// If llvm_label is non-NULL, emit a branch to the label (to be patched later).
+// Otherwise, emit an absolute jump to llvm_entry.
+static int generate_osr_adapter_into(CodeBuffer& cb,
+                                     Method* method,
+                                     address base_pc,
+                                     YuhuLabel* llvm_label,
+                                     address llvm_entry) {
+  YuhuMacroAssembler masm(&cb);
+  address start = masm.current_pc();
+
+  // Mark current PC for later use (avoid using lr).
+  YuhuLabel adapter_label;
+  masm.pin_label(adapter_label);
+  masm.write_inst_adr(YuhuMacroAssembler::x16, adapter_label); // x16 = current PC
+
+  // Save incoming osr_buf
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x17, YuhuMacroAssembler::x0); // x17 = osr_buf
+
+  // Load Method* (literal)
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x0, (uint64_t)method);
+
+  // Restore osr_buf into x1
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x17);
+
+  // Load base_pc (literal)
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x2, (uint64_t)base_pc);
+
+  // Load thread into x3
+  masm.write_insts_get_thread(YuhuMacroAssembler::x3);
+
+  // Jump to LLVM entry
+  if (llvm_label != NULL) {
+    masm.write_inst_b(*llvm_label);   // Placeholder, patched when label is bound
+  } else {
+    masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)llvm_entry);
+    masm.write_inst_br(YuhuMacroAssembler::x16);
+  }
+
+  address end = masm.current_pc();
+  return (int)(end - start);
+}
+
 void YuhuCompiler::compile_method(ciEnv*    env,
                                    ciMethod* target,
                                    int       entry_bci) {
@@ -342,6 +388,24 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   YuhuCodeBuffer cb(masm);
   YuhuBuilder builder(&cb);
 
+  // Remove any existing functions with the same name in both modules to avoid
+  // duplicated symbols (e.g., LLVM auto-suffix ".1") and potential EE failures.
+  {
+    const std::string func_name(name);
+    llvm::Module* mod_normal = _normal_context->module();
+    llvm::Module* mod_native = _native_context->module();
+    if (mod_normal != NULL) {
+      if (llvm::Function* oldf = mod_normal->getFunction(func_name)) {
+        oldf->eraseFromParent();
+      }
+    }
+    if (mod_native != NULL) {
+      if (llvm::Function* oldf = mod_native->getFunction(func_name)) {
+        oldf->eraseFromParent();
+      }
+    }
+  }
+
   // Emit the entry point
   YuhuEntry *entry = (YuhuEntry *) cb.malloc(sizeof(YuhuEntry));
 
@@ -359,36 +423,107 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     generate_native_code(entry, function, name);
   }
 
+  bool is_osr = (entry_bci != InvocationEntryBci);
+  int adapter_size = 0;
+
   // Install the method into the VM
   CodeOffsets offsets;
   offsets.set_value(CodeOffsets::Deopt, 0);
   offsets.set_value(CodeOffsets::Exceptions, 0);
-  offsets.set_value(CodeOffsets::Verified_Entry,
-                    target->is_static() ? 0 : wordSize);
 
   ExceptionHandlerTable handler_table;
   ImplicitExceptionTable inc_table;
 
   // Wrap LLVM-emitted code (already in CodeCache via YuhuMemoryManager) into a CodeBuffer
   size_t llvm_code_size = (size_t)(entry->code_limit() - entry->code_start());
-  CodeBuffer llvm_cb(entry->code_start(), (CodeBuffer::csize_t)llvm_code_size);
-  // CodeBuffer constructor initializes _end to _start, so we need to set it to the actual end
-  llvm_cb.insts()->set_end(entry->code_limit());
-  llvm_cb.initialize_oop_recorder(env->oop_recorder());
 
-  env->register_method(target,
-                       entry_bci,
-                       &offsets,
-                       0,
-                       &llvm_cb,
-                       0,
-                       &oopmaps,
-                       &handler_table,
-                       &inc_table,
-                       this,
-                       env->comp_level(),
-                       false,
-                       false);
+  if (!is_osr) {
+    // Normal method: behavior unchanged
+    CodeBuffer llvm_cb(entry->code_start(), (CodeBuffer::csize_t)llvm_code_size);
+    llvm_cb.insts()->set_end(entry->code_limit());
+    llvm_cb.initialize_oop_recorder(env->oop_recorder());
+
+    offsets.set_value(CodeOffsets::Verified_Entry,
+                      target->is_static() ? 0 : wordSize);
+
+  } else {
+    // OSR method: build adapter + LLVM code into a combined CodeCache blob.
+
+    // First, measure adapter size using a temporary CodeBuffer.
+    const int kAdapterBufSize = 512;
+    char adapter_buf[kAdapterBufSize];
+    CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
+    YuhuLabel dummy_label;
+    adapter_size = generate_osr_adapter_into(temp_cb,
+                                             target->get_Method(),
+                                             /*base_pc*/ (address)0,  // placeholder
+                                             &dummy_label,
+                                             /*llvm_entry*/ (address)0);
+    assert(adapter_size > 0 && adapter_size < kAdapterBufSize, "adapter size sanity");
+
+    size_t combined_size = adapter_size + llvm_code_size;
+
+    // Allocate new BufferBlob from CodeCache to hold adapter + llvm code.
+    BufferBlob* combined_blob = BufferBlob::create("yuhu-osr-combined", combined_size);
+    if (combined_blob == NULL) {
+      fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined BufferBlob (size=%zu)", combined_size));
+    }
+
+    address combined_base = (address)combined_blob->content_begin();
+    CodeBuffer combined_cb(combined_base, (CodeBuffer::csize_t)combined_size);
+
+    // Emit adapter into combined buffer with correct addresses.
+    YuhuLabel llvm_entry_label;
+    int emitted_adapter = generate_osr_adapter_into(combined_cb,
+                                                    target->get_Method(),
+                                                    /*base_pc*/ combined_base,
+                                                    &llvm_entry_label,
+                                                    /*llvm_entry*/ combined_base + adapter_size);
+    assert(emitted_adapter == adapter_size, "adapter size mismatch");
+
+    // Copy LLVM code after adapter.
+    memcpy(combined_base + adapter_size, entry->code_start(), llvm_code_size);
+
+    // Extend instruction section to cover adapter + LLVM code, then patch jump.
+    combined_cb.insts()->set_end(combined_base + combined_size);
+    {
+      YuhuMacroAssembler patch_masm(&combined_cb);
+      // Move the pc to LLVM entry for binding
+      combined_cb.insts()->set_end(combined_base + adapter_size);
+      patch_masm.pin_label(llvm_entry_label);
+      // Restore end to full size
+      combined_cb.insts()->set_end(combined_base + combined_size);
+    }
+
+    // Update entry points to the combined blob.
+    entry->set_entry_point(combined_base);
+    entry->set_code_limit(combined_base + combined_size);
+
+    // Prepare CodeBuffer for register_method.
+    CodeBuffer final_cb(combined_base, (CodeBuffer::csize_t)combined_size);
+    final_cb.insts()->set_end(combined_base + combined_size);
+    final_cb.initialize_oop_recorder(env->oop_recorder());
+
+    // For OSR nmethods, entry/verified_entry should be identical (static check),
+    // and execution enters via OSR_Entry. Keep both at 0 to satisfy nmethod asserts.
+    offsets.set_value(CodeOffsets::Entry, 0);
+    offsets.set_value(CodeOffsets::Verified_Entry, 0);
+    offsets.set_value(CodeOffsets::OSR_Entry, 0);           // adapter at start
+
+    env->register_method(target,
+                         entry_bci,
+                         &offsets,
+                         0,
+                         &final_cb,
+                         0,
+                         &oopmaps,
+                         &handler_table,
+                         &inc_table,
+                         this,
+                         env->comp_level(),
+                         false,
+                         false);
+  }
 
 #if LLVM_VERSION_MAJOR >= 4
   // Free the temporary BufferBlob allocated in YuhuMemoryManager once nmethod is installed.
