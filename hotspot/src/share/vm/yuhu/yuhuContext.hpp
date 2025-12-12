@@ -56,7 +56,27 @@ class YuhuContext : public llvm::LLVMContext {
   // Module accessors
  public:
   void add_function(llvm::Function* function) const {
-    module()->getFunctionList().push_back(function);
+    // Check if function is already in the module
+    // If it is, don't add it again (to avoid issues with push_back)
+    llvm::Module* mod = module();
+    if (function->getParent() == mod) {
+      // Function is already in the module, check if it's in the function list
+      bool found = false;
+      for (llvm::Module::iterator I = mod->begin(), E = mod->end(); I != E; ++I) {
+        if (&*I == function) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        // Function is in module but not in list, add it
+        mod->getFunctionList().push_back(function);
+      }
+      // If found, do nothing - function is already in the list
+    } else {
+      // Function is not in this module, add it
+      mod->getFunctionList().push_back(function);
+    }
   }
   llvm::Constant* get_external(const char*               name,
                                llvm::FunctionType* sig) {

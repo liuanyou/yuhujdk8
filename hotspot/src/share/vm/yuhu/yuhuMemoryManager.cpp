@@ -123,6 +123,8 @@ unsigned char *YuhuMemoryManager::allocateSpace(intptr_t Size,
 uint8_t *YuhuMemoryManager::allocateCodeSection(uintptr_t Size, unsigned Alignment, unsigned SectionID, llvm::StringRef SectionName) {
   // Scheme 1: allocate executable memory directly from CodeCache so LLVM
   // emits code into CodeCache, then we hand the same bytes to nmethod.
+  tty->print_cr("YuhuMemoryManager::allocateCodeSection called: Size=%lu, Alignment=%u, SectionID=%u, SectionName=%s", 
+                (unsigned long)Size, Alignment, SectionID, SectionName.str().c_str());
   size_t align = Alignment == 0 ? (size_t)CodeEntryAlignment : (size_t)Alignment;
   size_t alloc_size = align_size_up((size_t)Size, align);
   BufferBlob* blob = BufferBlob::create("yuhu-llvm-code", alloc_size);
@@ -132,6 +134,7 @@ uint8_t *YuhuMemoryManager::allocateCodeSection(uintptr_t Size, unsigned Alignme
   _last_code.base = (uint8_t*)blob->content_begin();
   _last_code.size = alloc_size;
   _last_code.blob = blob;
+  tty->print_cr("YuhuMemoryManager::allocateCodeSection: allocated base=%p, size=%lu", _last_code.base, (unsigned long)_last_code.size);
   return _last_code.base;
 }
 
@@ -177,8 +180,11 @@ bool YuhuMemoryManager::finalizeMemory(std::string *ErrMsg) {
 
 void YuhuMemoryManager::release_last_code_blob() {
   if (_last_code.blob != NULL) {
+    tty->print_cr("YuhuMemoryManager::release_last_code_blob: freeing blob base=%p, size=%lu", 
+                  _last_code.base, (unsigned long)_last_code.size);
     CodeCache::free(_last_code.blob);
     clear_last_code_allocation();
+    tty->print_cr("YuhuMemoryManager::release_last_code_blob: cleared _last_code");
   }
 }
 #endif

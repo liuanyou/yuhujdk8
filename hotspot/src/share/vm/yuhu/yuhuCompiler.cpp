@@ -357,8 +357,22 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                                    int       entry_bci) {
   assert(is_initialized(), "should be");
   ResourceMark rm;
-  const char *name = methodname(
+  const char *base_name = methodname(
     target->holder()->name()->as_utf8(), target->name()->as_utf8());
+
+  // Generate function name: for OSR entries, add ".osr.<entry_bci>" suffix
+  // to avoid LLVM ExecutionEngine caching issues (it caches by function name only,
+  // ignoring FunctionType differences between OSR and normal entries).
+  char func_name_buf[512];
+  const char *func_name;
+  if (entry_bci != InvocationEntryBci) {
+    // OSR entry: add suffix to distinguish from normal entry
+    snprintf(func_name_buf, sizeof(func_name_buf), "%s.osr.%d", base_name, entry_bci);
+    func_name = func_name_buf;
+  } else {
+    // Normal entry: use base name
+    func_name = base_name;
+  }
 
   // Do the typeflow analysis
   ciTypeFlow *flow;
@@ -369,7 +383,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   if (flow->failing())
     return;
   if (YuhuPrintTypeflowOf != NULL) {
-    if (!fnmatch(YuhuPrintTypeflowOf, name, 0))
+    if (!fnmatch(YuhuPrintTypeflowOf, base_name, 0))
       flow->print_on(tty);
   }
 
@@ -391,16 +405,16 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Remove any existing functions with the same name in both modules to avoid
   // duplicated symbols (e.g., LLVM auto-suffix ".1") and potential EE failures.
   {
-    const std::string func_name(name);
+    const std::string func_name_str(func_name);
     llvm::Module* mod_normal = _normal_context->module();
     llvm::Module* mod_native = _native_context->module();
     if (mod_normal != NULL) {
-      if (llvm::Function* oldf = mod_normal->getFunction(func_name)) {
+      if (llvm::Function* oldf = mod_normal->getFunction(func_name_str)) {
         oldf->eraseFromParent();
       }
     }
     if (mod_native != NULL) {
-      if (llvm::Function* oldf = mod_native->getFunction(func_name)) {
+      if (llvm::Function* oldf = mod_native->getFunction(func_name_str)) {
         oldf->eraseFromParent();
       }
     }
@@ -410,10 +424,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   YuhuEntry *entry = (YuhuEntry *) cb.malloc(sizeof(YuhuEntry));
 
   // Build the LLVM IR for the method
-  Function *function = YuhuFunction::build(env, &builder, flow, name);
+  Function *function = YuhuFunction::build(env, &builder, flow, func_name);
   if (env->failing()) {
-    tty->print_cr("Yuhu: compile failing during IR build for %s entry_bci=%d comp_level=%d",
-                  name, entry_bci, env->comp_level());
+    tty->print_cr("Yuhu: compile failing during IR build for %s (func_name=%s) entry_bci=%d comp_level=%d",
+                  base_name, func_name, entry_bci, env->comp_level());
     return;
   }
 
@@ -422,7 +436,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // other way to handle the locking.
   {
     ThreadInVMfromNative tiv(JavaThread::current());
-    generate_native_code(entry, function, name);
+    // Diagnostic: Check state before generate_native_code
+    tty->print_cr("Yuhu: Before generate_native_code for %s (entry_bci=%d)", func_name, entry_bci);
+    if (_memory_manager != NULL) {
+      uint8_t* mm_base = _memory_manager->last_code_base();
+      uintptr_t mm_size = _memory_manager->last_code_size();
+      tty->print_cr("Yuhu: MemoryManager state before generate_native_code: base=%p, size=%lu", 
+                    mm_base, (unsigned long)mm_size);
+    }
+    generate_native_code(entry, function, func_name);
   }
 
   bool is_osr = (entry_bci != InvocationEntryBci);
@@ -438,6 +460,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   // Wrap LLVM-emitted code (already in CodeCache via YuhuMemoryManager) into a CodeBuffer
   size_t llvm_code_size = (size_t)(entry->code_limit() - entry->code_start());
+  tty->print_cr("Yuhu: compile_method - entry_bci=%d, is_osr=%d, code_start=%p, code_limit=%p, llvm_code_size=%zu", 
+                entry_bci, is_osr, entry->code_start(), entry->code_limit(), llvm_code_size);
 
   if (!is_osr) {
     // Normal method: behavior unchanged
@@ -543,6 +567,29 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 #if LLVM_VERSION_MAJOR >= 4
   // Free the temporary BufferBlob allocated in YuhuMemoryManager once nmethod is installed.
   // Safe to call without lock since nmethod has already copied the code.
+  
+  // Diagnostic: Check ExecutionEngine and Module state after compilation
+  // Note: Must use ThreadInVMfromNative because execution_engine_lock() requires _thread_in_vm state
+  {
+    ThreadInVMfromNative tiv(JavaThread::current());
+    MutexLocker locker(execution_engine_lock());
+    tty->print_cr("Yuhu: After compilation (entry_bci=%d) - checking ExecutionEngine state:", entry_bci);
+    if (execution_engine() != NULL) {
+      tty->print_cr("  ExecutionEngine: %p", execution_engine());
+      // Check if we can query ExecutionEngine state
+      // Note: LLVM 20 ExecutionEngine may not expose direct state queries
+    }
+    llvm::Module* mod = _normal_context->module();
+    if (mod != NULL) {
+      tty->print_cr("  Module: %p, name: %s", mod, mod->getName().str().c_str());
+      int func_count = 0;
+      for (llvm::Module::iterator I = mod->begin(), E = mod->end(); I != E; ++I) {
+        func_count++;
+      }
+      tty->print_cr("  Total functions in Module: %d", func_count);
+    }
+  }
+  
   release_last_code_blob_unlocked();
 #endif
 }
@@ -611,13 +658,41 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
 
   // Compile to native code
   address code = NULL;
-  // Note: Function is already added to Module in YuhuFunction::initialize()
-  // via Function::Create() with Module parameter, so add_function() is no longer needed
-  // context()->add_function(function);  // Removed: Function already in Module
   
   // ========== Debug: Verify Function and Module state (from 006_getpointertofunction_returns_null.md) ==========
   // Debug 1-2, 4: 锁外的检查（不需要 execution_engine()）
   tty->print_cr("=== Yuhu: generate_native_code for %s ===", name);
+  
+  // Check Module function count before add_function
+  llvm::Module* mod_before = function->getParent();
+  int func_count_before = 0;
+  if (mod_before != NULL) {
+    for (llvm::Module::iterator I = mod_before->begin(), E = mod_before->end(); I != E; ++I) {
+      func_count_before++;
+    }
+    tty->print_cr("Yuhu: Module function count BEFORE add_function: %d", func_count_before);
+  }
+  
+  // Try explicit add_function call (even though Function is already in Module)
+  // This may trigger ExecutionEngine's "notification" mechanism
+  // See: 013_executionengine_api_analysis.md - 方案 A
+  context()->add_function(function);
+  
+  // Check Module function count after add_function
+  llvm::Module* mod_after = function->getParent();
+  int func_count_after = 0;
+  if (mod_after != NULL) {
+    for (llvm::Module::iterator I = mod_after->begin(), E = mod_after->end(); I != E; ++I) {
+      func_count_after++;
+    }
+    tty->print_cr("Yuhu: Module function count AFTER add_function: %d", func_count_after);
+    if (func_count_after > func_count_before) {
+      tty->print_cr("Yuhu: WARNING - Function may have been added twice! (before=%d, after=%d)", 
+                    func_count_before, func_count_after);
+    } else if (func_count_after == func_count_before) {
+      tty->print_cr("Yuhu: Function count unchanged - LLVM may have ignored duplicate add");
+    }
+  }
   
   // Debug 1: Verify Function is in Module
   llvm::Module* func_mod = function->getParent();
@@ -683,6 +758,33 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       fatal(err_msg("ExecutionEngine is NULL!"));
     }
     tty->print_cr("ExecutionEngine: %p", execution_engine());
+    
+    // Diagnostic: Check MemoryManager state at start of generate_native_code
+    if (_memory_manager != NULL) {
+      uint8_t* mm_base = _memory_manager->last_code_base();
+      uintptr_t mm_size = _memory_manager->last_code_size();
+      tty->print_cr("Yuhu: MemoryManager state at start (inside lock): base=%p, size=%lu", 
+                    mm_base, (unsigned long)mm_size);
+    }
+    
+    // Diagnostic: Check Module state
+    llvm::Module* func_mod = function->getParent();
+    if (func_mod != NULL) {
+      tty->print_cr("Yuhu: Module state check:");
+      tty->print_cr("  Module pointer: %p", func_mod);
+      tty->print_cr("  Module name: %s", func_mod->getName().str().c_str());
+      // Count functions in module
+      int func_count = 0;
+      for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
+        func_count++;
+      }
+      tty->print_cr("  Total functions in Module: %d", func_count);
+      // List all function names
+      tty->print_cr("  Functions in Module:");
+      for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
+        tty->print_cr("    - %s (ptr=%p)", I->getName().str().c_str(), &*I);
+      }
+    }
     // ========== End of 锁内调试代码 ==========
     
     free_queued_methods();
@@ -704,6 +806,62 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     
     // Debug: Before calling getPointerToFunction
     tty->print_cr("Calling getPointerToFunction for %s...", name);
+    tty->print_cr("  Function pointer: %p", function);
+    tty->print_cr("  Function name: %s", function->getName().str().c_str());
+    // Print function signature (FunctionType)
+    llvm::FunctionType* func_type = function->getFunctionType();
+    tty->print_cr("  Function return type: %s", 
+                   func_type->getReturnType()->getTypeID() == llvm::Type::IntegerTyID ? "int" : "other");
+    tty->print_cr("  Function param count: %d", (int)func_type->getNumParams());
+    
+    // Diagnostic: Check MemoryManager state before getPointerToFunction
+    if (_memory_manager != NULL) {
+      uint8_t* mm_base_before = _memory_manager->last_code_base();
+      uintptr_t mm_size_before = _memory_manager->last_code_size();
+      tty->print_cr("  MemoryManager state before getPointerToFunction: base=%p, size=%lu", 
+                    mm_base_before, (unsigned long)mm_size_before);
+    }
+    
+    // Check if there's an existing function with the same name in the module
+    llvm::Module* mod = function->getParent();
+    if (mod != NULL) {
+      llvm::Function* existing = mod->getFunction(function->getName());
+      if (existing != NULL && existing != function) {
+        tty->print_cr("  WARNING: Module contains another Function with same name: %p", existing);
+        llvm::FunctionType* existing_type = existing->getFunctionType();
+        tty->print_cr("    Existing function param count: %d", (int)existing_type->getNumParams());
+        tty->print_cr("    New function param count: %d", (int)func_type->getNumParams());
+        if (existing_type->getNumParams() != func_type->getNumParams()) {
+          tty->print_cr("    ERROR: Different parameter counts! This should not be cached!");
+        }
+      } else if (existing == function) {
+        tty->print_cr("  Function found in Module by name (same pointer)");
+      } else {
+        tty->print_cr("  No existing function with same name in Module");
+      }
+    }
+    
+    // Diagnostic: Check ExecutionEngine state
+    tty->print_cr("  ExecutionEngine state before getPointerToFunction: %p", execution_engine());
+    
+    // Diagnostic: Check Module state before calling getPointerToFunction
+    // This helps us understand if ExecutionEngine can see new functions added to Module
+    // Note: 'mod' is already defined above, reuse it
+    if (mod != NULL) {
+      tty->print_cr("  Module state before getPointerToFunction:");
+      tty->print_cr("    Module pointer: %p", mod);
+      tty->print_cr("    Module name: %s", mod->getName().str().c_str());
+      // List all functions in Module to see what ExecutionEngine should be able to see
+      int func_count = 0;
+      for (llvm::Module::iterator I = mod->begin(), E = mod->end(); I != E; ++I) {
+        func_count++;
+        tty->print_cr("      Function %d: %s (ptr=%p)", func_count, 
+                     I->getName().str().c_str(), &*I);
+      }
+      tty->print_cr("    Total functions in Module: %d", func_count);
+      tty->print_cr("    Target function: %s (ptr=%p)", 
+                    function->getName().str().c_str(), function);
+    }
     
     code = (address) execution_engine()->getPointerToFunction(function);
     
@@ -722,6 +880,8 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     // (memory_manager() requires execution_engine_lock)
     mm_base = memory_manager()->last_code_base();
     mm_size = memory_manager()->last_code_size();
+    tty->print_cr("Yuhu: after getPointerToFunction - mm_base=%p, mm_size=%lu, code=%p", 
+                  mm_base, (unsigned long)mm_size, code);
   }
   
   if (code == NULL) {
@@ -729,6 +889,8 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   }
   // Prefer the address/size recorded by YuhuMemoryManager (CodeCache allocation)
   // Note: mm_base and mm_size were obtained inside the lock above
+  tty->print_cr("Yuhu: setting entry code range - mm_base=%p, mm_size=%lu, code=%p", 
+                mm_base, (unsigned long)mm_size, code);
   if (mm_base != NULL && mm_size > 0) {
     // Sanity: LLVM should have returned the same entry
     if (code != (address)mm_base) {
@@ -736,7 +898,11 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     }
     entry->set_entry_point((address)mm_base);
     entry->set_code_limit((address)(mm_base + mm_size));
+    tty->print_cr("Yuhu: using MemoryManager range: code_start=%p, code_limit=%p, size=%lu", 
+                  (address)mm_base, (address)(mm_base + mm_size), (unsigned long)mm_size);
   } else {
+    tty->print_cr("Yuhu: WARNING - mm_base is NULL or mm_size is 0! Using getPointerToFunction address as both start and limit");
+    tty->print_cr("Yuhu: This will result in zero code size. code=%p", code);
     entry->set_entry_point(code);
     entry->set_code_limit(code);
   }
@@ -772,9 +938,21 @@ void YuhuCompiler::free_compiled_method(address code) {
 
 void YuhuCompiler::release_last_code_blob_unlocked() {
     if (_memory_manager != NULL) {
+        // Diagnostic: Check state before release
+        uint8_t* before_base = _memory_manager->last_code_base();
+        uintptr_t before_size = _memory_manager->last_code_size();
+        tty->print_cr("Yuhu: release_last_code_blob_unlocked - before: base=%p, size=%lu", 
+                      before_base, (unsigned long)before_size);
+        
         // CodeCache::free() requires CodeCache_lock
         MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
         _memory_manager->release_last_code_blob();
+        
+        // Diagnostic: Check state after release
+        uint8_t* after_base = _memory_manager->last_code_base();
+        uintptr_t after_size = _memory_manager->last_code_size();
+        tty->print_cr("Yuhu: release_last_code_blob_unlocked - after: base=%p, size=%lu", 
+                      after_base, (unsigned long)after_size);
     }
 }
 
