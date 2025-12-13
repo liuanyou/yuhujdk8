@@ -30,12 +30,16 @@
 #include "ci/ciMethod.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compileBroker.hpp"
+#include <memory>  // For std::unique_ptr
 // Forward declarations to avoid including LLVM headers in header file
 // This allows compileBroker.cpp (C++11) to include this header without C++17
 // LLVM headers are only included in .cpp files which can use C++17
 namespace llvm {
   class ExecutionEngine;
   class Function;
+  namespace orc {
+    class LLJIT;
+  }
 }
 class YuhuContext;
 class YuhuMemoryManager;
@@ -45,6 +49,9 @@ class YuhuCompiler : public AbstractCompiler {
  public:
   // Creation
   YuhuCompiler();
+  // Destructor must be declared here but defined in .cpp file
+  // because std::unique_ptr<llvm::orc::LLJIT> needs complete type for destruction
+  ~YuhuCompiler();
 
   // Name of this compiler
   const char *name()     { return "yuhu"; }
@@ -102,27 +109,26 @@ class YuhuCompiler : public AbstractCompiler {
   // The LLVM execution engine is the JIT we use to generate native
   // code.  It is thread safe, but we need to protect it with a lock
   // of our own because otherwise LLVM's lock and HotSpot's locks
-  // interleave and deadlock.  The YuhuMemoryManager is not thread
-  // safe, and is protected by the same lock as the execution engine.
+  // interleave and deadlock.
+  // Note: We use ORC JIT (LLVM 11+), which requires LLVM 11 or later.
+  // LLVM 20 is recommended and fully supported.
  private:
   Monitor*               _execution_engine_lock;
-  YuhuMemoryManager*    _memory_manager;
-  llvm::ExecutionEngine* _execution_engine;
+  // ORC JIT (LLVM 11+) - recommended for LLVM 20
+  std::unique_ptr<llvm::orc::LLJIT> _jit;
+  // MemoryManager 由 ORC JIT 内部管理，或通过自定义 MemoryMapper
+  // TODO: In stage 2, integrate CodeCache via MemoryMapper
 
  private:
   Monitor* execution_engine_lock() const {
     return _execution_engine_lock;
   }
-  YuhuMemoryManager* memory_manager() const {
+  llvm::orc::LLJIT* jit() const {
     assert(execution_engine_lock()->owned_by_self(), "should be");
-    return _memory_manager;
+    return _jit.get();
   }
   // Release last code blob without requiring lock (safe after nmethod installation)
   void release_last_code_blob_unlocked();
-  llvm::ExecutionEngine* execution_engine() const {
-    assert(execution_engine_lock()->owned_by_self(), "should be");
-    return _execution_engine;
-  }
 
   // Global access
  public:

@@ -82,8 +82,9 @@ ifeq ($(USE_YUHU_COMPILER), true)
       
       # Get LLVM libraries using the same components as documented in LLVM_JIT_FIX_GUIDE.md
       # Use --link-static to get individual library names (ensures all components are linked)
-      # Components: executionengine, mcjit, interpreter, aarch64
-      LLVM_LIBS_RAW := $(shell $(LLVM_CONFIG) --libs --link-static executionengine mcjit interpreter aarch64 2>/dev/null)
+      # Components: executionengine, mcjit, interpreter, aarch64, orcjit, orcshared, orctargetprocess
+      # Note: ORC JIT (LLVM 11+) requires orcjit, orcshared, and orctargetprocess components
+      LLVM_LIBS_RAW := $(shell $(LLVM_CONFIG) --libs --link-static executionengine mcjit interpreter aarch64 orcjit orcshared orctargetprocess 2>/dev/null)
       
       # Note: Keystone has been replaced with LLVM MC framework
       # No longer need to filter out conflicting libraries
@@ -92,7 +93,8 @@ ifeq ($(USE_YUHU_COMPILER), true)
       # If --link-static fails or returns empty, fall back to dynamic linking
       ifeq ($(LLVM_LIBS_RAW),)
         # Fallback: try dynamic linking with specific components
-        LLVM_LIBS_CORE := $(shell $(LLVM_CONFIG) --libs core executionengine jit native 2>/dev/null)
+        # Include ORC JIT components for LLVM 11+
+        LLVM_LIBS_CORE := $(shell $(LLVM_CONFIG) --libs core executionengine jit native orcjit orcshared orctargetprocess 2>/dev/null)
         LLVM_LIBS_AARCH64 := $(shell $(LLVM_CONFIG) --libs aarch64 2>/dev/null)
         LLVM_LIBS := $(LLVM_LIBS_CORE) $(LLVM_LIBS_AARCH64)
         $(warning Using dynamic LLVM libraries, static linking failed)

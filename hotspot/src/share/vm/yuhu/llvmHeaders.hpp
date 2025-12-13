@@ -113,7 +113,17 @@
   #endif
 #endif
 
+// ORC JIT (LLVM 11+) - recommended for LLVM 20
+// Note: ORC JIT requires LLVM 11 or later. LLVM 20 is recommended.
+#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
+#include <llvm/ExecutionEngine/Orc/Mangling.h>
+#include <llvm/Transforms/Utils/Cloning.h>  // For CloneModule
+#include <llvm/Support/Error.h>  // For handleAllErrors, ErrorInfoBase
+// Keep ExecutionEngine.h for forward declarations if needed
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
+
 #include <llvm/Support/Threading.h>
 #include <llvm/Support/TargetSelect.h>
 #if LLVM_VERSION_MAJOR >= 20
@@ -121,6 +131,7 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/TargetParser/Triple.h>
 #endif
+
 // JITMemoryManager was deprecated in LLVM 3.7 and removed in LLVM 3.9+
 // For LLVM 4.0+, we need to use RTDyldMemoryManager or SectionMemoryManager
 #if LLVM_VERSION_MAJOR >= 4
@@ -141,17 +152,6 @@
   #include <llvm/ExecutionEngine/JITMemoryManager.h>
 #endif
 #include <llvm/Support/CommandLine.h>
-#if LLVM_VERSION_MAJOR >= 4
-  // LLVM 4.0+ uses MCJIT (MCJIT.h and JIT.h merged)
-  #include <llvm/ExecutionEngine/MCJIT.h>
-  // Include Interpreter.h for LLVMLinkInInterpreter
-  #include <llvm/ExecutionEngine/Interpreter.h>
-#else
-  // LLVM 3.x - separate MCJIT and JIT headers
-  #include <llvm/ExecutionEngine/MCJIT.h>
-  #include <llvm/ExecutionEngine/JIT.h>
-  #include <llvm/ExecutionEngine/Interpreter.h>
-#endif
 #include <llvm/ADT/StringMap.h>
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/raw_ostream.h>

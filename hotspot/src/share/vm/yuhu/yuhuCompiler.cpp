@@ -130,8 +130,9 @@ YuhuCompiler::YuhuCompiler()
   _normal_context = new YuhuContext("normal");
   _native_context = new YuhuContext("native");
 
-  // Create the memory manager
-  _memory_manager = new YuhuMemoryManager();
+  // ORC JIT: MemoryManager is handled internally or via MemoryMapper
+  // We'll create it later if needed for CodeCache integration (stage 2)
+  // For now (stage 1), we use ORC JIT's default memory management
 
   // Finetune LLVM for the current host CPU.
   // LLVM 15+ changed getHostCPUFeatures() signature: it now returns StringMap instead of taking a reference
@@ -221,86 +222,85 @@ YuhuCompiler::YuhuCompiler()
   }
 #endif
 
-  // LLVM 20+ requires std::unique_ptr<Module> for EngineBuilder
-  // EngineBuilder will take ownership of the Module, but YuhuContext still needs access
-  // We'll create a new unique_ptr with default deleter, but we need to ensure
-  // the Module is not deleted when the unique_ptr is destroyed
-  // Note: ExecutionEngine will own the Module, so we can safely pass ownership
-#if LLVM_VERSION_MAJOR >= 20
-  // Create a unique_ptr with default deleter, but use a no-op deleter wrapper
-  // We'll manually manage the lifetime to avoid double deletion
-  llvm::Module* module = _normal_context->module();
-  // Create a unique_ptr that will transfer ownership to EngineBuilder
-  // The ExecutionEngine will own the Module, so we don't need to worry about deletion
-  std::unique_ptr<llvm::Module> module_ptr(module);
-  EngineBuilder builder(std::move(module_ptr));
-  // Note: After this, ExecutionEngine owns the Module, but YuhuContext still has a pointer
-  // This is safe because ExecutionEngine will keep the Module alive
-#else
-  EngineBuilder builder(_normal_context->module());
-#endif
-  
-  // Note: Target triple is already set in YuhuContext when creating the Module
-  // No need to set it again in EngineBuilder
-  
-  builder.setMCPU(MCPU);
-  builder.setMAttrs(MAttrs);
-  // LLVM 20+ uses setMCJITMemoryManager with std::unique_ptr
-#if LLVM_VERSION_MAJOR >= 20
-  // Create a unique_ptr with default deleter
-  // ExecutionEngine will own the MemoryManager, so we can safely pass ownership
-  RTDyldMemoryManager* mm = memory_manager();
-  std::unique_ptr<RTDyldMemoryManager> mm_ptr(mm);
-  builder.setMCJITMemoryManager(std::move(mm_ptr));
-  // Note: After this, ExecutionEngine owns the MemoryManager
-  // We still have the pointer in _memory_manager, but ExecutionEngine manages lifetime
-#else
-  builder.setJITMemoryManager(memory_manager());
-#endif
-  builder.setEngineKind(EngineKind::JIT);
-  builder.setErrorStr(&ErrorMsg);
-  if (! fnmatch(YuhuOptimizationLevel, "None", 0)) {
-    tty->print_cr("Yuhu optimization level set to: None");
-#if LLVM_VERSION_MAJOR >= 20
-    builder.setOptLevel(llvm::CodeGenOptLevel::None);
-#else
-    builder.setOptLevel(llvm::CodeGenOpt::None);
-#endif
-  } else if (! fnmatch(YuhuOptimizationLevel, "Less", 0)) {
-    tty->print_cr("Yuhu optimization level set to: Less");
-#if LLVM_VERSION_MAJOR >= 20
-    builder.setOptLevel(llvm::CodeGenOptLevel::Less);
-#else
-    builder.setOptLevel(llvm::CodeGenOpt::Less);
-#endif
-  } else if (! fnmatch(YuhuOptimizationLevel, "Aggressive", 0)) {
-    tty->print_cr("Yuhu optimization level set to: Aggressive");
-#if LLVM_VERSION_MAJOR >= 20
-    builder.setOptLevel(llvm::CodeGenOptLevel::Aggressive);
-#else
-    builder.setOptLevel(llvm::CodeGenOpt::Aggressive);
-#endif
-  } // else Default is selected by, well, default :-)
-  _execution_engine = builder.create();
-
-  if (!execution_engine()) {
-    if (!ErrorMsg.empty())
-      printf("Error while creating Yuhu JIT: %s\n",ErrorMsg.c_str());
-    else
-      printf("Unknown error while creating Yuhu JIT\n");
-    exit(1);
+  // ========== ORC JIT 初始化 (LLVM 11+) ==========
+  // Note: ORC JIT requires LLVM 11+. LLVM 20 is recommended.
+  // Get target triple from module
+  std::string TripleStr = _normal_context->module()->getTargetTriple();
+  if (TripleStr.empty()) {
+    TripleStr = llvm::sys::getDefaultTargetTriple();
   }
-
-  // LLVM 20+ requires std::unique_ptr<Module> for addModule
-#if LLVM_VERSION_MAJOR >= 20
-  std::unique_ptr<llvm::Module> native_module_ptr(_native_context->module());
-  execution_engine()->addModule(std::move(native_module_ptr));
-#else
-  execution_engine()->addModule(_native_context->module());
-#endif
+  
+  // Create LLJIT with target machine builder
+  auto JIT = llvm::orc::LLJITBuilder()
+    .setJITTargetMachineBuilder(
+      llvm::orc::JITTargetMachineBuilder(llvm::Triple(TripleStr))
+        .setCPU(MCPU)
+        .addFeatures(MAttrs))
+    .create();
+  
+  if (!JIT) {
+    std::string ErrMsg;
+    llvm::handleAllErrors(JIT.takeError(), [&](const llvm::ErrorInfoBase &EIB) {
+      ErrMsg = EIB.message();
+    });
+    fatal(err_msg("Failed to create LLJIT: %s", ErrMsg.c_str()));
+  }
+  
+  _jit = std::move(*JIT);
+  tty->print_cr("Yuhu: ORC JIT initialized successfully");
+  
+  // Add normal module to JITDylib
+  // Note: ORC JIT uses ThreadSafeModule, which requires ThreadSafeContext
+  // For now, we'll create a new ThreadSafeContext for each module
+  // TODO: Consider reusing ThreadSafeContext if possible
+  {
+    auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
+      std::make_unique<llvm::LLVMContext>());
+    
+    // Create ThreadSafeModule from normal module
+    // Note: We need to clone the module because ThreadSafeModule takes ownership
+    std::unique_ptr<llvm::Module> normal_module_clone(
+      llvm::CloneModule(*_normal_context->module()).release());
+    auto TSM = llvm::orc::ThreadSafeModule(
+      std::move(normal_module_clone), *TSCtx);
+    
+    auto &JD = _jit->getMainJITDylib();
+    if (auto Err = _jit->addIRModule(JD, std::move(TSM))) {
+      std::string ErrMsg;
+      llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
+        ErrMsg = EIB.message();
+      });
+      fatal(err_msg("Failed to add normal IR module: %s", ErrMsg.c_str()));
+    }
+  }
+  
+  // Add native module to JITDylib
+  {
+    auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
+      std::make_unique<llvm::LLVMContext>());
+    
+    std::unique_ptr<llvm::Module> native_module_clone(
+      llvm::CloneModule(*_native_context->module()).release());
+    auto TSM = llvm::orc::ThreadSafeModule(
+      std::move(native_module_clone), *TSCtx);
+    
+    auto &JD = _jit->getMainJITDylib();
+    if (auto Err = _jit->addIRModule(JD, std::move(TSM))) {
+      std::string ErrMsg;
+      llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
+        ErrMsg = EIB.message();
+      });
+      fatal(err_msg("Failed to add native IR module: %s", ErrMsg.c_str()));
+    }
+  }
 
   // All done
   set_state(initialized);
+}
+
+YuhuCompiler::~YuhuCompiler() {
+  // std::unique_ptr<llvm::orc::LLJIT> will automatically clean up
+  // No explicit cleanup needed
 }
 
 void YuhuCompiler::initialize() {
@@ -438,12 +438,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     ThreadInVMfromNative tiv(JavaThread::current());
     // Diagnostic: Check state before generate_native_code
     tty->print_cr("Yuhu: Before generate_native_code for %s (entry_bci=%d)", func_name, entry_bci);
-    if (_memory_manager != NULL) {
-      uint8_t* mm_base = _memory_manager->last_code_base();
-      uintptr_t mm_size = _memory_manager->last_code_size();
-      tty->print_cr("Yuhu: MemoryManager state before generate_native_code: base=%p, size=%lu", 
-                    mm_base, (unsigned long)mm_size);
-    }
+    // Note: ORC JIT uses default memory management in stage 1
+    // MemoryManager state will be available in stage 2 after CodeCache integration
     generate_native_code(entry, function, func_name);
   }
 
@@ -568,16 +564,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Free the temporary BufferBlob allocated in YuhuMemoryManager once nmethod is installed.
   // Safe to call without lock since nmethod has already copied the code.
   
-  // Diagnostic: Check ExecutionEngine and Module state after compilation
+  // Diagnostic: Check ORC JIT and Module state after compilation
   // Note: Must use ThreadInVMfromNative because execution_engine_lock() requires _thread_in_vm state
   {
     ThreadInVMfromNative tiv(JavaThread::current());
     MutexLocker locker(execution_engine_lock());
-    tty->print_cr("Yuhu: After compilation (entry_bci=%d) - checking ExecutionEngine state:", entry_bci);
-    if (execution_engine() != NULL) {
-      tty->print_cr("  ExecutionEngine: %p", execution_engine());
-      // Check if we can query ExecutionEngine state
-      // Note: LLVM 20 ExecutionEngine may not expose direct state queries
+    tty->print_cr("Yuhu: After compilation (entry_bci=%d) - checking ORC JIT state:", entry_bci);
+    if (jit() != NULL) {
+      tty->print_cr("  ORC JIT: %p", jit());
+      // Check if we can query ORC JIT state
     }
     llvm::Module* mod = _normal_context->module();
     if (mod != NULL) {
@@ -752,20 +747,15 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   {
     MutexLocker locker(execution_engine_lock());
     
-    // ========== Debug 3: 锁内的检查（需要访问 execution_engine()）==========
-    // Debug 3: Check ExecutionEngine state
-    if (!execution_engine()) {
-      fatal(err_msg("ExecutionEngine is NULL!"));
+    // ========== Debug 3: 锁内的检查（需要访问 jit()）==========
+    // ORC JIT: Check JIT state
+    if (!jit()) {
+      fatal(err_msg("ORC JIT is NULL!"));
     }
-    tty->print_cr("ExecutionEngine: %p", execution_engine());
+    tty->print_cr("ORC JIT: %p", jit());
     
-    // Diagnostic: Check MemoryManager state at start of generate_native_code
-    if (_memory_manager != NULL) {
-      uint8_t* mm_base = _memory_manager->last_code_base();
-      uintptr_t mm_size = _memory_manager->last_code_size();
-      tty->print_cr("Yuhu: MemoryManager state at start (inside lock): base=%p, size=%lu", 
-                    mm_base, (unsigned long)mm_size);
-    }
+    // Diagnostic: ORC JIT uses default memory management (stage 1)
+    // MemoryManager state will be available in stage 2 after CodeCache integration
     
     // Diagnostic: Check Module state
     llvm::Module* func_mod = function->getParent();
@@ -802,108 +792,95 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       }
     }
 #endif // !NDEBUG
-    memory_manager()->set_entry_for_function(function, entry);
     
-    // Debug: Before calling getPointerToFunction
-    tty->print_cr("Calling getPointerToFunction for %s...", name);
-    tty->print_cr("  Function pointer: %p", function);
-    tty->print_cr("  Function name: %s", function->getName().str().c_str());
-    // Print function signature (FunctionType)
-    llvm::FunctionType* func_type = function->getFunctionType();
-    tty->print_cr("  Function return type: %s", 
-                   func_type->getReturnType()->getTypeID() == llvm::Type::IntegerTyID ? "int" : "other");
-    tty->print_cr("  Function param count: %d", (int)func_type->getNumParams());
+    // ========== ORC JIT: 查找函数符号 ==========
+    // ORC JIT: Add the module containing this function to JITDylib if not already added
+    // Note: For ORC JIT, we need to add the module each time a new function is compiled
+    // This is different from MCJIT where modules are added once at initialization
     
-    // Diagnostic: Check MemoryManager state before getPointerToFunction
-    if (_memory_manager != NULL) {
-      uint8_t* mm_base_before = _memory_manager->last_code_base();
-      uintptr_t mm_size_before = _memory_manager->last_code_size();
-      tty->print_cr("  MemoryManager state before getPointerToFunction: base=%p, size=%lu", 
-                    mm_base_before, (unsigned long)mm_size_before);
+    // Get the module containing this function (func_mod already defined above in lock)
+    if (func_mod == NULL) {
+      fatal(err_msg("Function %s has no parent Module!", name));
     }
     
-    // Check if there's an existing function with the same name in the module
-    llvm::Module* mod = function->getParent();
-    if (mod != NULL) {
-      llvm::Function* existing = mod->getFunction(function->getName());
-      if (existing != NULL && existing != function) {
-        tty->print_cr("  WARNING: Module contains another Function with same name: %p", existing);
-        llvm::FunctionType* existing_type = existing->getFunctionType();
-        tty->print_cr("    Existing function param count: %d", (int)existing_type->getNumParams());
-        tty->print_cr("    New function param count: %d", (int)func_type->getNumParams());
-        if (existing_type->getNumParams() != func_type->getNumParams()) {
-          tty->print_cr("    ERROR: Different parameter counts! This should not be cached!");
-        }
-      } else if (existing == function) {
-        tty->print_cr("  Function found in Module by name (same pointer)");
-      } else {
-        tty->print_cr("  No existing function with same name in Module");
+    // For ORC JIT, we need to add the module to JITDylib
+    // Since modules are already added at initialization, we just need to lookup the function
+    // However, if this is a new function added to an existing module, we may need to re-add the module
+    // For now, we'll try lookup first, and if it fails, we'll add the module
+    
+    std::string func_name = function->getName().str();
+    tty->print_cr("ORC JIT: Looking up function: %s", func_name.c_str());
+    
+    // Try to lookup the function
+    auto Sym = jit()->lookup(func_name);
+    if (!Sym) {
+      // Function not found - may need to add module
+      tty->print_cr("ORC JIT: Function not found, adding module to JITDylib...");
+      
+      // Create ThreadSafeModule from the module containing this function
+      auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
+        std::make_unique<llvm::LLVMContext>());
+      
+      // Clone the module (ORC JIT takes ownership)
+      std::unique_ptr<llvm::Module> module_clone(
+        llvm::CloneModule(*func_mod).release());
+      auto TSM = llvm::orc::ThreadSafeModule(
+        std::move(module_clone), *TSCtx);
+      
+      // Add to JITDylib
+      auto &JD = jit()->getMainJITDylib();
+      if (auto Err = jit()->addIRModule(JD, std::move(TSM))) {
+        std::string ErrMsg;
+        llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
+          ErrMsg = EIB.message();
+        });
+        fatal(err_msg("Failed to add IR module for function %s: %s", name, ErrMsg.c_str()));
+      }
+      
+      // Try lookup again
+      Sym = jit()->lookup(func_name);
+      if (!Sym) {
+        std::string ErrMsg;
+        llvm::handleAllErrors(Sym.takeError(), [&](const llvm::ErrorInfoBase &EIB) {
+          ErrMsg = EIB.message();
+        });
+        fatal(err_msg("Failed to lookup function %s after adding module: %s", name, ErrMsg.c_str()));
       }
     }
     
-    // Diagnostic: Check ExecutionEngine state
-    tty->print_cr("  ExecutionEngine state before getPointerToFunction: %p", execution_engine());
+    // In LLVM 20, lookup returns Expected<ExecutorAddr>
+    // ExecutorAddr can be directly converted to address (it's essentially uint64_t)
+    code = (address) Sym->getValue();
+    tty->print_cr("ORC JIT: lookup returned: %p", code);
     
-    // Diagnostic: Check Module state before calling getPointerToFunction
-    // This helps us understand if ExecutionEngine can see new functions added to Module
-    // Note: 'mod' is already defined above, reuse it
-    if (mod != NULL) {
-      tty->print_cr("  Module state before getPointerToFunction:");
-      tty->print_cr("    Module pointer: %p", mod);
-      tty->print_cr("    Module name: %s", mod->getName().str().c_str());
-      // List all functions in Module to see what ExecutionEngine should be able to see
-      int func_count = 0;
-      for (llvm::Module::iterator I = mod->begin(), E = mod->end(); I != E; ++I) {
-        func_count++;
-        tty->print_cr("      Function %d: %s (ptr=%p)", func_count, 
-                     I->getName().str().c_str(), &*I);
-      }
-      tty->print_cr("    Total functions in Module: %d", func_count);
-      tty->print_cr("    Target function: %s (ptr=%p)", 
-                    function->getName().str().c_str(), function);
-    }
-    
-    code = (address) execution_engine()->getPointerToFunction(function);
-    
-    // Debug: After calling getPointerToFunction
-    tty->print_cr("getPointerToFunction returned: %p", code);
-    if (code == NULL) {
-      tty->print_cr("ERROR: getPointerToFunction returned NULL for %s!", name);
-      tty->print_cr("  Function: %p", function);
-      tty->print_cr("  Function Module: %p", func_mod);
-      tty->print_cr("  ExecutionEngine: %p", execution_engine());
-      // Note: LLVM 20's ExecutionEngine may not directly expose error messages
-      // But we can check if there are any obvious issues
-    }
-    
-    // Get MemoryManager code section info while still holding the lock
-    // (memory_manager() requires execution_engine_lock)
-    mm_base = memory_manager()->last_code_base();
-    mm_size = memory_manager()->last_code_size();
-    tty->print_cr("Yuhu: after getPointerToFunction - mm_base=%p, mm_size=%lu, code=%p", 
-                  mm_base, (unsigned long)mm_size, code);
+    // For ORC JIT, we don't have YuhuMemoryManager yet (stage 1: use default memory management)
+    // So we'll set mm_base and mm_size to NULL/0 for now
+    mm_base = NULL;
+    mm_size = 0;
+    tty->print_cr("ORC JIT: Using default memory management (mm_base=NULL, mm_size=0)");
   }
   
   if (code == NULL) {
-    fatal(err_msg("getPointerToFunction returned NULL for %s. Check debug output above for details.", name));
+    fatal(err_msg("ORC JIT lookup returned NULL for %s. Check debug output above for details.", name));
   }
-  // Prefer the address/size recorded by YuhuMemoryManager (CodeCache allocation)
-  // Note: mm_base and mm_size were obtained inside the lock above
+  // ORC JIT: For stage 1, we use default memory management
+  // mm_base and mm_size are NULL/0, so we use code address directly
+  // TODO: In stage 2, integrate CodeCache via MemoryMapper
   tty->print_cr("Yuhu: setting entry code range - mm_base=%p, mm_size=%lu, code=%p", 
                 mm_base, (unsigned long)mm_size, code);
   if (mm_base != NULL && mm_size > 0) {
-    // Sanity: LLVM should have returned the same entry
-    if (code != (address)mm_base) {
-      tty->print_cr("WARNING: getPointerToFunction (%p) differs from MemoryManager base (%p); using MemoryManager base", code, mm_base);
-    }
     entry->set_entry_point((address)mm_base);
     entry->set_code_limit((address)(mm_base + mm_size));
-    tty->print_cr("Yuhu: using MemoryManager range: code_start=%p, code_limit=%p, size=%lu", 
+    tty->print_cr("ORC JIT: using MemoryManager range: code_start=%p, code_limit=%p, size=%lu", 
                   (address)mm_base, (address)(mm_base + mm_size), (unsigned long)mm_size);
   } else {
-    tty->print_cr("Yuhu: WARNING - mm_base is NULL or mm_size is 0! Using getPointerToFunction address as both start and limit");
-    tty->print_cr("Yuhu: This will result in zero code size. code=%p", code);
+    // For ORC JIT stage 1, we don't have CodeCache integration yet
+    // Use code address directly (will be fixed in stage 2)
+    tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
+    tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
     entry->set_entry_point(code);
+    // TODO: Get actual code size from ORC JIT
+    // For now, set a placeholder limit (will be fixed in stage 2)
     entry->set_code_limit(code);
   }
   entry->set_function(function);
@@ -937,23 +914,10 @@ void YuhuCompiler::free_compiled_method(address code) {
 }
 
 void YuhuCompiler::release_last_code_blob_unlocked() {
-    if (_memory_manager != NULL) {
-        // Diagnostic: Check state before release
-        uint8_t* before_base = _memory_manager->last_code_base();
-        uintptr_t before_size = _memory_manager->last_code_size();
-        tty->print_cr("Yuhu: release_last_code_blob_unlocked - before: base=%p, size=%lu", 
-                      before_base, (unsigned long)before_size);
-        
-        // CodeCache::free() requires CodeCache_lock
-        MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
-        _memory_manager->release_last_code_blob();
-        
-        // Diagnostic: Check state after release
-        uint8_t* after_base = _memory_manager->last_code_base();
-        uintptr_t after_size = _memory_manager->last_code_size();
-        tty->print_cr("Yuhu: release_last_code_blob_unlocked - after: base=%p, size=%lu", 
-                      after_base, (unsigned long)after_size);
-    }
+    // Note: ORC JIT uses default memory management in stage 1
+    // MemoryManager integration will be added in stage 2
+    // For now, this is a no-op
+    tty->print_cr("Yuhu: release_last_code_blob_unlocked - ORC JIT stage 1 (no-op)");
 }
 
 void YuhuCompiler::free_queued_methods() {
@@ -968,7 +932,8 @@ void YuhuCompiler::free_queued_methods() {
     // LLVM 20+ removed freeMachineCodeForFunction
     // The function will be freed when the module is removed
 #if LLVM_VERSION_MAJOR < 20
-    execution_engine()->freeMachineCodeForFunction(function);
+    // Note: ORC JIT manages code lifecycle automatically
+    // No need to explicitly free machine code
 #endif
     function->eraseFromParent();
   }
