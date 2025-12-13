@@ -431,6 +431,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     tty->print_cr("Yuhu: Before generate_native_code for %s (entry_bci=%d)", func_name, entry_bci);
     // Note: ORC JIT uses default memory management in stage 1
     // MemoryManager state will be available in stage 2 after CodeCache integration
+    // Note: Compiler threads are already in WXWrite mode, so no need to manage WX state
     generate_native_code(entry, function, func_name);
   }
 
@@ -788,6 +789,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     // ORC JIT: Add the module containing this function to JITDylib if not already added
     // Note: For ORC JIT, we need to add the module each time a new function is compiled
     // This is different from MCJIT where modules are added once at initialization
+    // Note: Compiler threads are already in WXWrite mode, so no need to manage WX state
     
     // Get the module containing this function (func_mod already defined above in lock)
     if (func_mod == NULL) {
@@ -888,9 +890,18 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
     tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
     entry->set_entry_point(code);
-    // TODO: Get actual code size from ORC JIT
-    // For now, set a placeholder limit (will be fixed in stage 2)
-    entry->set_code_limit(code);
+    
+    // Estimate code size based on function structure (temporary solution for stage 1)
+    // Use basic block count to estimate size
+    // In LLVM 20, use size() method instead of getBasicBlockList().size()
+    size_t bb_count = function->size();  // size() returns the number of basic blocks
+    size_t estimated_size = bb_count * 128;  // Estimate ~128 bytes per basic block
+    if (estimated_size < 512) estimated_size = 512;  // Minimum 512 bytes
+    if (estimated_size > 65536) estimated_size = 65536;  // Maximum 64KB (safety limit)
+    
+    entry->set_code_limit((address)(code + estimated_size));
+    tty->print_cr("ORC JIT: Estimated code size: %zu bytes (%zu basic blocks)", 
+                  estimated_size, bb_count);
   }
   entry->set_function(function);
   entry->set_context(context());

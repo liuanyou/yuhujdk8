@@ -386,6 +386,11 @@ Value* YuhuBuilder::uncommon_trap() {
   return make_function((address) YuhuRuntime::uncommon_trap, "Ti", "i");
 }
 
+Value* YuhuBuilder::debug_stack_overflow_check() {
+  // Signature: "Txxxxxx" -> "v" (Thread*, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t -> void)
+  return make_function((address) YuhuRuntime::debug_stack_overflow_check, "Txxxxxx", "v");
+}
+
 Value* YuhuBuilder::deoptimized_entry_point() {
   // For AArch64, we don't use CppInterpreter, so we need a different approach
   // TemplateInterpreter uses a different deoptimization mechanism

@@ -44,11 +44,31 @@ void YuhuFunction::initialize(const char *name) {
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _function = Function::Create(
     entry_point_type(),
-    GlobalVariable::ExternalLinkage,  // Changed from InternalLinkage to ExternalLinkage
-                                      // InternalLinkage functions are not exported to symbol table,
-                                      // making them invisible to ORC JIT lookup
+    Function::ExternalLinkage,  // Changed from InternalLinkage to ExternalLinkage
+                                // InternalLinkage functions are not exported to symbol table,
+                                // making them invisible to ORC JIT lookup
+                                // Use Function::ExternalLinkage instead of GlobalVariable::ExternalLinkage
     name,
     YuhuContext::current().module());  // Pass Module so Function is added automatically
+  
+  // Debug: Print linkage value to verify it's set correctly
+  // In LLVM, ExternalLinkage should be 6, InternalLinkage should be 0
+  int linkage_value = (int)_function->getLinkage();
+  if (YuhuTraceInstalls) {
+    tty->print_cr("YuhuFunction: Created function %s with linkage %d (ExternalLinkage expected: 6)", 
+                   name, linkage_value);
+  }
+  
+  // Verify linkage was set correctly
+  // Note: In some LLVM versions, ExternalLinkage might be 0, but we want ExternalLinkage
+  if (_function->getLinkage() != Function::ExternalLinkage) {
+    // If linkage is not ExternalLinkage, explicitly set it
+    _function->setLinkage(Function::ExternalLinkage);
+    if (YuhuTraceInstalls) {
+      tty->print_cr("YuhuFunction: Linkage was %d, explicitly set to ExternalLinkage (%d)", 
+                     linkage_value, (int)_function->getLinkage());
+    }
+  }
 
   // Get our arguments
   Function::arg_iterator ai = function()->arg_begin();

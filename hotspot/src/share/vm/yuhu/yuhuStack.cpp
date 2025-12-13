@@ -65,8 +65,8 @@ void YuhuStack::initialize(Value* method) {
     LLVMValue::intptr_constant((frame_words + extra_locals) * wordSize),
     "new_sp");
   
-  // Check for stack overflow
-  CreateStackOverflowCheck(stack_pointer);
+  // Check for stack overflow (with debug logging)
+  CreateStackOverflowCheck(stack_pointer, current_sp);
   
   // Initialize stack pointer storage
   initialize_stack_pointers(stack_pointer);
@@ -136,11 +136,13 @@ void YuhuStack::initialize(Value* method) {
 
 // Stack overflow check for AArch64
 // AArch64 uses standard ABI stack, so we only need to check the ABI stack
-void YuhuStack::CreateStackOverflowCheck(Value* sp) {
+// This should match SharkStack::CreateStackOverflowCheck logic for ABI stack
+void YuhuStack::CreateStackOverflowCheck(Value* sp, Value* current_sp) {
   BasicBlock *overflow = CreateBlock("stack_overflow");
   BasicBlock *ok       = CreateBlock("stack_ok");
 
   // Calculate stack bottom (stack_base - stack_size)
+  // This is the lowest address of the thread's stack
   Value *stack_base = builder()->CreateValueOfStructEntry(
     thread(),
     Thread::stack_base_offset(),
@@ -153,15 +155,24 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp) {
     "stack_size");
   Value *stack_bottom = builder()->CreateSub(stack_base, stack_size, "stack_bottom");
   
-  // Calculate minimum required stack (stack_bottom + shadow pages)
-  Value *min_stack = builder()->CreateAdd(
-    stack_bottom,
-    LLVMValue::intptr_constant(StackShadowPages * os::vm_page_size()),
-    "min_stack");
+  // Calculate available stack space from current SP to stack bottom
+  // Shark uses: free_stack = current_sp - stack_top, then checks free_stack < shadow_pages
+  // We use the same logic: check if (current_sp - stack_bottom) < shadow_pages
+  // This is equivalent to: current_sp < (stack_bottom + shadow_pages)
+  if (current_sp == NULL) {
+    // If current_sp not provided, use frameaddress to get current stack pointer
+    current_sp = builder()->CreatePtrToInt(
+      builder()->CreateGetFrameAddress(),
+      YuhuType::intptr_type(),
+      "current_sp");
+  }
+  Value *free_stack = builder()->CreateSub(current_sp, stack_bottom, "free_stack");
+  Value *shadow_size = LLVMValue::intptr_constant(StackShadowPages * os::vm_page_size());
   
-  // Check if new stack pointer is below minimum
+  // Check if available stack space is less than shadow pages
+  // This matches Shark's logic: free_stack < shadow_pages
   builder()->CreateCondBr(
-    builder()->CreateICmpULT(sp, min_stack),
+    builder()->CreateICmpULT(free_stack, shadow_size),
     overflow, ok);
 
   // Handle overflow

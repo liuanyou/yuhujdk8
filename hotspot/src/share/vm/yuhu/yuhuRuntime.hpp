@@ -92,6 +92,15 @@ class YuhuRuntime : public AllStatic {
   static void dump(const char *name, intptr_t value);
   static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
   static int uncommon_trap(JavaThread* thread, int trap_request);
+  
+  // Debug helper for stack overflow check
+  static void debug_stack_overflow_check(JavaThread* thread,
+                                         intptr_t current_sp,
+                                         intptr_t new_sp,
+                                         intptr_t stack_base,
+                                         intptr_t stack_size,
+                                         intptr_t stack_bottom,
+                                         intptr_t min_stack);
 };
 
 #endif // SHARE_VM_YUHU_YUHURUNTIME_HPP

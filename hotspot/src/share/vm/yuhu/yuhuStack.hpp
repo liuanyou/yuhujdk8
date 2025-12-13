@@ -50,7 +50,7 @@ class YuhuStack : public YuhuCompileInvariants {
   void initialize(llvm::Value* method);
 
  protected:
-  void CreateStackOverflowCheck(llvm::Value* sp);
+  void CreateStackOverflowCheck(llvm::Value* sp, llvm::Value* current_sp = NULL);
 
   // Properties of the method being compiled
  protected:

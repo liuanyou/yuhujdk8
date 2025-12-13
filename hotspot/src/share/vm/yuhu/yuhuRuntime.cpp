@@ -205,32 +205,33 @@ int YuhuRuntime::uncommon_trap(JavaThread* thread, int trap_request) {
 
   // TODO: AArch64 implementation
   // For AArch64, deoptimization uses standard frame API, not ZeroStack
-  // This needs to be reimplemented using standard frame management
-  // For now, we use a simplified approach that should work for basic cases
-  
-  // Initiate the trap
-  // For AArch64, we need to set the frame anchor manually
-  // Note: AArch64 doesn't have set_last_Java_frame() like Zero does
-  // We need to use frame_anchor() to access the anchor
-  // The deoptimization code will set the frame anchor, so we just clear it first
-  JavaFrameAnchor* anchor = thread->frame_anchor();
-  anchor->clear();
-  
-  Deoptimization::UnrollBlock *urb =
-    Deoptimization::uncommon_trap(thread, trap_request);
-  
-  // For AArch64, Deoptimization::unpack_frames handles frame creation
-  // We don't need to manually create FakeStubFrame or InterpreterFrame
-  // The unpack_frames will set the frame anchor as needed
-  Deoptimization::unpack_frames(thread, Deoptimization::Unpack_uncommon_trap);
-  
-  // Reset the anchor after unpacking
-  anchor->clear();
-
-  // Return the number of frames
-  int number_of_frames = urb->number_of_frames();
-  return number_of_frames;
+  return 0;
 }
 
-// Note: FakeStubFrame is Zero-architecture specific and not needed for AArch64
-// AArch64 uses standard frame API for deoptimization
+void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
+                                             intptr_t current_sp,
+                                             intptr_t new_sp,
+                                             intptr_t stack_base,
+                                             intptr_t stack_size,
+                                             intptr_t stack_bottom,
+                                             intptr_t min_stack) {
+  tty->print_cr("=== Yuhu Stack Overflow Check Debug ===");
+  tty->print_cr("Thread: %p", thread);
+  tty->print_cr("Current SP (from frameaddress): 0x%lx", (unsigned long)current_sp);
+  tty->print_cr("New SP (after frame allocation): 0x%lx", (unsigned long)new_sp);
+  tty->print_cr("Stack base: 0x%lx", (unsigned long)stack_base);
+  tty->print_cr("Stack size: 0x%lx (%lu bytes)", (unsigned long)stack_size, (unsigned long)stack_size);
+  tty->print_cr("Stack bottom (base - size): 0x%lx", (unsigned long)stack_bottom);
+  tty->print_cr("Min stack (bottom + shadow): 0x%lx", (unsigned long)min_stack);
+  tty->print_cr("StackShadowPages: %d, page_size: %d", StackShadowPages, os::vm_page_size());
+  tty->print_cr("Shadow size: %lu bytes", (unsigned long)(StackShadowPages * os::vm_page_size()));
+  
+  intptr_t available_stack = current_sp - stack_bottom;
+  intptr_t required_stack = stack_base - new_sp;
+  tty->print_cr("Available stack space: 0x%lx (%lu bytes)", (unsigned long)available_stack, (unsigned long)available_stack);
+  tty->print_cr("Required stack space: 0x%lx (%lu bytes)", (unsigned long)required_stack, (unsigned long)required_stack);
+  tty->print_cr("New SP < Min Stack? %s (0x%lx < 0x%lx)", 
+                (new_sp < min_stack) ? "YES - OVERFLOW!" : "NO - OK",
+                (unsigned long)new_sp, (unsigned long)min_stack);
+  tty->print_cr("======================================");
+}
