@@ -44,7 +44,9 @@ void YuhuFunction::initialize(const char *name) {
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _function = Function::Create(
     entry_point_type(),
-    GlobalVariable::InternalLinkage,
+    GlobalVariable::ExternalLinkage,  // Changed from InternalLinkage to ExternalLinkage
+                                      // InternalLinkage functions are not exported to symbol table,
+                                      // making them invisible to ORC JIT lookup
     name,
     YuhuContext::current().module());  // Pass Module so Function is added automatically
 

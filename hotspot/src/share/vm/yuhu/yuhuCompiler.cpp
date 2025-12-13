@@ -360,19 +360,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   const char *base_name = methodname(
     target->holder()->name()->as_utf8(), target->name()->as_utf8());
 
-  // Generate function name: for OSR entries, add ".osr.<entry_bci>" suffix
-  // to avoid LLVM ExecutionEngine caching issues (it caches by function name only,
-  // ignoring FunctionType differences between OSR and normal entries).
-  char func_name_buf[512];
-  const char *func_name;
-  if (entry_bci != InvocationEntryBci) {
-    // OSR entry: add suffix to distinguish from normal entry
-    snprintf(func_name_buf, sizeof(func_name_buf), "%s.osr.%d", base_name, entry_bci);
-    func_name = func_name_buf;
-  } else {
-    // Normal entry: use base name
-    func_name = base_name;
-  }
+  // Use base name directly for both OSR and normal entries.
+  // ORC JIT uses JITDylib isolation, so we don't need to distinguish by function name.
+  // Removing the ".osr.<entry_bci>" suffix that was added for MCJIT compatibility.
+  const char *func_name = base_name;
 
   // Do the typeflow analysis
   ciTypeFlow *flow;
@@ -809,7 +800,12 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     // For now, we'll try lookup first, and if it fails, we'll add the module
     
     std::string func_name = function->getName().str();
-    tty->print_cr("ORC JIT: Looking up function: %s", func_name.c_str());
+    tty->print_cr("ORC JIT: Looking up function: %s (linkage=%d)", 
+                   func_name.c_str(), (int)function->getLinkage());
+    
+    // Debug: Try to get mangled name
+    auto MangledName = jit()->mangle(func_name);
+    tty->print_cr("ORC JIT: Mangled name: %s", MangledName.c_str());
     
     // Try to lookup the function
     auto Sym = jit()->lookup(func_name);
@@ -824,11 +820,23 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       // Clone the module (ORC JIT takes ownership)
       std::unique_ptr<llvm::Module> module_clone(
         llvm::CloneModule(*func_mod).release());
+      
+      // Debug: Check if cloned module contains the function
+      llvm::Function* cloned_func = module_clone->getFunction(func_name);
+      if (cloned_func == NULL) {
+        tty->print_cr("ERROR: Cloned module does not contain function %s!", func_name.c_str());
+        fatal(err_msg("Cloned module missing function %s", name));
+      } else {
+        tty->print_cr("Cloned module contains function: %s (linkage=%d)", 
+                     func_name.c_str(), (int)cloned_func->getLinkage());
+      }
+      
       auto TSM = llvm::orc::ThreadSafeModule(
         std::move(module_clone), *TSCtx);
       
       // Add to JITDylib
       auto &JD = jit()->getMainJITDylib();
+      tty->print_cr("ORC JIT: Adding module to JITDylib (function: %s)", func_name.c_str());
       if (auto Err = jit()->addIRModule(JD, std::move(TSM))) {
         std::string ErrMsg;
         llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
@@ -836,6 +844,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
         });
         fatal(err_msg("Failed to add IR module for function %s: %s", name, ErrMsg.c_str()));
       }
+      tty->print_cr("ORC JIT: Module added successfully");
       
       // Try lookup again
       Sym = jit()->lookup(func_name);
