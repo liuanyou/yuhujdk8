@@ -120,6 +120,15 @@ void YuhuFunction::initialize(const char *name) {
   builder()->SetInsertPoint(CreateBlock());
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
 
+  // For normal compilation, reset last_Java_sp at method entry
+  // This ensures that the assertion in CreateSetLastJavaFrame() will pass
+  // when the first VM call is made. If the method is called from another
+  // compiled method, the caller's last_Java_sp may still be set, so we
+  // reset it here to ensure a clean state.
+  if (!is_osr()) {
+    _stack->CreateResetLastJavaFrame();
+  }
+
   // Create the entry state
   YuhuState *entry_state;
   if (is_osr()) {

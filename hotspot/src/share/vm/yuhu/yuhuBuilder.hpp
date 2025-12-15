@@ -188,6 +188,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Public interface to low-level non-VM calls.
  public:
   llvm::CallInst* CreateGetFrameAddress();
+  llvm::CallInst* CreateReadStackPointer();  // Read actual SP register (x31) on AArch64
   llvm::CallInst* CreateMemset(llvm::Value* dst,
                                llvm::Value* value,
                                llvm::Value* len,

@@ -50,7 +50,9 @@ class YuhuStack : public YuhuCompileInvariants {
   void initialize(llvm::Value* method);
 
  protected:
-  void CreateStackOverflowCheck(llvm::Value* sp, llvm::Value* current_sp = NULL);
+  // Stack overflow check - checks if the new stack pointer (sp) has enough space
+  // FIXED: Now only takes sp parameter, checks the actual stack pointer after frame allocation
+  void CreateStackOverflowCheck(llvm::Value* sp);
 
   // Properties of the method being compiled
  protected:
@@ -170,6 +172,8 @@ class YuhuStack : public YuhuCompileInvariants {
   void CreateSetLastJavaFrame() {
     // Note that whenever _last_Java_sp != NULL other anchor fields
     // must be valid.  The profiler apparently depends on this.
+    // For normal compilation, we reset last_Java_sp at method entry,
+    // so it should be 0 when the first VM call is made.
     NOT_PRODUCT(CreateAssertLastJavaSPIsNull());
     builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
     // XXX There's last_Java_pc as well, but I don't think anything uses it
