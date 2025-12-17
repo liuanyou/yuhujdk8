@@ -854,17 +854,64 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
   check_null(array);
   check_bounds(array, index);
 
-  // CreateArrayAddress returns a pointer to the array element
-  // The element type is YuhuType::to_arrayType(basic_type)
-  llvm::Type* element_type = YuhuType::to_arrayType(basic_type);
-  Value *value = builder()->CreateLoad(
-    element_type,  // Explicitly pass type for LLVM 20+
-    builder()->CreateArrayAddress(
-      array->jarray_value(), basic_type, index->jint_value()));
-
-  llvm::Type *stack_type = YuhuType::to_stackType(basic_type);  // Use llvm::Type to avoid conflict
-  if (value->getType() != stack_type)
-    value = builder()->CreateIntCast(value, stack_type, basic_type != T_CHAR);
+  // For T_OBJECT with compressed oops, array elements are stored as i32 (narrowOop),
+  // not as ptr. We need to load as i32 first, then decompress.
+  Value *value;
+  if (basic_type == T_OBJECT && UseCompressedOops) {
+    // Load as i32 (compressed pointer)
+    llvm::Type* narrow_oop_type = YuhuType::jint_type();  // i32 for compressed oop
+    Value* addr = builder()->CreateArrayAddress(
+      array->jarray_value(), basic_type, index->jint_value());
+    // Cast address to i32* for loading compressed pointer
+    Value* narrow_addr = builder()->CreateBitCast(
+      addr,
+      llvm::PointerType::getUnqual(narrow_oop_type),
+      "narrow_oop_addr");
+    value = builder()->CreateLoad(narrow_oop_type, narrow_addr, "compressed_oop");
+    
+    // Decompress: uncompressed = heap_base + (compressed << 3)
+    // If heap_base is NULL, then: uncompressed = compressed << 3
+    address heap_base = Universe::narrow_oop_base();
+    int shift = Universe::narrow_oop_shift();
+    
+    // value is i32 (compressed pointer), extend to i64 for arithmetic
+    Value* compressed_intptr = builder()->CreateZExt(
+      value, YuhuType::intptr_type(), "compressed_intptr");
+    
+    // Shift left by 3 (or by Universe::narrow_oop_shift())
+    Value* shifted = builder()->CreateShl(
+      compressed_intptr,
+      LLVMValue::intptr_constant(shift),
+      "compressed_shifted");
+    
+    if (heap_base != NULL) {
+      // Add heap base
+      value = builder()->CreateAdd(
+        shifted,
+        LLVMValue::intptr_constant((intptr_t)heap_base),
+        "decompressed_oop");
+    } else {
+      value = shifted;
+    }
+    
+    // Cast back to pointer type
+    value = builder()->CreateIntToPtr(
+      value,
+      llvm::PointerType::getUnqual(YuhuType::oop_type()),
+      "decompressed_ptr");
+  } else {
+    // Normal load for non-compressed oops or other types
+    llvm::Type* element_type = YuhuType::to_arrayType(basic_type);
+    value = builder()->CreateLoad(
+      element_type,  // Explicitly pass type for LLVM 20+
+      builder()->CreateArrayAddress(
+        array->jarray_value(), basic_type, index->jint_value()));
+    
+    // Do normal type conversion
+    llvm::Type *stack_type = YuhuType::to_stackType(basic_type);  // Use llvm::Type to avoid conflict
+    if (value->getType() != stack_type)
+      value = builder()->CreateIntCast(value, stack_type, basic_type != T_CHAR);
+  }
 
   switch (basic_type) {
   case T_BYTE:
@@ -887,6 +934,7 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
     break;
 
   case T_OBJECT:
+    
     // You might expect that array->type()->is_array_klass() would
     // always be true, but it isn't.  If ciTypeFlow detects that a
     // value is always null then that value becomes an untyped null
