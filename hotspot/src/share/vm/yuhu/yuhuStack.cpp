@@ -59,7 +59,10 @@ void YuhuStack::initialize(Value* method) {
   Value *current_sp = builder()->CreateReadStackPointer();
   
   // Calculate frame size in bytes
-  int frame_size_bytes = (frame_words + extra_locals) * wordSize;
+  // FIXED: Use extended_frame_size instead of (frame_words + extra_locals)
+  // because we need space for all locals_words, not just extra_locals
+  // extended_frame_size = frame_words + locals_words
+  int frame_size_bytes = extended_frame_size() * wordSize;
   
   // AArch64 requires 16-byte stack alignment
   // Align frame size up to 16 bytes
