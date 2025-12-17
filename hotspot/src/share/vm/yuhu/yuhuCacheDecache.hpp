@@ -390,8 +390,20 @@ class YuhuFunctionEntryCacher : public YuhuCacher {
 
 class YuhuNormalEntryCacher : public YuhuFunctionEntryCacher {
  public:
-  YuhuNormalEntryCacher(YuhuFunction* function, llvm::Value* method)
-    : YuhuFunctionEntryCacher(function, method) {}
+  YuhuNormalEntryCacher(YuhuFunction* function,
+                        llvm::Value*   method,
+                        llvm::Value*   arg_base,
+                        llvm::Value*   arg_count)
+    : YuhuFunctionEntryCacher(function, method),
+      _arg_base(arg_base),
+      _arg_count(arg_count) {}
+
+ protected:
+  void process_local_slot(int index, YuhuValue** addr, int offset);
+
+ private:
+  llvm::Value* _arg_base;   // intptr pointing to packed Java args
+  llvm::Value* _arg_count;  // jint count of args (currently informational)
 };
 
 class YuhuOSREntryCacher : public YuhuFunctionEntryCacher {

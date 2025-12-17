@@ -42,6 +42,8 @@ void YuhuFunction::initialize(const char *name) {
   // Create the function and add it to the Module immediately
   // This ensures the Function has a parent Module, which is required
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
+  _arg_base = NULL;
+  _arg_count = NULL;
   _function = Function::Create(
     entry_point_type(),
     Function::ExternalLinkage,  // Changed from InternalLinkage to ExternalLinkage
@@ -85,6 +87,14 @@ void YuhuFunction::initialize(const char *name) {
   llvm::Argument *thread = ai++;  // Use llvm::Argument to avoid conflict
   thread->setName("thread");
   set_thread(thread);
+
+  // Normal entry extra arguments: arg_base (intptr) and arg_count (jint)
+  if (!is_osr()) {
+    _arg_base  = ai++;
+    _arg_base->setName("arg_base");
+    _arg_count = ai++;
+    _arg_count->setName("arg_count");
+  }
 
   // Create the list of blocks
   set_block_insertion_point(NULL);

@@ -67,6 +67,8 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuTopLevelBlock**              _blocks;
   GrowableArray<DeferredZeroCheck*> _deferred_zero_checks;
   YuhuStack*                       _stack;
+  llvm::Value*                     _arg_base;
+  llvm::Value*                     _arg_count;
 
  public:
   llvm::Function* function() const {
@@ -85,6 +87,8 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuStack* stack() const {
     return _stack;
   }
+  llvm::Value* arg_base() const { return _arg_base; }
+  llvm::Value* arg_count() const { return _arg_count; }
 
   // On-stack replacement
  private:

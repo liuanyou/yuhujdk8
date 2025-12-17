@@ -312,13 +312,19 @@ void YuhuCompiler::initialize() {
 // Incoming from interpreter OSR jump: x0 = osr_buf
 // If llvm_label is non-NULL, emit a branch to the label (to be patched later).
 // Otherwise, emit an absolute jump to llvm_entry.
+// NOTE: base_pc parameter is ignored - we use PC-relative address calculation instead.
 static int generate_osr_adapter_into(CodeBuffer& cb,
                                      Method* method,
-                                     address base_pc,
+                                     address base_pc,  // Unused - kept for compatibility
                                      YuhuLabel* llvm_label,
                                      address llvm_entry) {
   YuhuMacroAssembler masm(&cb);
   address start = masm.current_pc();
+
+  // Create a label at the start of the adapter to calculate base_pc
+  // This ensures base_pc points to the actual CodeCache address after register_method
+  YuhuLabel base_pc_label;
+  masm.pin_label(base_pc_label);
 
   // Mark current PC for later use (avoid using lr).
   YuhuLabel adapter_label;
@@ -334,8 +340,9 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
   // Restore osr_buf into x1
   masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x17);
 
-  // Load base_pc (literal)
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x2, (uint64_t)base_pc);
+  // Load base_pc using PC-relative address calculation
+  // This ensures base_pc is correct even after code relocation in nmethod::new_nmethod
+  masm.write_inst_adr(YuhuMacroAssembler::x2, base_pc_label); // x2 = base_pc (adapter start)
 
   // Load thread into x3
   masm.write_insts_get_thread(YuhuMacroAssembler::x3);
@@ -355,49 +362,129 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
 }
 
 // Emit normal entry adapter into the given CodeBuffer using YuhuMacroAssembler.
-// Arguments expected by LLVM function: (Method*, base_pc, thread)
+// Arguments expected by LLVM function: (Method*, base_pc, thread, arg_base, arg_count)
 // Incoming from i2c adapter: x0-x7 = Java method arguments
 // rmethod (R12) = Method*
 // rthread (R28) = JavaThread*
-// This adapter rearranges parameters to match Yuhu's expected signature.
+// This adapter:
+// 1. Packs Java args into a temporary buffer
+// 2. Passes Method*, base_pc, thread, arg_base, arg_count to LLVM
+// 3. Lets LLVM prologue allocate the Yuhu frame
+// NOTE: base_pc parameter is ignored - we use PC-relative address calculation instead.
 static int generate_normal_adapter_into(CodeBuffer& cb,
                                        Method* method,
-                                       address base_pc,
+                                       address base_pc,  // Unused - kept for compatibility
                                        YuhuLabel* llvm_label,
                                        address llvm_entry) {
   YuhuMacroAssembler masm(&cb);
   address start = masm.current_pc();
 
-  // Save Java method arguments (x0-x7) to stack
-  // We need to save them because we'll overwrite x0, x1, x2
-  // Allocate space on stack: 8 registers * 8 bytes = 64 bytes (16-byte aligned)
-  masm.write_inst("sub sp, sp, #64");  // Allocate 64 bytes on stack
-  masm.write_inst("stp x0, x1, [sp, #0]");
-  masm.write_inst("stp x2, x3, [sp, #16]");
-  masm.write_inst("stp x4, x5, [sp, #32]");
-  masm.write_inst("stp x6, x7, [sp, #48]");
+  // Create a label at the start of the adapter to calculate base_pc
+  // This ensures base_pc points to the actual CodeCache address after register_method
+  YuhuLabel base_pc_label;
+  masm.pin_label(base_pc_label);
 
-  // Get Method* from rmethod (R12) → x0
-  masm.write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x12);
+  // Save caller's SP before we modify it (needed to read stack args if arg_count > 8)
+  masm.write_inst("mov x15, sp");  // x15 = caller's SP (save before modifying SP)
 
-  // Load base_pc (literal) → x1
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x1, (uint64_t)base_pc);
+  // Get Method* from rmethod (R12) → x8 (temporary, we'll move to x0 later)
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x12);
 
-  // Get thread from rthread (R28) → x2
-  masm.write_inst_mov_reg(YuhuMacroAssembler::x2, YuhuMacroAssembler::x28);
+  // Load ConstMethod* from Method* → x9
+  // Method::_constMethod offset
+  masm.write_inst("ldr x9, [x8, #%d]", in_bytes(Method::const_offset()));
 
-  // Restore Java method arguments from stack to x3-x7 (x0-x2 are already set)
-  masm.write_inst("ldp x3, x4, [sp, #16]");  // Restore original x2, x3 to x3, x4
-  masm.write_inst("ldp x5, x6, [sp, #32]");   // Restore original x4, x5 to x5, x6
-  masm.write_inst("ldr x7, [sp, #48]");      // Restore original x6 to x7
-  // Note: original x0, x1 are lost (they were Java method args, now replaced by Method*, base_pc)
-  // Original x7 is lost (we only have 8 registers, and we need x0-x2 for Yuhu signature)
-  // This is acceptable because:
-  // 1. If there are more than 6 arguments, they should be on the stack (AArch64 calling convention)
-  // 2. The LLVM function will read arguments from the correct locations (registers or stack)
+  // Load max_stack, max_locals, size_of_parameters from ConstMethod* → x10, x11, x12
+  // ConstMethod::_max_stack offset (u2, 16-bit)
+  masm.write_inst("ldrh w10, [x9, #%d]", in_bytes(ConstMethod::max_stack_offset()));
+  // ConstMethod::_max_locals offset (u2, 16-bit)
+  masm.write_inst("ldrh w11, [x9, #%d]", in_bytes(ConstMethod::size_of_locals_offset()));
+  // ConstMethod::_size_of_parameters offset (u2, 16-bit)
+  masm.write_inst("ldrh w12, [x9, #%d]", in_bytes(ConstMethod::size_of_parameters_offset()));
 
-  // Deallocate stack space
-  masm.write_inst("add sp, sp, #64");
+  // Calculate buffer size: max(8, arg_count) * 8 bytes, aligned to 16 bytes
+  // This ensures we have space for at least 8 args (registers) and potentially more (stack args)
+  masm.write_inst("mov x13, x12");  // x13 = arg_count
+  masm.write_inst("cmp x13, #8");   // Compare arg_count with 8
+  masm.write_inst("mov x14, #8");   // x14 = 8
+  masm.write_inst("csel x13, x14, x13, lt");  // x13 = max(arg_count, 8): if arg_count < 8, use 8, else use arg_count
+  masm.write_inst("lsl x13, x13, #3");  // x13 = buffer_size_bytes (multiply by 8)
+  masm.write_inst("add x13, x13, #15");  // Add 15 for alignment
+  masm.write_inst("bic x13, x13, #15");  // Align to 16 bytes
+
+  // Allocate argument buffer on stack
+  masm.write_inst("sub sp, sp, x13");  // Allocate buffer_size_bytes on stack
+  masm.write_inst("mov x14, sp");     // x14 = arg_base (buffer base address)
+
+  // Save Java method arguments (x0-x7) to buffer
+  masm.write_inst("stp x0, x1, [x14, #0]");
+  masm.write_inst("stp x2, x3, [x14, #16]");
+  masm.write_inst("stp x4, x5, [x14, #32]");
+  masm.write_inst("stp x6, x7, [x14, #48]");
+
+  // If arg_count > 8, copy stack arguments from caller's stack to buffer
+  // Stack args are located at [caller_sp + (arg_index - 8) * 8]
+  // In AArch64 calling convention, stack args start at [sp] in the caller's frame
+  // But we need to account for the return address and frame pointer if present
+  // For simplicity, we assume stack args are at [caller_sp + (arg_index - 8) * 8]
+  // This works for both i2c adapter calls and compiled-to-compiled calls
+  masm.write_inst("cmp x12, #8");  // Compare arg_count with 8
+  YuhuLabel copy_stack_args_end;
+  masm.write_inst_b(YuhuMacroAssembler::le, copy_stack_args_end);  // If arg_count <= 8, skip stack arg copy
+
+  // Loop to copy stack arguments (arg[8] to arg[arg_count-1])
+  // x15 = caller_sp (saved earlier)
+  // x14 = arg_base (buffer base)
+  // x12 = arg_count
+  // x16 = loop index i (starting from 8)
+  masm.write_inst("mov x16, #8");  // x16 = i = 8 (start from 9th arg)
+
+  YuhuLabel copy_stack_args_loop;
+  masm.pin_label(copy_stack_args_loop);
+
+  // Check if i >= arg_count: if yes, exit loop
+  masm.write_inst("cmp x16, x12");  // Compare i with arg_count
+  masm.write_inst_b(YuhuMacroAssembler::ge, copy_stack_args_end);  // If i >= arg_count, exit
+
+  // Calculate source address: caller_sp + (i - 8) * 8
+  // Stack args are at [caller_sp + (arg_index - 8) * 8]
+  masm.write_inst("sub x17, x16, #8");  // x17 = i - 8
+  masm.write_inst("lsl x17, x17, #3");  // x17 = (i - 8) * 8
+  masm.write_inst("add x17, x15, x17");  // x17 = caller_sp + (i - 8) * 8 (source address)
+
+  // Calculate destination address: arg_base + i * 8
+  masm.write_inst("lsl x18, x16, #3");  // x18 = i * 8
+  masm.write_inst("add x18, x14, x18");  // x18 = arg_base + i * 8 (dest address)
+
+  // Load from caller's stack and store to buffer
+  masm.write_inst("ldr x19, [x17]");  // x19 = stack_arg[i]
+  masm.write_inst("str x19, [x18]");  // buffer[i] = stack_arg[i]
+
+  // Increment i and loop
+  masm.write_inst("add x16, x16, #1");  // i++
+  masm.write_inst_b(copy_stack_args_loop);  // Loop back
+
+  masm.pin_label(copy_stack_args_end);
+
+  // New convention: adapter does NOT allocate the Yuhu frame.
+  // It only prepares a packed argument buffer and passes:
+  //   x0 = Method*
+  //   x1 = base_pc (adr of adapter start)
+  //   x2 = thread*
+  //   x3 = arg_base (pointer to packed Java args)
+  //   x4 = arg_count
+
+  // Set arg_base / arg_count for LLVM entry
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x14);  // x3 = arg_base
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x4, YuhuMacroAssembler::x12);   // x4 = arg_count (size_of_parameters)
+
+  // Set up Yuhu function parameters: x0 = Method*, x1 = base_pc, x2 = thread
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x8);  // x0 = Method*
+  masm.write_inst_adr(YuhuMacroAssembler::x1, base_pc_label);  // x1 = base_pc (adapter start)
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x2, YuhuMacroAssembler::x28);  // x2 = thread
+  
+  // Note: Temporary stack space (64 bytes) is automatically deallocated when we return
+  // because it was allocated before the frame, and the frame allocation moved SP down
 
   // Jump to LLVM entry using PC-relative jump
   // This ensures the jump address is correct even after code relocation in nmethod::new_nmethod
@@ -515,6 +602,31 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   bool is_osr = (entry_bci != InvocationEntryBci);
   int adapter_size = 0;
 
+  // Calculate frame_size for nmethod registration
+  // frame_size is in words (intptr_t units), not bytes
+  // According to YuhuStack::initialize:
+  //   frame_words = header_words + monitor_words + stack_words
+  //   header_words = 6
+  //   extra_locals = max_locals - size_of_parameters
+  //   frame_size (words) = frame_words + extra_locals
+  int header_words = 6;
+  
+  // Calculate max_monitors using flow analysis (similar to YuhuTargetInvariants::count_monitors)
+  int max_monitors = 0;
+  if (target->is_synchronized() || target->has_monitor_bytecodes()) {
+    for (int i = 0; i < flow->block_count(); i++) {
+      max_monitors = MAX2(max_monitors, flow->pre_order_at(i)->monitor_count());
+    }
+  }
+  
+  int monitor_words = max_monitors * frame::interpreter_frame_monitor_size();
+  int stack_words = target->max_stack();
+  int locals_words = target->max_locals();
+  int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
+  int extra_locals = locals_words - arg_size;
+  int frame_words = header_words + monitor_words + stack_words;
+  int frame_size = frame_words + extra_locals;  // frame_size in words
+
   // Install the method into the VM
   CodeOffsets offsets;
   offsets.set_value(CodeOffsets::Deopt, 0);
@@ -608,12 +720,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     tty->print_cr("Yuhu: Registering method - combined_base=%p (disassemble this address, not entry->code_start()=%p)",
                   combined_base, entry->code_start());
+    tty->print_cr("Yuhu: frame_size=%d words (header=%d, monitor=%d, stack=%d, extra_locals=%d)",
+                  frame_size, header_words, monitor_words, stack_words, extra_locals);
     env->register_method(target,
                          entry_bci,
                          &offsets,
                          0,
                          &combined_cb,
-                         0,
+                         frame_size,  // Pass calculated frame_size in words
                          &oopmaps,
                          &handler_table,
                          &inc_table,
@@ -685,12 +799,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::Verified_Entry, 0);
     offsets.set_value(CodeOffsets::OSR_Entry, 0);           // adapter at start
 
+    tty->print_cr("Yuhu: Registering OSR method - combined_base=%p, frame_size=%d words",
+                  combined_base, frame_size);
     env->register_method(target,
                          entry_bci,
                          &offsets,
                          0,
                          &final_cb,
-                         0,
+                         frame_size,  // Pass calculated frame_size in words
                          &oopmaps,
                          &handler_table,
                          &inc_table,

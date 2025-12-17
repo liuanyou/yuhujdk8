@@ -148,6 +148,68 @@ void YuhuDecacher::process_local_slot(int          index,
   }
 }
 
+void YuhuNormalEntryCacher::process_local_slot(int          index,
+                                               YuhuValue** addr,
+                                               int          offset) {
+  YuhuValue *value = *addr;
+
+  // Only populate for real arguments; arg_count is informational, arg_size() is compile-time
+  if (local_slot_needs_read(index, value) && index < arg_size()) {
+    llvm::Type* stack_ty = YuhuType::to_stackType(value->basic_type());
+
+    // arg_base points to an array of intptr-sized slots laid out in call order.
+    // For static methods, i2c adapter passes null as the first argument (x0),
+    // so we need to skip it. For non-static methods, x0 is 'this', which is
+    // the first local variable (index 0).
+    // 
+    // Static method:   arg_base[0] = null, arg_base[1] = a, arg_base[2] = b, ...
+    //                  local[0] = a, local[1] = b, ...
+    //                  So: arg_index = local_index + 1
+    //
+    // Non-static method: arg_base[0] = this, arg_base[1] = a, arg_base[2] = b, ...
+    //                   local[0] = this, local[1] = a, ...
+    //                   So: arg_index = local_index
+    int arg_index = index;
+    if (is_static()) {
+      // For static methods, skip the null at arg_base[0]
+      arg_index = index + 1;
+    }
+
+    // arg_base points to an array of intptr-sized slots laid out in call order
+    Value* base_ptr = builder()->CreateIntToPtr(
+      _arg_base,
+      llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+      "arg_base_ptr");
+    Value* elem_ptr = builder()->CreateGEP(
+      YuhuType::intptr_type(),
+      base_ptr,
+      LLVMValue::intptr_constant(arg_index),
+      "arg_elem_ptr");
+
+    // Cast to the expected type pointer if needed
+    Value* typed_ptr = elem_ptr;
+    if (stack_ty != YuhuType::intptr_type()) {
+      typed_ptr = builder()->CreateBitCast(
+        elem_ptr,
+        llvm::PointerType::getUnqual(stack_ty),
+        "arg_elem_typed_ptr");
+    }
+
+    Value* loaded = builder()->CreateLoad(stack_ty, typed_ptr, "arg_val");
+
+    // Write into frame locals so downstream reads see it in the expected slot
+    builder()->CreateStore(
+      loaded,
+      stack()->slot_addr(adjusted_offset(value, offset), stack_ty));
+
+    // Update the cached value
+    *addr = YuhuValue::create_generic(
+      value->type(),
+      loaded,
+      value->zero_checked());
+  }
+}
+
 void YuhuDecacher::end_frame() {
   // Record the scope
   debug_info()->describe_scope(

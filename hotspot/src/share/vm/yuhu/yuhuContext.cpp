@@ -92,9 +92,12 @@ YuhuContext::YuhuContext(const char* name)
   // _zeroStack_type is not used for AArch64
 
   std::vector<llvm::Type*> params;
+  // Normal entry: (Method*, base_pc, thread*, arg_base, arg_count)
   params.push_back(Method_type());
   params.push_back(intptr_type());
   params.push_back(thread_type());
+  params.push_back(intptr_type()); // arg_base (pointer to packed Java args)
+  params.push_back(jint_type());   // arg_count
   _entry_point_type = FunctionType::get(jint_type(), params, false);
 
   params.clear();

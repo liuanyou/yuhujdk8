@@ -236,7 +236,11 @@ YuhuNormalEntryState::YuhuNormalEntryState(YuhuTopLevelBlock* block,
     }
     set_local(i, value);
   }
-  YuhuNormalEntryCacher(block->function(), method).scan(this);
+  YuhuNormalEntryCacher(
+    block->function(),
+    method,
+    block->function()->arg_base(),
+    block->function()->arg_count()).scan(this);
 }
 
 YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
