@@ -625,7 +625,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
   int frame_words = header_words + monitor_words + stack_words;
-  int frame_size = frame_words + extra_locals;  // frame_size in words
+  // FIXED: frame_size should be extended_frame_size (frame_words + locals_words)
+  // not (frame_words + extra_locals), because we need space for all locals_words
+  // This is critical for correct stack frame traversal during safepoint operations
+  int frame_size = frame_words + locals_words;  // frame_size in words (extended_frame_size)
 
   // Install the method into the VM
   CodeOffsets offsets;

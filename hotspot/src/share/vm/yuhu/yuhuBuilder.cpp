@@ -486,6 +486,36 @@ CallInst* YuhuBuilder::CreateReadStackPointer() {
   return CreateCall(func_type, read_reg, args, "sp");
 }
 
+CallInst* YuhuBuilder::CreateReadLinkRegister() {
+  // Read LR register (x30) on AArch64 using @llvm.read_register intrinsic
+  // This is needed to save the return address to the standard AArch64 frame location
+  // NOTE: LLVM expects "x30" (not "lr") for AArch64 Link Register
+  YuhuContext& ctx = YuhuContext::current();
+  llvm::Module* mod = ctx.module();
+  
+  // Create metadata string "x30" to specify the register name (AArch64 Link Register)
+  llvm::MDNode* md = llvm::MDNode::get(
+    ctx,
+    llvm::MDString::get(ctx, "x30"));
+  
+  // Get read_register intrinsic declaration
+  llvm::Function* read_reg = llvm::Intrinsic::getDeclaration(
+    mod,
+    llvm::Intrinsic::read_register,
+    {YuhuType::intptr_type()});
+  
+  // Create function type for read_register: (metadata) -> intptr_t
+  llvm::FunctionType* func_type = llvm::FunctionType::get(
+    YuhuType::intptr_type(),
+    {llvm::Type::getMetadataTy(ctx)},
+    false);
+  
+  // Call read_register with "x30" metadata
+  std::vector<Value*> args;
+  args.push_back(llvm::MetadataAsValue::get(ctx, md));
+  return CreateCall(func_type, read_reg, args, "lr");
+}
+
 CallInst* YuhuBuilder::CreateMemset(Value* dst,
                                      Value* value,
                                      Value* len,

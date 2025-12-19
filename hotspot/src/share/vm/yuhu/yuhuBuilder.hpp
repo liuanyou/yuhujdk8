@@ -189,6 +189,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
  public:
   llvm::CallInst* CreateGetFrameAddress();
   llvm::CallInst* CreateReadStackPointer();  // Read actual SP register (x31) on AArch64
+  llvm::CallInst* CreateReadLinkRegister();   // Read LR register (x30) on AArch64
   llvm::CallInst* CreateMemset(llvm::Value* dst,
                                llvm::Value* value,
                                llvm::Value* len,

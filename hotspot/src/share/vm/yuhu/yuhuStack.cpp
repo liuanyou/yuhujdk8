@@ -68,6 +68,34 @@ void YuhuStack::initialize(Value* method) {
   // Align frame size up to 16 bytes
   frame_size_bytes = align_size_up(frame_size_bytes, 16);
   
+  // CRITICAL FIX: Save return address (LR) and frame pointer (FP) to standard AArch64 frame location BEFORE allocating frame
+  // AArch64 standard frame layout requires:
+  //   - Return address at [sender_sp-1] = [current_sp - 1]
+  //   - Saved FP at [sender_sp-2] = [current_sp - 2]
+  // where sender_sp = unextended_sp + frame_size
+  // This is essential for correct stack frame traversal during safepoints
+  // Read LR register (x30) and save it at [current_sp - 1]
+  Value *lr = builder()->CreateReadLinkRegister();
+  Value *return_addr_addr = builder()->CreateIntToPtr(
+    builder()->CreateGEP(YuhuType::intptr_type(),
+                         builder()->CreateIntToPtr(current_sp, PointerType::getUnqual(YuhuType::intptr_type())),
+                         LLVMValue::intptr_constant(-1)),
+    PointerType::getUnqual(YuhuType::intptr_type()));
+  builder()->CreateStore(lr, return_addr_addr);
+  
+  // Read previous FP (from last_Java_fp) and save it at [current_sp - 2]
+  Value *prev_fp = builder()->CreateValueOfStructEntry(
+    thread(),
+    JavaThread::last_Java_fp_offset(),
+    YuhuType::intptr_type(),
+    "prev_fp");
+  Value *saved_fp_addr = builder()->CreateIntToPtr(
+    builder()->CreateGEP(YuhuType::intptr_type(),
+                         builder()->CreateIntToPtr(current_sp, PointerType::getUnqual(YuhuType::intptr_type())),
+                         LLVMValue::intptr_constant(-2)),
+    PointerType::getUnqual(YuhuType::intptr_type()));
+  builder()->CreateStore(prev_fp, saved_fp_addr);
+  
   // Calculate new stack pointer (allocate frame on stack)
   Value *stack_pointer = builder()->CreateSub(
     current_sp,
@@ -132,12 +160,9 @@ void YuhuStack::initialize(Value* method) {
   assert(offset == extended_frame_size(), "should do");
   
   // For AArch64, frame pointer points to the frame header
-  // Store the previous frame pointer (load from last_Java_fp if available, else 0)
-  Value *prev_fp = builder()->CreateValueOfStructEntry(
-    thread(),
-    JavaThread::last_Java_fp_offset(),
-    YuhuType::intptr_type(),
-    "prev_fp");
+  // Store the previous frame pointer (reuse prev_fp defined earlier at line 87)
+  // prev_fp was already loaded from last_Java_fp and saved to [current_sp - 2]
+  // Now we also store it to frame_pointer_addr for frame pointer chain
   builder()->CreateStore(prev_fp, fp);
   
   // Update frame pointer to point to this frame
