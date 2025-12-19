@@ -236,11 +236,11 @@ YuhuNormalEntryState::YuhuNormalEntryState(YuhuTopLevelBlock* block,
     }
     set_local(i, value);
   }
+  // Simplified: no longer pass arg_base and arg_count
+  // Parameters are now direct function arguments
   YuhuNormalEntryCacher(
     block->function(),
-    method,
-    block->function()->arg_base(),
-    block->function()->arg_count()).scan(this);
+    method).scan(this);
 }
 
 YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
@@ -380,8 +380,13 @@ void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
 
   // Local variables
   for (int i = 0; i < max_locals(); i++) {
-    if (local(i) != NULL)
-      local(i)->addIncoming(incoming_state->local(i), predecessor);
+    if (local(i) != NULL) {
+      YuhuValue* incoming_value = incoming_state->local(i);
+      if (incoming_value == NULL) {
+        ShouldNotReachHere();
+      }
+      local(i)->addIncoming(incoming_value, predecessor, builder());
+    }
   }
 
   // Expression stack
@@ -390,7 +395,7 @@ void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
   for (int i = 0; i < stack_depth; i++) {
     assert((stack(i) == NULL) == (incoming_state->stack(i) == NULL), "oops");
     if (stack(i))
-      stack(i)->addIncoming(incoming_state->stack(i), predecessor);
+      stack(i)->addIncoming(incoming_state->stack(i), predecessor, builder());
   }
 
   // Monitors

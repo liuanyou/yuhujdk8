@@ -38,6 +38,32 @@
 
 using namespace llvm;
 
+// Generate function signature for normal entry based on Java method parameters
+// According to 021 design: LLVM function parameters directly correspond to Java method parameters
+// For static methods: first parameter is NULL (x0), then Java parameters
+// Method* and Thread* are read from registers (x12, x28), not passed as parameters
+llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
+  std::vector<llvm::Type*> params;
+  
+  // For static methods, first parameter is NULL (x0 in AArch64 calling convention)
+  // This is because i2c adapter passes NULL in x0 for static methods
+  if (is_static()) {
+    params.push_back(YuhuType::intptr_type());  // void* null (x0)
+  }
+  
+  // Add Java method parameters
+  ciSignature* sig = target()->signature();
+  int param_count = sig->count();
+  for (int i = 0; i < param_count; i++) {
+    ciType* param_type = sig->type_at(i);
+    llvm::Type* llvm_type = YuhuType::to_stackType(param_type);
+    params.push_back(llvm_type);
+  }
+  
+  // Return type is always int (jint)
+  return FunctionType::get(YuhuType::jint_type(), params, false);
+}
+
 void YuhuFunction::initialize(const char *name) {
   // Create the function and add it to the Module immediately
   // This ensures the Function has a parent Module, which is required
@@ -74,26 +100,52 @@ void YuhuFunction::initialize(const char *name) {
 
   // Get our arguments
   Function::arg_iterator ai = function()->arg_begin();
-  llvm::Argument *method = ai++;  // Use llvm::Argument to avoid conflict with HotSpot's Argument class
-  method->setName("method");
-  llvm::Argument *osr_buf = NULL;  // Use llvm::Argument to avoid conflict
+  llvm::Value *method = NULL;  // Will be set below for both OSR and normal entry
+  llvm::Value *osr_buf = NULL;  // Will be set for OSR entry only
+  
   if (is_osr()) {
-    osr_buf = ai++;
-    osr_buf->setName("osr_buf");
-  }
-  llvm::Argument *base_pc = ai++;  // Use llvm::Argument to avoid conflict
-  base_pc->setName("base_pc");
-  code_buffer()->set_base_pc(base_pc);
-  llvm::Argument *thread = ai++;  // Use llvm::Argument to avoid conflict
-  thread->setName("thread");
-  set_thread(thread);
-
-  // Normal entry extra arguments: arg_base (intptr) and arg_count (jint)
-  if (!is_osr()) {
-    _arg_base  = ai++;
-    _arg_base->setName("arg_base");
-    _arg_count = ai++;
-    _arg_count->setName("arg_count");
+    // OSR entry: keep old signature for now (will be handled in phase 6)
+    llvm::Argument *method_arg = ai++;
+    method_arg->setName("method");
+    method = method_arg;  // Store for later use in CreateBuildAndPushFrame
+    llvm::Argument *osr_buf_arg = ai++;
+    osr_buf_arg->setName("osr_buf");
+    osr_buf = osr_buf_arg;  // Store for later use
+    llvm::Argument *base_pc = ai++;
+    base_pc->setName("base_pc");
+    code_buffer()->set_base_pc(base_pc);
+    llvm::Argument *thread = ai++;
+    thread->setName("thread");
+    set_thread(thread);
+  } else {
+    // Normal entry: new simplified signature
+    // Parameters are: (static: void* null, then Java method parameters...)
+    // Method* and Thread* are read from registers, not passed as parameters
+    
+    // For static methods, skip the first parameter (NULL)
+    if (is_static()) {
+      llvm::Argument *null_arg = ai++;
+      null_arg->setName("null_arg");
+      // Don't use null_arg, it's just a placeholder for x0
+    }
+    
+    // Java method parameters are now direct function parameters
+    // They will be used directly as local variables in YuhuNormalEntryCacher
+    // No need to store them here, they're already in the function signature
+    
+    // Method* and Thread* are read from registers (x12, x28)
+    // No longer passed as function parameters
+    method = builder()->CreateReadMethodRegister();
+    llvm::Value *thread = builder()->CreateReadThreadRegister();
+    set_thread(thread);
+    
+    // arg_base and arg_count are no longer needed
+    _arg_base = NULL;
+    _arg_count = NULL;
+    
+    // base_pc is no longer needed (can be read from PC register if needed in the future)
+    // For now, set to NULL
+    code_buffer()->set_base_pc(NULL);
   }
 
   // Create the list of blocks
@@ -142,6 +194,7 @@ void YuhuFunction::initialize(const char *name) {
   // Create the entry state
   YuhuState *entry_state;
   if (is_osr()) {
+    // OSR entry: osr_buf is already extracted from function arguments above
     entry_state = new YuhuOSREntryState(start_block, method, osr_buf);
 
     // Free the OSR buffer
@@ -185,7 +238,15 @@ void YuhuFunction::initialize(const char *name) {
     else
       set_block_insertion_point(NULL);
 
+    // Debug: Print block info before emitting IR
+    tty->print_cr("=== Yuhu: Emitting IR for block %d (bci=%d) ===", 
+                  i, block(i)->start());
+    tty->flush();
+    
     block(i)->emit_IR();
+    
+    tty->print_cr("=== Yuhu: Finished emitting IR for block %d ===", i);
+    tty->flush();
   }
   do_deferred_zero_checks();
 }

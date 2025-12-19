@@ -1078,8 +1078,19 @@ void YuhuTopLevelBlock::do_if_helper(ICmpInst::Predicate p,
     builder()->CreateICmp(p, a, b),
     if_taken->entry_block(), not_taken->entry_block());
 
+  // Debug: Print state info before add_incoming
+  tty->print_cr("=== Yuhu: do_if_helper - adding incoming states ===");
+  tty->print_cr("if_taken block: bci=%d, needs_phis=%d", 
+                if_taken->start(), if_taken->needs_phis());
+  tty->print_cr("not_taken block: bci=%d, needs_phis=%d", 
+                not_taken->start(), not_taken->needs_phis());
+  tty->flush();
+
   if_taken->add_incoming(if_taken_state);
   not_taken->add_incoming(not_taken_state);
+  
+  tty->print_cr("=== Yuhu: do_if_helper - finished adding incoming states ===");
+  tty->flush();
 }
 
 void YuhuTopLevelBlock::do_switch() {

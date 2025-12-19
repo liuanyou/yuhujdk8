@@ -148,54 +148,123 @@ void YuhuDecacher::process_local_slot(int          index,
   }
 }
 
+// Get function argument by local index
+// For static methods: local[i] = function_arg[i+1] (skip NULL at function_arg[0])
+// For non-static methods: local[i] = function_arg[i] (this is in function_arg[0])
+llvm::Argument* YuhuNormalEntryCacher::get_function_arg(int local_index) {
+  llvm::Function* func = function()->function();
+  llvm::Function::arg_iterator ai = func->arg_begin();
+  
+  if (is_static()) {
+    // Static methods: skip NULL at function_arg[0]
+    ai++;  // Skip NULL argument
+  }
+  
+  // Advance to the requested local index
+  for (int i = 0; i < local_index; i++) {
+    ai++;
+    if (ai == func->arg_end()) {
+      ShouldNotReachHere();
+      return NULL;
+    }
+  }
+  
+  return &*ai;  // Dereference iterator to get Argument*
+}
+
+// Read stack argument from x20 (esp) for arguments >= 8
+// Stack arguments are at [esp + (arg_index - 8) * 8] in caller's frame
+// arg_index is the argument index in AArch64 calling convention (0-based, including receiver for non-static)
+llvm::Value* YuhuNormalEntryCacher::read_stack_arg(int arg_index) {
+  // Read x20 (esp) register
+  llvm::Value* esp = builder()->CreateReadRegister("x20");
+  
+  // Calculate stack argument address: esp + (arg_index - 8) * 8
+  // In AArch64 calling convention, stack arguments start at [sp] in caller's frame
+  // arg_index 8 means the 9th argument (0-based), which is at [sp + 0]
+  // arg_index 9 means the 10th argument, which is at [sp + 8]
+  int stack_offset = (arg_index - 8) * wordSize;
+  llvm::Value* stack_arg_addr = builder()->CreateGEP(
+    YuhuType::intptr_type(),
+    builder()->CreateIntToPtr(esp, llvm::PointerType::getUnqual(YuhuType::intptr_type())),
+    LLVMValue::intptr_constant(stack_offset / wordSize),
+    "stack_arg_addr");
+  
+  // Load the stack argument as intptr_t (will be cast to correct type by caller)
+  return builder()->CreateLoad(
+    YuhuType::intptr_type(),
+    stack_arg_addr,
+    "stack_arg");
+}
+
 void YuhuNormalEntryCacher::process_local_slot(int          index,
                                                YuhuValue** addr,
                                                int          offset) {
   YuhuValue *value = *addr;
 
-  // Only populate for real arguments; arg_count is informational, arg_size() is compile-time
+  // Only populate for real arguments
   if (local_slot_needs_read(index, value) && index < arg_size()) {
     llvm::Type* stack_ty = YuhuType::to_stackType(value->basic_type());
-
-    // arg_base points to an array of intptr-sized slots laid out in call order.
-    // For static methods, i2c adapter passes null as the first argument (x0),
-    // so we need to skip it. For non-static methods, x0 is 'this', which is
-    // the first local variable (index 0).
-    // 
-    // Static method:   arg_base[0] = null, arg_base[1] = a, arg_base[2] = b, ...
-    //                  local[0] = a, local[1] = b, ...
-    //                  So: arg_index = local_index + 1
-    //
-    // Non-static method: arg_base[0] = this, arg_base[1] = a, arg_base[2] = b, ...
-    //                   local[0] = this, local[1] = a, ...
-    //                   So: arg_index = local_index
-    int arg_index = index;
-    if (is_static()) {
-      // For static methods, skip the null at arg_base[0]
-      arg_index = index + 1;
+    llvm::Value* loaded = NULL;
+    
+    // According to 021 design:
+    // - Parameters 0-7 are in registers (x0-x7), passed as function arguments
+    // - Parameters >= 8 are on the stack, read from x20 (esp)
+    
+    if (index < 8) {
+      // Parameters 0-7: read from function arguments
+      llvm::Argument* arg = get_function_arg(index);
+      assert(arg != NULL, "function argument should exist");
+      loaded = arg;
+      
+      // Ensure type matches exactly (may need conversion for integers)
+      if (loaded->getType() != stack_ty) {
+        // For integer types, use CreateIntCast; for pointers, use CreateBitCast
+        if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
+          loaded = builder()->CreateIntCast(
+            loaded,
+            stack_ty,
+            value->basic_type() != T_CHAR,  // signed unless char
+            "arg_typed");
+        } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
+          loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+        } else {
+          // Fallback: try bitcast
+          loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+        }
+      }
+    } else {
+      // Parameters >= 8: read from stack via x20 (esp)
+      // In AArch64 calling convention, arguments are passed as:
+      // - Non-static: x0-x7 = args[0-7], stack = args[8+]
+      //   So local[8] = arg[8] (in stack, calling convention arg_index = 8)
+      // - Static: x0 = NULL (from i2c adapter), x1-x7 = args[0-6], stack = args[7+]
+      //   So local[7] = arg[7] (in stack, calling convention arg_index = 7)
+      //   local[8] = arg[8] (in stack, calling convention arg_index = 8)
+      // 
+      // The calling convention arg_index is the same as local_index for both cases
+      // because local_index already accounts for the receiver (non-static) or NULL (static)
+      int arg_index = index;
+      
+      loaded = read_stack_arg(arg_index);
+      
+      // Cast to the expected type if needed
+      if (loaded->getType() != stack_ty) {
+        // For integer types, use CreateIntCast; for pointers, use CreateBitCast
+        if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
+          loaded = builder()->CreateIntCast(
+            loaded,
+            stack_ty,
+            value->basic_type() != T_CHAR,  // signed unless char
+            "stack_arg_typed");
+        } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
+          loaded = builder()->CreateBitCast(loaded, stack_ty, "stack_arg_typed");
+        } else {
+          // Fallback: try bitcast
+          loaded = builder()->CreateBitCast(loaded, stack_ty, "stack_arg_typed");
+        }
+      }
     }
-
-    // arg_base points to an array of intptr-sized slots laid out in call order
-    Value* base_ptr = builder()->CreateIntToPtr(
-      _arg_base,
-      llvm::PointerType::getUnqual(YuhuType::intptr_type()),
-      "arg_base_ptr");
-    Value* elem_ptr = builder()->CreateGEP(
-      YuhuType::intptr_type(),
-      base_ptr,
-      LLVMValue::intptr_constant(arg_index),
-      "arg_elem_ptr");
-
-    // Cast to the expected type pointer if needed
-    Value* typed_ptr = elem_ptr;
-    if (stack_ty != YuhuType::intptr_type()) {
-      typed_ptr = builder()->CreateBitCast(
-        elem_ptr,
-        llvm::PointerType::getUnqual(stack_ty),
-        "arg_elem_typed_ptr");
-    }
-
-    Value* loaded = builder()->CreateLoad(stack_ty, typed_ptr, "arg_val");
 
     // Write into frame locals so downstream reads see it in the expected slot
     builder()->CreateStore(

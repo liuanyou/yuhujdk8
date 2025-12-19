@@ -157,7 +157,7 @@ class YuhuValue : public ResourceObj {
 
   // Phi-style stuff
  public:
-  virtual void addIncoming(YuhuValue* value, llvm::BasicBlock* block);
+  virtual void addIncoming(YuhuValue* value, llvm::BasicBlock* block, YuhuBuilder* builder = NULL);
   virtual YuhuValue* merge(YuhuBuilder*     builder,
                             YuhuValue*       other,
                             llvm::BasicBlock* other_block,
@@ -240,17 +240,17 @@ class YuhuNormalValue : public YuhuValue {
 class YuhuPHIValue : public YuhuNormalValue {
   friend class YuhuValue;
 
- protected:
+  protected:
   YuhuPHIValue(ciType* type, llvm::PHINode* phi, const YuhuPHIValue *parent)
     : YuhuNormalValue(type, phi, parent && parent->zero_checked()),
       _parent(parent),
       _all_incomers_zero_checked(true) {}
 
- private:
+  private:
   const YuhuPHIValue* _parent;
   bool                 _all_incomers_zero_checked;
 
- private:
+  private:
   const YuhuPHIValue* parent() const {
     return _parent;
   }
@@ -258,7 +258,7 @@ class YuhuPHIValue : public YuhuNormalValue {
     return parent() != NULL;
   }
 
- public:
+  public:
   bool all_incomers_zero_checked() const {
     if (is_clone())
       return parent()->all_incomers_zero_checked();
@@ -277,7 +277,7 @@ class YuhuPHIValue : public YuhuNormalValue {
 
   // Phi-style stuff
  public:
-  void addIncoming(YuhuValue *value, llvm::BasicBlock* block);
+  void addIncoming(YuhuValue *value, llvm::BasicBlock* block, YuhuBuilder* builder = NULL);
 };
 
 class YuhuAddressValue : public YuhuValue {
@@ -314,7 +314,7 @@ class YuhuAddressValue : public YuhuValue {
 
   // Phi-style stuff
  public:
-  void addIncoming(YuhuValue *value, llvm::BasicBlock* block);
+  void addIncoming(YuhuValue *value, llvm::BasicBlock* block, YuhuBuilder* builder = NULL);
   YuhuValue* merge(YuhuBuilder*     builder,
                     YuhuValue*       other,
                     llvm::BasicBlock* other_block,

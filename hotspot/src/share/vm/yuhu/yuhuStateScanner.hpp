@@ -36,12 +36,18 @@ class YuhuState;
 class YuhuStateScanner : public YuhuTargetInvariants {
  protected:
   YuhuStateScanner(YuhuFunction* function)
-    : YuhuTargetInvariants(function), _stack(function->stack()) {}
+    : YuhuTargetInvariants(function),  // Use copy constructor since YuhuFunction is a YuhuTargetInvariants
+      _function(function),
+      _stack(function->stack()) {}
 
  private:
+  YuhuFunction* _function;
   YuhuStack* _stack;
 
  protected:
+  YuhuFunction* function() const {
+    return _function;
+  }
   YuhuStack* stack() const {
     return _stack;
   }

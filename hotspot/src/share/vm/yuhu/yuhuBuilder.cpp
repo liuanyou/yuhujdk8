@@ -516,6 +516,47 @@ CallInst* YuhuBuilder::CreateReadLinkRegister() {
   return CreateCall(func_type, read_reg, args, "lr");
 }
 
+CallInst* YuhuBuilder::CreateReadMethodRegister() {
+  // Read rmethod register (x12) on AArch64 using @llvm.read_register intrinsic
+  // This is needed to get Method* directly from HotSpot's global register
+  return CreateReadRegister("x12");
+}
+
+CallInst* YuhuBuilder::CreateReadThreadRegister() {
+  // Read rthread register (x28) on AArch64 using @llvm.read_register intrinsic
+  // This is needed to get Thread* directly from HotSpot's global register
+  return CreateReadRegister("x28");
+}
+
+CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
+  // Generic register reader using @llvm.read_register intrinsic
+  // Used for reading x12 (rmethod), x28 (rthread), x20 (esp), etc.
+  YuhuContext& ctx = YuhuContext::current();
+  llvm::Module* mod = ctx.module();
+  
+  // Create metadata string for the register name
+  llvm::MDNode* md = llvm::MDNode::get(
+    ctx,
+    llvm::MDString::get(ctx, reg_name));
+  
+  // Get read_register intrinsic declaration
+  llvm::Function* read_reg = llvm::Intrinsic::getDeclaration(
+    mod,
+    llvm::Intrinsic::read_register,
+    {YuhuType::intptr_type()});
+  
+  // Create function type for read_register: (metadata) -> intptr_t
+  llvm::FunctionType* func_type = llvm::FunctionType::get(
+    YuhuType::intptr_type(),
+    {llvm::Type::getMetadataTy(ctx)},
+    false);
+  
+  // Call read_register with register name metadata
+  std::vector<Value*> args;
+  args.push_back(llvm::MetadataAsValue::get(ctx, md));
+  return CreateCall(func_type, read_reg, args, reg_name);
+}
+
 CallInst* YuhuBuilder::CreateMemset(Value* dst,
                                      Value* value,
                                      Value* len,

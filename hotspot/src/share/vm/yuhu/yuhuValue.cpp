@@ -219,17 +219,51 @@ Value* YuhuNormalValue::intptr_value(YuhuBuilder* builder) const {
 
 // Phi-style stuff for YuhuPHIState::add_incoming
 
-void YuhuValue::addIncoming(YuhuValue *value, BasicBlock* block) {
+void YuhuValue::addIncoming(YuhuValue *value, BasicBlock* block, YuhuBuilder* builder) {
   ShouldNotCallThis();
 }
-void YuhuPHIValue::addIncoming(YuhuValue *value, BasicBlock* block) {
+void YuhuPHIValue::addIncoming(YuhuValue *value, BasicBlock* block, YuhuBuilder* builder) {
   assert(!is_clone(), "shouldn't be");
-  ((llvm::PHINode *) generic_value())->addIncoming(
-      value->generic_value(), block);
+  
+  llvm::PHINode *phi = (llvm::PHINode *) generic_value();
+  llvm::Value *incoming_value = value->generic_value();
+  llvm::Type *phi_type = phi->getType();
+  llvm::Type *incoming_type = incoming_value->getType();
+  
+  // Convert incoming value to match PHI node type if needed
+  if (phi_type != incoming_type) {
+    // Perform type conversion - builder must be provided
+    if (builder == NULL) {
+      ShouldNotReachHere();
+    }
+    
+    if (phi_type->isIntegerTy() && incoming_type->isIntegerTy()) {
+      // Integer to integer conversion
+      incoming_value = builder->CreateIntCast(
+        incoming_value,
+        phi_type,
+        value->basic_type() != T_CHAR,  // signed unless char
+        "phi_cast");
+    } else if (phi_type->isPointerTy() && incoming_type->isPointerTy()) {
+      // Pointer to pointer conversion (bitcast)
+      incoming_value = builder->CreateBitCast(incoming_value, phi_type, "phi_cast");
+    } else if (phi_type->isPointerTy() && incoming_type->isIntegerTy()) {
+      // Integer to pointer conversion (inttoptr)
+      incoming_value = builder->CreateIntToPtr(incoming_value, phi_type, "phi_cast");
+    } else if (phi_type->isIntegerTy() && incoming_type->isPointerTy()) {
+      // Pointer to integer conversion (ptrtoint)
+      incoming_value = builder->CreatePtrToInt(incoming_value, phi_type, "phi_cast");
+    } else {
+      // Fallback: try bitcast
+      incoming_value = builder->CreateBitCast(incoming_value, phi_type, "phi_cast");
+    }
+  }
+  
+  ((llvm::PHINode *) generic_value())->addIncoming(incoming_value, block);
   if (!value->zero_checked())
     _all_incomers_zero_checked = false;
 }
-void YuhuAddressValue::addIncoming(YuhuValue *value, BasicBlock* block) {
+void YuhuAddressValue::addIncoming(YuhuValue *value, BasicBlock* block, YuhuBuilder* builder) {
   assert(this->equal_to(value), "should be");
 }
 

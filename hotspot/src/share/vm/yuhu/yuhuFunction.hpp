@@ -95,12 +95,23 @@ class YuhuFunction : public YuhuTargetInvariants {
   bool is_osr() const {
     return flow()->is_osr_flow();
   }
+  // Generate function signature dynamically based on Java method parameters
+  // For normal entry: (Java method parameters...) -> int
+  // For static methods: (void* null, Java method parameters...) -> int
+  // For OSR entry: keep old signature for now
   llvm::FunctionType* entry_point_type() const {
-    if (is_osr())
+    if (is_osr()) {
+      // OSR entry: keep old signature for now (will be handled in phase 6)
       return YuhuType::osr_entry_point_type();
-    else
-      return YuhuType::entry_point_type();
+    } else {
+      // Normal entry: generate signature based on Java method parameters
+      return generate_normal_entry_point_type();
+    }
   }
+  
+ private:
+  // Generate function signature for normal entry based on Java method parameters
+  llvm::FunctionType* generate_normal_entry_point_type() const;
 
   // Block management
  private:

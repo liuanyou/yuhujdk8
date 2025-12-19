@@ -390,20 +390,21 @@ class YuhuFunctionEntryCacher : public YuhuCacher {
 
 class YuhuNormalEntryCacher : public YuhuFunctionEntryCacher {
  public:
+  // Simplified constructor: no longer needs arg_base and arg_count
+  // Parameters are now direct function arguments, accessed via function()->arg_begin()
   YuhuNormalEntryCacher(YuhuFunction* function,
-                        llvm::Value*   method,
-                        llvm::Value*   arg_base,
-                        llvm::Value*   arg_count)
-    : YuhuFunctionEntryCacher(function, method),
-      _arg_base(arg_base),
-      _arg_count(arg_count) {}
+                        llvm::Value*   method)
+    : YuhuFunctionEntryCacher(function, method) {}
 
  protected:
   void process_local_slot(int index, YuhuValue** addr, int offset);
 
  private:
-  llvm::Value* _arg_base;   // intptr pointing to packed Java args
-  llvm::Value* _arg_count;  // jint count of args (currently informational)
+  // Helper: Get function argument by index (0-based, accounting for static method NULL)
+  llvm::Argument* get_function_arg(int local_index);
+  
+  // Helper: Read stack argument from x20 (esp) for arguments >= 8
+  llvm::Value* read_stack_arg(int arg_index);
 };
 
 class YuhuOSREntryCacher : public YuhuFunctionEntryCacher {

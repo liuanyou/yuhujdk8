@@ -59,48 +59,60 @@ void YuhuStack::initialize(Value* method) {
   Value *current_sp = builder()->CreateReadStackPointer();
   
   // Calculate frame size in bytes
-  // FIXED: Use extended_frame_size instead of (frame_words + extra_locals)
-  // because we need space for all locals_words, not just extra_locals
-  // extended_frame_size = frame_words + locals_words
-  int frame_size_bytes = extended_frame_size() * wordSize;
+  // CRITICAL: frame_size_bytes MUST include space for LR and FP (2 words)
+  // This matches C2's behavior: framesize includes return pc and rfp
+  // See macroAssembler_aarch64.cpp:build_frame() and aarch64.ad:1539
+  int frame_size_bytes = (extended_frame_size() + 2) * wordSize;  // +2 for LR and FP
   
   // AArch64 requires 16-byte stack alignment
   // Align frame size up to 16 bytes
   frame_size_bytes = align_size_up(frame_size_bytes, 16);
   
-  // CRITICAL FIX: Save return address (LR) and frame pointer (FP) to standard AArch64 frame location BEFORE allocating frame
-  // AArch64 standard frame layout requires:
-  //   - Return address at [sender_sp-1] = [current_sp - 1]
-  //   - Saved FP at [sender_sp-2] = [current_sp - 2]
-  // where sender_sp = unextended_sp + frame_size
-  // This is essential for correct stack frame traversal during safepoints
-  // Read LR register (x30) and save it at [current_sp - 1]
-  Value *lr = builder()->CreateReadLinkRegister();
-  Value *return_addr_addr = builder()->CreateIntToPtr(
-    builder()->CreateGEP(YuhuType::intptr_type(),
-                         builder()->CreateIntToPtr(current_sp, PointerType::getUnqual(YuhuType::intptr_type())),
-                         LLVMValue::intptr_constant(-1)),
-    PointerType::getUnqual(YuhuType::intptr_type()));
-  builder()->CreateStore(lr, return_addr_addr);
+  // CRITICAL FIX: Allocate frame FIRST, then save LR and FP to frame top
+  // This matches C2's behavior: sub(sp, sp, framesize) then stp(rfp, lr, Address(sp, framesize - 2*wordSize))
+  // This ensures LR and FP are saved at the top of the frame (high address), not in expression stack area
   
-  // Read previous FP (from last_Java_fp) and save it at [current_sp - 2]
+  // Step 1: Allocate frame on stack (includes space for LR and FP)
+  Value *stack_pointer = builder()->CreateSub(
+    current_sp,
+    LLVMValue::intptr_constant(frame_size_bytes),
+    "new_sp");
+  
+  // Step 2: Save LR and FP to the top of the frame
+  // LR at [stack_pointer + frame_size_bytes - 2 * wordSize] = [current_sp - 2 * wordSize]
+  // FP at [stack_pointer + frame_size_bytes - 1 * wordSize] = [current_sp - 1 * wordSize]
+  // Note: In AArch64, sender_sp = unextended_sp + frame_size = current_sp
+  // So [sender_sp - 1] = [current_sp - 1] and [sender_sp - 2] = [current_sp - 2]
+  
+  // Read LR register (x30)
+  Value *lr = builder()->CreateReadLinkRegister();
+  
+  // Read previous FP (from last_Java_fp)
   Value *prev_fp = builder()->CreateValueOfStructEntry(
     thread(),
     JavaThread::last_Java_fp_offset(),
     YuhuType::intptr_type(),
     "prev_fp");
-  Value *saved_fp_addr = builder()->CreateIntToPtr(
-    builder()->CreateGEP(YuhuType::intptr_type(),
-                         builder()->CreateIntToPtr(current_sp, PointerType::getUnqual(YuhuType::intptr_type())),
-                         LLVMValue::intptr_constant(-2)),
-    PointerType::getUnqual(YuhuType::intptr_type()));
-  builder()->CreateStore(prev_fp, saved_fp_addr);
   
-  // Calculate new stack pointer (allocate frame on stack)
-  Value *stack_pointer = builder()->CreateSub(
-    current_sp,
-    LLVMValue::intptr_constant(frame_size_bytes),
-    "new_sp");
+  // Calculate addresses: [stack_pointer + frame_size_bytes - 2*wordSize] and [stack_pointer + frame_size_bytes - wordSize]
+  int lr_offset_words = frame_size_bytes / wordSize - 2;  // LR at [frame_top - 2]
+  int fp_offset_words = frame_size_bytes / wordSize - 1;   // FP at [frame_top - 1]
+  
+  // Save LR to [stack_pointer + lr_offset_words]
+  Value *lr_save_addr = builder()->CreateIntToPtr(
+    builder()->CreateGEP(YuhuType::intptr_type(),
+                         builder()->CreateIntToPtr(stack_pointer, PointerType::getUnqual(YuhuType::intptr_type())),
+                         LLVMValue::intptr_constant(lr_offset_words)),
+    PointerType::getUnqual(YuhuType::intptr_type()));
+  builder()->CreateStore(lr, lr_save_addr);
+  
+  // Save FP to [stack_pointer + fp_offset_words]
+  Value *fp_save_addr = builder()->CreateIntToPtr(
+    builder()->CreateGEP(YuhuType::intptr_type(),
+                         builder()->CreateIntToPtr(stack_pointer, PointerType::getUnqual(YuhuType::intptr_type())),
+                         LLVMValue::intptr_constant(fp_offset_words)),
+    PointerType::getUnqual(YuhuType::intptr_type()));
+  builder()->CreateStore(prev_fp, fp_save_addr);
   
   // Check for stack overflow - checks current_sp to ensure there's enough space
   // for both the new frame and throw_StackOverflowError (if needed)
