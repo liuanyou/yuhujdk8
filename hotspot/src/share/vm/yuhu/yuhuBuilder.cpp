@@ -675,8 +675,22 @@ void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
 // Helpers for accessing the code buffer
 
 Value* YuhuBuilder::code_buffer_address(int offset) {
+  llvm::Value* base_pc = code_buffer()->base_pc();
+  
+  // For normal entry, base_pc may be NULL (set in YuhuFunction::initialize)
+  // In this case, we need to use an alternative method to get the PC address
+  // For now, we'll use a placeholder value (0) and add the offset
+  // This is safe because process_pc_slot is only used for debug info
+  // TODO: In the future, we could use PC register or frame address
+  if (base_pc == NULL) {
+    // For normal entry, base_pc is NULL because we no longer pass it as a parameter
+    // Use a placeholder value (0) - this is only used for debug info recording
+    // The actual PC will be calculated at runtime by HotSpot's stack walking code
+    base_pc = LLVMValue::intptr_constant(0);
+  }
+  
   return CreateAdd(
-    code_buffer()->base_pc(),
+    base_pc,
     LLVMValue::intptr_constant(offset));
 }
 
