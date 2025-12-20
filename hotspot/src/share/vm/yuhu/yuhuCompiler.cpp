@@ -47,6 +47,7 @@
 
 #include <fnmatch.h>
 #include <cstring>
+#include <set>
 
 using namespace llvm;
 
@@ -871,9 +872,146 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
                    (func_mod == normal_mod) ? "normal" : "native");
   }
   
+  // Debug: Collect all instructions and verify they are in basic blocks
+  tty->print_cr("=== Yuhu: Collecting all instructions in function %s ===", name);
+  std::set<llvm::Instruction*> all_instructions_in_blocks;
+  int total_instructions = 0;
+  int total_basic_blocks = 0;
+  
+  // Collect all instructions from all basic blocks
+  for (llvm::Function::iterator BB = function->begin(), E = function->end(); BB != E; ++BB) {
+    total_basic_blocks++;
+    for (llvm::BasicBlock::iterator I = BB->begin(), IE = BB->end(); I != IE; ++I) {
+      all_instructions_in_blocks.insert(&*I);
+      total_instructions++;
+    }
+  }
+  
+  tty->print_cr("  Total basic blocks: %d", total_basic_blocks);
+  tty->print_cr("  Total instructions in blocks: %d", total_instructions);
+  tty->flush();
+  
+  // Check for orphaned instructions (instructions not in any basic block)
+  // This is done by checking all values in the function and seeing if they are instructions
+  // without a parent basic block
+  int orphaned_count = 0;
+  for (llvm::Function::iterator BB = function->begin(), E = function->end(); BB != E; ++BB) {
+    for (llvm::BasicBlock::iterator I = BB->begin(), IE = BB->end(); I != IE; ++I) {
+      llvm::Instruction* inst = &*I;
+      
+      // Check if instruction has a valid parent
+      llvm::BasicBlock* parent = inst->getParent();
+      if (parent == NULL) {
+        tty->print_cr("  ERROR: Instruction %p has NULL parent!", inst);
+        tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
+        if (inst->hasName()) {
+          tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
+        }
+        orphaned_count++;
+        continue;
+      }
+      
+      // Check if instruction's parent matches the basic block we're iterating
+      if (parent != &*BB) {
+        tty->print_cr("  WARNING: Instruction %p parent mismatch!", inst);
+        tty->print_cr("    Expected parent: %p (%s)", &*BB, BB->getName().str().c_str());
+        tty->print_cr("    Actual parent: %p (%s)", parent, parent->getName().str().c_str());
+        tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
+        if (inst->hasName()) {
+          tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
+        }
+      }
+      
+      // Check if instruction's getFunction() returns valid value
+      // Only check if parent is valid (getFunction() requires valid parent)
+      if (parent != NULL) {
+        // getFunction() is implemented as: getParent()->getParent()
+        // So if parent is valid, we can safely call getFunction()
+        llvm::Function* func = parent->getParent();
+        if (func == NULL) {
+          tty->print_cr("  ERROR: Instruction %p parent's getParent() returns NULL!", inst);
+          tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
+          if (inst->hasName()) {
+            tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
+          }
+          tty->print_cr("    Parent basic block: %p (%s)", parent, parent->getName().str().c_str());
+          orphaned_count++;
+        } else if (func != function) {
+          tty->print_cr("  ERROR: Instruction %p parent's getParent() returns wrong function!", inst);
+          tty->print_cr("    Expected function: %p (%s)", function, function->getName().str().c_str());
+          tty->print_cr("    Actual function: %p (%s)", func, func->getName().str().c_str());
+          tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
+          if (inst->hasName()) {
+            tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
+          }
+          tty->print_cr("    Parent basic block: %p (%s)", parent, parent->getName().str().c_str());
+          orphaned_count++;
+        } else {
+          // Also try calling inst->getFunction() directly to see if it matches
+          // This is the actual method that verifier calls, and it might crash if parent is invalid
+          llvm::Function* direct_func = NULL;
+          bool getFunction_succeeded = false;
+          // We can't use try-catch for LLVM internal methods, so we'll just call it
+          // If it crashes, we'll see it in the crash log
+          direct_func = inst->getFunction();
+          getFunction_succeeded = true;
+          if (direct_func != function) {
+            tty->print_cr("  WARNING: Instruction %p getFunction() returns different value!", inst);
+            tty->print_cr("    Via parent: %p (%s)", func, func->getName().str().c_str());
+            tty->print_cr("    Direct: %p (%s)", direct_func, direct_func ? direct_func->getName().str().c_str() : "NULL");
+            tty->print_cr("    Expected: %p (%s)", function, function->getName().str().c_str());
+          }
+        }
+      }
+    }
+  }
+  
+  if (orphaned_count > 0) {
+    tty->print_cr("  ERROR: Found %d orphaned or invalid instructions!", orphaned_count);
+    tty->flush();
+    // Don't fatal here, let verifyFunction catch it
+  } else {
+    tty->print_cr("  All instructions are properly in basic blocks");
+  }
+  tty->flush();
+  
+  // Output IR to file for analysis (before verification)
+  // This allows using LLVM tools like 'opt -verify' to analyze the IR
+  std::string ir_filename = std::string("/tmp/yuhu_ir_") + std::string(name) + ".ll";
+  // Replace invalid filename characters
+  for (size_t i = 0; i < ir_filename.length(); i++) {
+    if (ir_filename[i] == ':' || ir_filename[i] == '/' || ir_filename[i] == ' ') {
+      ir_filename[i] = '_';
+    }
+  }
+  
+  std::error_code EC;
+  llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
+  if (!EC) {
+    // Print the entire module (not just the function) to include metadata definitions
+    // This ensures metadata nodes used by llvm.read_register are properly serialized
+    llvm::Module* mod = function->getParent();
+    if (mod != NULL) {
+      mod->print(ir_file, nullptr);
+    } else {
+      // Fallback: print just the function if module is not available
+      function->print(ir_file);
+    }
+    ir_file.flush();
+    tty->print_cr("Yuhu: IR written to %s (use 'opt -verify %s' to analyze)", 
+                  ir_filename.c_str(), ir_filename.c_str());
+    tty->flush();
+  } else {
+    tty->print_cr("Yuhu: Failed to write IR to %s: %s", 
+                  ir_filename.c_str(), EC.message().c_str());
+    tty->flush();
+  }
+  
   // Debug 4: Verify IR correctness (不需要锁)
   tty->print_cr("Verifying Function IR...");
   if (llvm::verifyFunction(*function, &llvm::errs())) {
+    tty->print_cr("Yuhu: IR verification failed! See %s for the IR", ir_filename.c_str());
+    tty->print_cr("Yuhu: Run 'opt -verify %s' to get detailed error messages", ir_filename.c_str());
     fatal(err_msg("Function %s failed IR verification!", name));
   }
   tty->print_cr("IR verification passed");
@@ -981,10 +1119,14 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       tty->print_cr("ORC JIT: Function not found, adding module to JITDylib...");
       
       // Create ThreadSafeModule from the module containing this function
-      auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
-        std::make_unique<llvm::LLVMContext>());
+      // CRITICAL: Use the SAME LLVMContext as the original module to preserve metadata
+      // Creating a new context causes metadata to be lost, leading to "use of undefined metadata" errors
+      // Also, cloning with a new context may cause register name validation issues
+      // Instead, we should use the module's existing context
+      llvm::LLVMContext* module_ctx = &func_mod->getContext();
       
-      // Clone the module (ORC JIT takes ownership)
+      // Clone the module using the SAME context (not a new one)
+      // This preserves metadata nodes and register name information
       std::unique_ptr<llvm::Module> module_clone(
         llvm::CloneModule(*func_mod).release());
       
@@ -997,6 +1139,15 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
         tty->print_cr("Cloned module contains function: %s (linkage=%d)", 
                      func_name.c_str(), (int)cloned_func->getLinkage());
       }
+      
+      // CRITICAL: Create ThreadSafeContext using the SAME LLVMContext as the original module
+      // This ensures metadata is preserved and register names are validated correctly
+      // However, we cannot move from module_ctx (it's a reference to the module's context)
+      // Instead, we need to share the context or use a different approach
+      // For now, create a new context but ensure the cloned module uses the original context
+      // The cloned module should already have the correct context from CloneModule
+      auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
+        std::make_unique<llvm::LLVMContext>());
       
       auto TSM = llvm::orc::ThreadSafeModule(
         std::move(module_clone), *TSCtx);

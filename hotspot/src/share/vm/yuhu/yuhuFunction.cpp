@@ -135,9 +135,50 @@ void YuhuFunction::initialize(const char *name) {
     
     // Method* and Thread* are read from registers (x12, x28)
     // No longer passed as function parameters
-    method = builder()->CreateReadMethodRegister();
-    llvm::Value *thread = builder()->CreateReadThreadRegister();
-    set_thread(thread);
+    // Note: CreateReadMethodRegister/ThreadRegister return i64 (intptr_type),
+    // but we need pointer types for CreateAddressOfStructEntry/CreateValueOfStructEntry
+    
+    // CRITICAL: For normal entry, we need to create thread_ptr EARLY (before creating blocks)
+    // because YuhuTopLevelBlock objects use copy constructor which copies _thread.
+    // If _thread is NULL when blocks are created, they will have NULL _thread forever.
+    // 
+    // However, we also need thread_ptr to be in the entry basic block to dominate all uses.
+    // Solution: Create a temporary entry basic block NOW, create thread_ptr in it,
+    // set _thread, then create blocks. Later, we'll use this same entry block or create a new one.
+    
+    // Create entry basic block early
+    llvm::BasicBlock* early_entry_block = NULL;
+    if (function()->empty()) {
+      early_entry_block = llvm::BasicBlock::Create(
+        YuhuContext::current(),
+        "entry",
+        function());
+      builder()->SetInsertPoint(early_entry_block);
+      
+      // Create thread_ptr in this entry block
+      llvm::Value *thread_int = builder()->CreateReadThreadRegister();
+      llvm::Value *thread = builder()->CreateIntToPtr(
+        thread_int,
+        PointerType::getUnqual(YuhuType::oop_type()),
+        "thread_ptr");
+      set_thread(thread);
+      
+      // Create method_ptr as well
+      llvm::Value *method_int = builder()->CreateReadMethodRegister();
+      method = builder()->CreateIntToPtr(
+        method_int,
+        YuhuType::Method_type(),
+        "method_ptr");
+      
+      tty->print_cr("Yuhu: Created method_ptr and thread_ptr in early entry basic block (before creating blocks)");
+      tty->flush();
+    } else {
+      // Function already has basic blocks (should not happen for normal entry)
+      // But if it does, try to set thread from existing blocks
+      tty->print_cr("Yuhu: WARNING - Function already has basic blocks for normal entry!");
+      tty->flush();
+      method = NULL;
+    }
     
     // arg_base and arg_count are no longer needed
     _arg_base = NULL;
@@ -146,6 +187,10 @@ void YuhuFunction::initialize(const char *name) {
     // base_pc is no longer needed (can be read from PC register if needed in the future)
     // For now, set to NULL
     code_buffer()->set_base_pc(NULL);
+    
+    // Store the entry block so we can add a branch later
+    // This will be fixed when YuhuStack::CreateBuildAndPushFrame is called
+    // For now, we'll leave entry block without a terminator and fix it at line 251
   }
 
   // Create the list of blocks
@@ -192,8 +237,63 @@ void YuhuFunction::initialize(const char *name) {
   tty->flush();
 
   // Create and push our stack frame
-  set_block_insertion_point(&function()->front());
-  builder()->SetInsertPoint(CreateBlock());
+  // For normal entry, method_ptr and thread_ptr should already be created in early_entry_block (line 141-165)
+  // For OSR entry, thread should already be set from function arguments (line 119)
+  
+  // Use the early entry block if it exists, otherwise create a new one
+  llvm::BasicBlock* stack_frame_block = NULL;
+  if (!is_osr() && !function()->empty() && function()->front().getName() == "entry") {
+    // Reuse the early entry block we created
+    stack_frame_block = &function()->front();
+    builder()->SetInsertPoint(stack_frame_block);
+    set_block_insertion_point(NULL);
+    tty->print_cr("Yuhu: Reusing early entry basic block for stack frame");
+    tty->flush();
+  } else {
+    // Create a new entry basic block (for OSR or if early entry block doesn't exist)
+    if (function()->empty()) {
+      stack_frame_block = llvm::BasicBlock::Create(
+        YuhuContext::current(),
+        "entry",
+        function());
+      set_block_insertion_point(NULL);
+    } else {
+      set_block_insertion_point(&function()->front());
+      stack_frame_block = CreateBlock();
+    }
+    builder()->SetInsertPoint(stack_frame_block);
+    
+    // For OSR entry, create method_ptr and thread_ptr if not already set
+    if (is_osr()) {
+      // OSR entry: method and thread should already be set from function arguments
+      assert(method != NULL, "method should be set for OSR entry");
+      assert(thread() != NULL, "thread should be set for OSR entry");
+    } else {
+      // Normal entry: should already be set in early_entry_block
+      if (method == NULL || thread() == NULL) {
+        // Fallback: create them now if they weren't created earlier
+        if (method == NULL) {
+          llvm::Value *method_int = builder()->CreateReadMethodRegister();
+          method = builder()->CreateIntToPtr(
+            method_int,
+            YuhuType::Method_type(),
+            "method_ptr");
+        }
+        if (thread() == NULL) {
+          llvm::Value *thread_int = builder()->CreateReadThreadRegister();
+          llvm::Value *thread = builder()->CreateIntToPtr(
+            thread_int,
+            PointerType::getUnqual(YuhuType::oop_type()),
+            "thread_ptr");
+          set_thread(thread);
+        }
+        tty->print_cr("Yuhu: Created method_ptr and thread_ptr in fallback entry basic block");
+        tty->flush();
+      }
+    }
+  }
+  
+  // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
 
   // For normal compilation, reset last_Java_sp at method entry

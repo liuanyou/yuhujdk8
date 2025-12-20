@@ -133,6 +133,8 @@
 
 #include <llvm/Support/Threading.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/FileSystem.h>
 #if LLVM_VERSION_MAJOR >= 20
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/MC/TargetRegistry.h>
