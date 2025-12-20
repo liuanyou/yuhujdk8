@@ -149,6 +149,7 @@ void YuhuFunction::initialize(const char *name) {
   }
 
   // Create the list of blocks
+  tty->print_cr("=== Yuhu: Creating %d blocks ===", block_count());
   set_block_insertion_point(NULL);
   _blocks = NEW_RESOURCE_ARRAY(YuhuTopLevelBlock*, block_count());
   for (int i = 0; i < block_count(); i++) {
@@ -159,7 +160,10 @@ void YuhuFunction::initialize(const char *name) {
     // this line could simply be:
     // _blocks[i] = new YuhuTopLevelBlock(this, b);
     _blocks[b->pre_order()] = new YuhuTopLevelBlock(this, b);
+    tty->print_cr("  Block %d: bci=%d-%d, pre_order=%d", 
+                  i, b->start(), b->limit(), b->pre_order());
   }
+  tty->flush();
 
   // Walk the tree from the start block to determine which
   // blocks are entered and which blocks require phis
@@ -169,13 +173,23 @@ void YuhuFunction::initialize(const char *name) {
     return;
   }
   assert(start_block->start() == flow()->start_bci(), "blocks out of order");
+  
+  tty->print_cr("=== Yuhu: Traversing blocks from start_block %d (bci=%d) ===", 
+                start_block->index(), start_block->start());
+  tty->flush();
   start_block->enter();
 
   // Initialize all entered blocks
+  tty->print_cr("=== Yuhu: Initializing entered blocks ===");
   for (int i = 0; i < block_count(); i++) {
-    if (block(i)->entered())
+    if (block(i)->entered()) {
       block(i)->initialize();
+      tty->print_cr("  Block %d (bci=%d): needs_phis=%d, entry_block=%s", 
+                    i, block(i)->start(), block(i)->needs_phis(),
+                    block(i)->entry_block() ? block(i)->entry_block()->getName().str().c_str() : "NULL");
+    }
   }
+  tty->flush();
 
   // Create and push our stack frame
   set_block_insertion_point(&function()->front());
@@ -209,7 +223,30 @@ void YuhuFunction::initialize(const char *name) {
 #endif
   }
   else {
+    tty->print_cr("=== Yuhu: Creating YuhuNormalEntryState ===");
+    tty->print_cr("  Method: %s", target()->name()->as_utf8());
+    tty->print_cr("  Signature: %s", target()->signature()->as_symbol()->as_utf8());
+    tty->print_cr("  Max locals: %d, arg_size: %d", target()->max_locals(), target()->arg_size());
+    tty->flush();
+    
     entry_state = new YuhuNormalEntryState(start_block, method);
+    
+    // Print entry state local variable types
+    tty->print_cr("  Entry state local variable types (max_locals=%d, arg_size=%d):", 
+                  target()->max_locals(), target()->arg_size());
+    for (int i = 0; i < target()->max_locals(); i++) {
+      ciType* type = start_block->local_type_at_entry(i);
+      YuhuValue* value = entry_state->local(i);
+      tty->print_cr("    local[%d]: type=%s, basic_type=%s, value=%s, llvm_type=%s",
+                    i,
+                    type ? type->name() : "NULL",
+                    type ? type2name(type->basic_type()) : "NULL",
+                    value ? "non-NULL" : "NULL",
+                    value && value->generic_value() ? 
+                      (value->generic_value()->getType()->getTypeID() == llvm::Type::PointerTyID ? "ptr" : 
+                       value->generic_value()->getType()->getTypeID() == llvm::Type::IntegerTyID ? "int" : "other") : "N/A");
+    }
+    tty->flush();
 
     // Lock if necessary
     if (is_synchronized()) {
@@ -225,6 +262,8 @@ void YuhuFunction::initialize(const char *name) {
   }
 
   // Transition into the method proper
+  tty->print_cr("=== Yuhu: Connecting entry_state to start_block %d ===", start_block->index());
+  tty->flush();
   start_block->add_incoming(entry_state);
   builder()->CreateBr(start_block->entry_block());
 

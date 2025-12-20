@@ -230,15 +230,33 @@ void YuhuPHIValue::addIncoming(YuhuValue *value, BasicBlock* block, YuhuBuilder*
   llvm::Type *phi_type = phi->getType();
   llvm::Type *incoming_type = incoming_value->getType();
   
+  tty->print_cr("=== Yuhu: YuhuPHIValue::addIncoming ===");
+  tty->print_cr("  PHI node: %s", phi->getName().str().c_str());
+  tty->print_cr("  PHI type: %s (ID=%d)", 
+                phi_type->isPointerTy() ? "ptr" : (phi_type->isIntegerTy() ? "int" : "other"),
+                phi_type->getTypeID());
+  tty->print_cr("  Incoming type: %s (ID=%d)", 
+                incoming_type->isPointerTy() ? "ptr" : (incoming_type->isIntegerTy() ? "int" : "other"),
+                incoming_type->getTypeID());
+  tty->print_cr("  Types match: %d", phi_type == incoming_type);
+  tty->flush();
+  
   // Convert incoming value to match PHI node type if needed
   if (phi_type != incoming_type) {
+    tty->print_cr("  Performing type conversion...");
+    tty->flush();
+    
     // Perform type conversion - builder must be provided
     if (builder == NULL) {
+      tty->print_cr("ERROR: builder is NULL!");
+      tty->flush();
       ShouldNotReachHere();
     }
     
     if (phi_type->isIntegerTy() && incoming_type->isIntegerTy()) {
       // Integer to integer conversion
+      tty->print_cr("  Using CreateIntCast");
+      tty->flush();
       incoming_value = builder->CreateIntCast(
         incoming_value,
         phi_type,
@@ -246,20 +264,40 @@ void YuhuPHIValue::addIncoming(YuhuValue *value, BasicBlock* block, YuhuBuilder*
         "phi_cast");
     } else if (phi_type->isPointerTy() && incoming_type->isPointerTy()) {
       // Pointer to pointer conversion (bitcast)
+      tty->print_cr("  Using CreateBitCast (ptr->ptr)");
+      tty->flush();
       incoming_value = builder->CreateBitCast(incoming_value, phi_type, "phi_cast");
     } else if (phi_type->isPointerTy() && incoming_type->isIntegerTy()) {
       // Integer to pointer conversion (inttoptr)
+      tty->print_cr("  Using CreateIntToPtr");
+      tty->flush();
       incoming_value = builder->CreateIntToPtr(incoming_value, phi_type, "phi_cast");
     } else if (phi_type->isIntegerTy() && incoming_type->isPointerTy()) {
       // Pointer to integer conversion (ptrtoint)
+      tty->print_cr("  Using CreatePtrToInt");
+      tty->flush();
       incoming_value = builder->CreatePtrToInt(incoming_value, phi_type, "phi_cast");
     } else {
       // Fallback: try bitcast
+      tty->print_cr("  Using CreateBitCast (fallback)");
+      tty->flush();
       incoming_value = builder->CreateBitCast(incoming_value, phi_type, "phi_cast");
     }
+    
+    llvm::Type *converted_type = incoming_value->getType();
+    tty->print_cr("  Converted type: %s (ID=%d), matches PHI: %d",
+                  converted_type->isPointerTy() ? "ptr" : (converted_type->isIntegerTy() ? "int" : "other"),
+                  converted_type->getTypeID(),
+                  converted_type == phi_type);
+    tty->flush();
   }
   
+  tty->print_cr("  Calling phi->addIncoming...");
+  tty->flush();
   ((llvm::PHINode *) generic_value())->addIncoming(incoming_value, block);
+  tty->print_cr("  Successfully added incoming value");
+  tty->flush();
+  
   if (!value->zero_checked())
     _all_incomers_zero_checked = false;
 }

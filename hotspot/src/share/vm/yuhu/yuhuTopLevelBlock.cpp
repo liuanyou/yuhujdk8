@@ -228,15 +228,30 @@ YuhuState* YuhuTopLevelBlock::entry_state() {
 }
 
 void YuhuTopLevelBlock::add_incoming(YuhuState* incoming_state) {
+  BasicBlock* predecessor = builder()->GetInsertBlock();
+  tty->print_cr("=== Yuhu: add_incoming to block %d (bci=%d) ===", index(), start());
+  tty->print_cr("  Predecessor block: %s", predecessor ? predecessor->getName().str().c_str() : "NULL");
+  tty->print_cr("  Needs PHIs: %d", needs_phis());
+  tty->flush();
+  
   if (needs_phis()) {
+    tty->print_cr("  Using YuhuPHIState::add_incoming");
+    tty->flush();
     ((YuhuPHIState *) entry_state())->add_incoming(incoming_state);
   }
   else if (_entry_state == NULL) {
+    tty->print_cr("  Setting entry_state directly (first incoming)");
+    tty->flush();
     _entry_state = incoming_state;
   }
   else {
+    tty->print_cr("  Verifying entry_state equality");
+    tty->flush();
     assert(entry_state()->equal_to(incoming_state), "should be");
   }
+  
+  tty->print_cr("=== Yuhu: Finished add_incoming to block %d ===", index());
+  tty->flush();
 }
 
 void YuhuTopLevelBlock::enter(YuhuTopLevelBlock* predecessor,

@@ -343,7 +343,13 @@ void YuhuCacher::process_method_slot(Value** value, int offset) {
 
 void YuhuFunctionEntryCacher::process_method_slot(Value** value, int offset) {
   // "Cache" the method pointer
-  *value = method();
+  // method() is read from register (x12) as intptr_type(), but we need Method_type() (pointer)
+  llvm::Value* method_val = method();
+  if (method_val->getType() != YuhuType::Method_type()) {
+    // Convert from intptr_type() to Method_type() using inttoptr
+    method_val = builder()->CreateIntToPtr(method_val, YuhuType::Method_type(), "method_ptr");
+  }
+  *value = method_val;
 }
 
 void YuhuCacher::process_local_slot(int          index,

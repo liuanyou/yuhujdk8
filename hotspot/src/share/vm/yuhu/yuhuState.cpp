@@ -290,6 +290,10 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
   builder()->SetInsertPoint(block->entry_block());
   char name[18];
 
+  tty->print_cr("=== Yuhu: Creating YuhuPHIState for block %d (bci=%d) ===", 
+                block->index(), block->start());
+  tty->flush();
+
   // Method
   set_method(builder()->CreatePHI(YuhuType::Method_type(), 0, "method"));
 
@@ -308,11 +312,18 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
     case T_FLOAT:
     case T_DOUBLE:
     case T_OBJECT:
-    case T_ARRAY:
+    case T_ARRAY: {
       snprintf(name, sizeof(name), "local_%d_", i);
+      llvm::Type* llvm_type = YuhuType::to_stackType(type);
       value = YuhuValue::create_phi(
-        type, builder()->CreatePHI(YuhuType::to_stackType(type), 0, name));
+        type, builder()->CreatePHI(llvm_type, 0, name));
+      tty->print_cr("  Created PHI for local[%d]: ciType=%s, basic_type=%s, llvm_type=%s",
+                    i,
+                    type->name(),
+                    type2name(type->basic_type()),
+                    llvm_type->isPointerTy() ? "ptr" : (llvm_type->isIntegerTy() ? "int" : "other"));
       break;
+    }
 
     case T_ADDRESS:
       value = YuhuValue::address_constant(type->as_return_address()->bci());
@@ -330,6 +341,9 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
     }
     set_local(i, value);
   }
+  
+  tty->print_cr("=== Yuhu: Finished creating YuhuPHIState for block %d ===", block->index());
+  tty->flush();
 
   // Expression stack
   for (int i = 0; i < block->stack_depth_at_entry(); i++) {
@@ -375,17 +389,77 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
 void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
   BasicBlock *predecessor = builder()->GetInsertBlock();
 
+  tty->print_cr("=== Yuhu: YuhuPHIState::add_incoming ===");
+  tty->print_cr("  Block: %d (bci=%d)", _block->index(), _block->start());
+  tty->print_cr("  Predecessor: %s", predecessor ? predecessor->getName().str().c_str() : "NULL");
+  tty->flush();
+
   // Method
-  ((PHINode *) method())->addIncoming(incoming_state->method(), predecessor);
+  llvm::PHINode* method_phi = (llvm::PHINode *) method();
+  llvm::Value* incoming_method = incoming_state->method();
+  llvm::Type* method_phi_type = method_phi->getType();
+  llvm::Type* incoming_method_type = incoming_method->getType();
+  
+  tty->print_cr("  Method PHI: phi_type=%s (ID=%d), incoming_type=%s (ID=%d), match=%d",
+                method_phi_type->isPointerTy() ? "ptr" : (method_phi_type->isIntegerTy() ? "int" : "other"),
+                method_phi_type->getTypeID(),
+                incoming_method_type->isPointerTy() ? "ptr" : (incoming_method_type->isIntegerTy() ? "int" : "other"),
+                incoming_method_type->getTypeID(),
+                method_phi_type == incoming_method_type);
+  tty->flush();
+  
+  if (method_phi_type != incoming_method_type) {
+    tty->print_cr("  Method PHI type mismatch! Converting...");
+    tty->flush();
+    if (method_phi_type->isPointerTy() && incoming_method_type->isPointerTy()) {
+      incoming_method = builder()->CreateBitCast(incoming_method, method_phi_type, "method_cast");
+    } else if (method_phi_type->isPointerTy() && incoming_method_type->isIntegerTy()) {
+      // Convert from intptr_type() to Method_type() using inttoptr
+      incoming_method = builder()->CreateIntToPtr(incoming_method, method_phi_type, "method_cast");
+    } else if (method_phi_type->isIntegerTy() && incoming_method_type->isPointerTy()) {
+      // Convert from Method_type() to intptr_type() using ptrtoint
+      incoming_method = builder()->CreatePtrToInt(incoming_method, method_phi_type, "method_cast");
+    } else {
+      tty->print_cr("  ERROR: Cannot convert method type!");
+      tty->flush();
+      ShouldNotReachHere();
+    }
+    llvm::Type* converted_type = incoming_method->getType();
+    tty->print_cr("  Converted type: %s (ID=%d), matches PHI: %d",
+                  converted_type->isPointerTy() ? "ptr" : (converted_type->isIntegerTy() ? "int" : "other"),
+                  converted_type->getTypeID(),
+                  converted_type == method_phi_type);
+    tty->flush();
+  }
+  
+  method_phi->addIncoming(incoming_method, predecessor);
 
   // Local variables
   for (int i = 0; i < max_locals(); i++) {
     if (local(i) != NULL) {
+      YuhuValue* phi_value = local(i);
       YuhuValue* incoming_value = incoming_state->local(i);
       if (incoming_value == NULL) {
+        tty->print_cr("ERROR: incoming_value is NULL for local[%d]", i);
+        tty->flush();
         ShouldNotReachHere();
       }
+      
+      llvm::Type* phi_type = phi_value->generic_value()->getType();
+      llvm::Type* incoming_type = incoming_value->generic_value()->getType();
+      
+      tty->print_cr("  local[%d]: phi_type=%s, incoming_type=%s, match=%d",
+                    i,
+                    phi_type->isPointerTy() ? "ptr" : (phi_type->isIntegerTy() ? "int" : "other"),
+                    incoming_type->isPointerTy() ? "ptr" : (incoming_type->isIntegerTy() ? "int" : "other"),
+                    phi_type == incoming_type);
+      tty->print_cr("  Calling local(%d)->addIncoming...", i);
+      tty->flush();
+      
       local(i)->addIncoming(incoming_value, predecessor, builder());
+      
+      tty->print_cr("  Successfully called local(%d)->addIncoming", i);
+      tty->flush();
     }
   }
 

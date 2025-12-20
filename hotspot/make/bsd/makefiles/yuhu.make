@@ -215,6 +215,8 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuRuntime.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuType.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuFunction.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuTopLevelBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuEntry.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuCodeBuffer.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuMemoryManager.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
