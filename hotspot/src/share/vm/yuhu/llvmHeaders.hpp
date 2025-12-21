@@ -120,6 +120,13 @@
   #include <llvm/Intrinsics.h>
 #endif
 
+// InlineAsm header for inline assembly support
+#if LLVM_VERSION_MAJOR >= 4
+  #include <llvm/IR/InlineAsm.h>
+#else
+  #include <llvm/InlineAsm.h>
+#endif
+
 // ORC JIT (LLVM 11+) - recommended for LLVM 20
 // Note: ORC JIT requires LLVM 11 or later. LLVM 20 is recommended.
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>

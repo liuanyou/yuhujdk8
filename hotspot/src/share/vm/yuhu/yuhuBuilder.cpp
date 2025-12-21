@@ -517,15 +517,49 @@ CallInst* YuhuBuilder::CreateReadLinkRegister() {
 }
 
 CallInst* YuhuBuilder::CreateReadMethodRegister() {
-  // Read rmethod register (x12) on AArch64 using @llvm.read_register intrinsic
-  // This is needed to get Method* directly from HotSpot's global register
-  return CreateReadRegister("x12");
+  // Read rmethod register (x12) on AArch64 using inline assembly
+  // LLVM's read_register intrinsic doesn't support x12 (and other general-purpose registers except x0)
+  // So we use inline assembly to directly read the register
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov $0, x12"
+  // $0 is the output operand (result register)
+  // "=r" means output to a general-purpose register
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov $0, x12",  // AArch64 assembly: move x12 to output register
+    "=r",           // Output constraint: =r means output to a register
+    false,          // Has side effects: no
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
+  );
+  
+  // LLVM 20+ requires FunctionType for CreateCall
+  return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rmethod");
 }
 
 CallInst* YuhuBuilder::CreateReadThreadRegister() {
-  // Read rthread register (x28) on AArch64 using @llvm.read_register intrinsic
-  // This is needed to get Thread* directly from HotSpot's global register
-  return CreateReadRegister("x28");
+  // Read rthread register (x28) on AArch64 using inline assembly
+  // LLVM's read_register intrinsic doesn't support x28 (and other general-purpose registers except x0)
+  // So we use inline assembly to directly read the register
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov $0, x28"
+  // $0 is the output operand (result register)
+  // "=r" means output to a general-purpose register
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov $0, x28",  // AArch64 assembly: move x28 to output register
+    "=r",           // Output constraint: =r means output to a register
+    false,          // Has side effects: no
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
+  );
+  
+  // LLVM 20+ requires FunctionType for CreateCall
+  return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rthread");
 }
 
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
