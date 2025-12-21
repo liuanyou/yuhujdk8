@@ -562,6 +562,42 @@ CallInst* YuhuBuilder::CreateReadThreadRegister() {
   return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rthread");
 }
 
+void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {
+  // Write SP register (x31) on AArch64 using inline assembly
+  // This is needed to actually modify the SP register, not just calculate a value
+  // LLVM's write_register intrinsic doesn't support SP register modification in the same way
+  // So we use inline assembly to directly modify the register
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov sp, $0"
+  // $0 is the input operand (new SP value)
+  // "r" means input from a general-purpose register
+  // SP (x31) is a special register, but "mov sp, xN" is a valid AArch64 instruction
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getVoidTy(ctx),
+    {YuhuType::intptr_type()},  // Input: new SP value
+    false);
+  
+  // Create inline assembly: "mov sp, $0"
+  // $0 is the input operand (new SP value)
+  // Constraint string: "r" means input from a general-purpose register
+  // For InlineAsm::get, the constraint string format is: "output_constraints,input_constraints"
+  // Since we have no output (void return) and one input, the constraint string is "r"
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov sp, $0",  // AArch64 assembly: move input to SP register (x31)
+    "r",           // Constraint: "r" means input from a general-purpose register
+    true,          // Has side effects: yes (modifies SP)
+    false,         // Is align stack: no
+    llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
+  );
+  
+  // LLVM 20+ requires FunctionType for CreateCall
+  std::vector<Value*> args;
+  args.push_back(new_sp);
+  CreateCall(asm_type, asm_func, args);
+}
+
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
   // Generic register reader using @llvm.read_register intrinsic
   // Used for reading x12 (rmethod), x28 (rthread), x20 (esp), etc.

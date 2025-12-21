@@ -72,17 +72,22 @@ void YuhuStack::initialize(Value* method) {
   // This matches C2's behavior: sub(sp, sp, framesize) then stp(rfp, lr, Address(sp, framesize - 2*wordSize))
   // This ensures LR and FP are saved at the top of the frame (high address), not in expression stack area
   
-  // Step 1: Allocate frame on stack (includes space for LR and FP)
+  // Step 1: Calculate new stack pointer (includes space for LR and FP)
   Value *stack_pointer = builder()->CreateSub(
     current_sp,
     LLVMValue::intptr_constant(frame_size_bytes),
     "new_sp");
   
+  // Step 1.5: Actually modify SP register using inline assembly
+  // This ensures SP is updated before we save LR and FP
+  // Without this, LLVM will generate additional stack allocation when saving LR/FP
+  builder()->CreateWriteStackPointer(stack_pointer);
+  
   // Step 2: Save LR and FP to the top of the frame
-  // LR at [stack_pointer + frame_size_bytes - 2 * wordSize] = [current_sp - 2 * wordSize]
-  // FP at [stack_pointer + frame_size_bytes - 1 * wordSize] = [current_sp - 1 * wordSize]
-  // Note: In AArch64, sender_sp = unextended_sp + frame_size = current_sp
-  // So [sender_sp - 1] = [current_sp - 1] and [sender_sp - 2] = [current_sp - 2]
+  // After CreateWriteStackPointer, SP is now stack_pointer
+  // We need to save to [sp + frame_size_bytes - 2*wordSize] and [sp + frame_size_bytes - wordSize]
+  // This matches C2's behavior: stp(rfp, lr, Address(sp, framesize - 2*wordSize))
+  // Note: frame_size_bytes includes space for LR and FP (2 words)
   
   // Read LR register (x30)
   Value *lr = builder()->CreateReadLinkRegister();
@@ -94,23 +99,30 @@ void YuhuStack::initialize(Value* method) {
     YuhuType::intptr_type(),
     "prev_fp");
   
-  // Calculate addresses: [stack_pointer + frame_size_bytes - 2*wordSize] and [stack_pointer + frame_size_bytes - wordSize]
-  int lr_offset_words = frame_size_bytes / wordSize - 2;  // LR at [frame_top - 2]
-  int fp_offset_words = frame_size_bytes / wordSize - 1;   // FP at [frame_top - 1]
+  // After CreateWriteStackPointer, SP is now stack_pointer
+  // We need to save to [sp + frame_size_bytes - 1*wordSize] for LR and [sp + frame_size_bytes - 2*wordSize] for FP
+  // Read current SP (which is now stack_pointer) to use as base
+  Value *current_sp_after_alloc = builder()->CreateReadStackPointer();
   
-  // Save LR to [stack_pointer + lr_offset_words]
+  // Calculate offsets from current SP (which is stack_pointer)
+  // LR at [sp + frame_size_bytes - 1*wordSize] (top of frame, for return address)
+  // FP at [sp + frame_size_bytes - 2*wordSize] (second from top, for saved FP)
+  int lr_offset_bytes = frame_size_bytes - 1 * wordSize;  // LR at [sp + frame_size_bytes - 1*wordSize]
+  int fp_offset_bytes = frame_size_bytes - 2 * wordSize;    // FP at [sp + frame_size_bytes - 2*wordSize]
+  
+  // Save LR to [current_sp_after_alloc + lr_offset_bytes]
   Value *lr_save_addr = builder()->CreateIntToPtr(
-    builder()->CreateGEP(YuhuType::intptr_type(),
-                         builder()->CreateIntToPtr(stack_pointer, PointerType::getUnqual(YuhuType::intptr_type())),
-                         LLVMValue::intptr_constant(lr_offset_words)),
+    builder()->CreateAdd(
+      current_sp_after_alloc,
+      LLVMValue::intptr_constant(lr_offset_bytes)),
     PointerType::getUnqual(YuhuType::intptr_type()));
   builder()->CreateStore(lr, lr_save_addr);
   
-  // Save FP to [stack_pointer + fp_offset_words]
+  // Save FP to [current_sp_after_alloc + fp_offset_bytes]
   Value *fp_save_addr = builder()->CreateIntToPtr(
-    builder()->CreateGEP(YuhuType::intptr_type(),
-                         builder()->CreateIntToPtr(stack_pointer, PointerType::getUnqual(YuhuType::intptr_type())),
-                         LLVMValue::intptr_constant(fp_offset_words)),
+    builder()->CreateAdd(
+      current_sp_after_alloc,
+      LLVMValue::intptr_constant(fp_offset_bytes)),
     PointerType::getUnqual(YuhuType::intptr_type()));
   builder()->CreateStore(prev_fp, fp_save_addr);
   
@@ -180,6 +192,37 @@ void YuhuStack::initialize(Value* method) {
   // Update frame pointer to point to this frame
   CreateStoreFramePointer(
     builder()->CreatePtrToInt(fp, YuhuType::intptr_type()));
+  
+  // Set last_Java_sp and last_Java_fp in thread object for stack frame traversal
+  // This is required for safepoint operations and stack walking
+  // After stack frame allocation, we need to save the current frame's sp and fp
+  // to thread object so that stack traversal can work correctly:
+  //   1. Get current frame's sp and fp from last_Java_sp and last_Java_fp
+  //   2. Calculate sender_sp = sp + frame_size
+  //   3. Read sender_fp from [sender_sp - 2] (which is [sp + frame_size - 2])
+  //   4. Read sender_pc (LR) from [sender_sp - 1] (which is [sp + frame_size - 1])
+  // 
+  // last_Java_sp should be the current frame's SP (stack_pointer, which is unextended_sp)
+  // last_Java_fp should be the current frame's FP (fp, which points to frame header)
+  // last_Java_pc should be the return address (LR, saved at [sp + frame_size - 1])
+  builder()->CreateStore(stack_pointer, last_Java_sp_addr());
+  builder()->CreateStore(
+    builder()->CreatePtrToInt(fp, YuhuType::intptr_type()),
+    last_Java_fp_addr());
+  
+  // Save LR (return address) as last_Java_pc
+  // IMPORTANT: Use the LR value we read at function entry (line 93), NOT the current LR register!
+  // The current LR register may have been modified by function calls (e.g., CreateReadStackPointer)
+  // that happened after we saved LR to the stack. We need the original return address from when
+  // this function was called, which is what we saved to the stack.
+  // The 'lr' variable was read at the very beginning (before any function calls), so it's safe.
+  builder()->CreateStore(
+    lr,  // Use the LR value read at function entry, not the current LR register
+    builder()->CreateAddressOfStructEntry(
+      thread(),
+      JavaThread::last_Java_pc_offset(),
+      llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+      "last_Java_pc_addr"));
 }
 
 // Stack overflow check for AArch64

@@ -715,11 +715,23 @@ void MacroAssembler::build_frame(int framesize) {
 
 **区别**：
 - C2：先分配栈空间，后保存寄存器（保存到 `[sp + framesize - 2*wordSize]` 和 `[sp + framesize - wordSize]`）
-- Yuhu：先保存寄存器（保存到 `[current_sp - 2]` 和 `[current_sp - 1]`），后分配栈空间
+- Yuhu（设计意图）：先分配栈空间，后保存寄存器（保存到 `[stack_pointer + framesize - 2*wordSize]` 和 `[stack_pointer + framesize - wordSize]`）
 
-**结果相同**：
-- 两种方式最终位置相同：`[sender_sp - 2]` 和 `[sender_sp - 1]`
-- 都符合 AArch64 ABI 和 HotSpot 标准
+**实际实现问题**：
+- LLVM 自动生成函数序言，已经分配了栈帧（如 `stp x28, x27, [sp, #-96]!`）
+- Yuhu 代码在 LLVM 序言之后读取 `current_sp`，此时 SP 已经被 LLVM 修改
+- Yuhu 代码又手动分配了一次栈帧，导致 `stp x30, x9, [sp, #-16]!` 又分配了 16 字节
+- **问题**：Yuhu 代码应该保存 LR 和 FP 到 LLVM 已分配栈帧的顶部，而不是再次分配
+
+**需要修复**：
+- 方案 1：在 LLVM 序言之前读取调用者的 SP，然后保存 LR 和 FP 到 `[caller_sp - 2*wordSize]` 和 `[caller_sp - wordSize]`
+- 方案 2：禁用 LLVM 的自动序言，手动生成完整的序言（包括 LR 和 FP 的保存）
+- 方案 3：让 LLVM 负责栈帧分配和 LR/FP 保存，Yuhu 只负责 Yuhu 特定的栈帧内容
+
+**当前状态**：
+- 代码逻辑是先分配栈帧，后保存 LR 和 FP（符合 C2 的做法）
+- 但由于 LLVM 已经自动分配了栈帧，实际执行时又额外分配了一次
+- 需要修复以匹配 C2 的行为
 
 ### 简化设计中的栈帧布局优势
 
