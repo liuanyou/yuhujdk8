@@ -852,6 +852,27 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
         PointerType::getUnqual(YuhuType::to_stackType(type))));
   }
 
+  // NOTE: We do NOT clear last_Java_sp here when returning from a Yuhu compiled method.
+  // 
+  // The reason: last_Java_sp represents the "current Java frame" for stack traversal.
+  // When a method returns, the caller becomes the "current frame", but the caller
+  // should have already set last_Java_sp when it entered (if it's a compiled method)
+  // or the interpreter maintains it (if it's an interpreted method).
+  //
+  // However, if we clear it here and the caller is another Yuhu compiled method that
+  // hasn't set last_Java_sp yet (or if it's the top-level method), stack traversal
+  // will fail because pd_last_frame() requires has_last_Java_frame() to be true.
+  //
+  // C2 clears last_Java_sp in its return stub, but C2 methods are typically called
+  // from the interpreter or have special handling. For Yuhu, we keep last_Java_sp
+  // set so that stack traversal can work correctly.
+  //
+  // If the caller is the interpreter, it will maintain last_Java_sp correctly.
+  // If the caller is another compiled method, it should have set last_Java_sp when
+  // it entered, so our value will be overwritten anyway.
+  //
+  // TODO: Re-evaluate this decision based on actual behavior and safepoint requirements.
+
   builder()->CreateRet(LLVMValue::jint_constant(0));
 }
 
