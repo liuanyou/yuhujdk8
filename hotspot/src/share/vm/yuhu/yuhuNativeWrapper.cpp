@@ -37,6 +37,8 @@ void YuhuNativeWrapper::initialize(const char *name) {
     GlobalVariable::InternalLinkage,
     name);
 
+  // Register reservation for x19-x28 is handled globally via TargetMachine features.
+
   // Get our arguments
   Function::arg_iterator ai = function()->arg_begin();
   llvm::Argument *method = ai++;  // Use llvm::Argument to avoid conflict with HotSpot's Argument class

@@ -59,72 +59,25 @@ void YuhuStack::initialize(Value* method) {
   Value *current_sp = builder()->CreateReadStackPointer();
   
   // Calculate frame size in bytes
-  // CRITICAL: frame_size_bytes MUST include space for LR and FP (2 words)
-  // This matches C2's behavior: framesize includes return pc and rfp
-  // See macroAssembler_aarch64.cpp:build_frame() and aarch64.ad:1539
-  int frame_size_bytes = (extended_frame_size() + 2) * wordSize;  // +2 for LR and FP
+  // NOTE: LR and FP are saved by LLVM's prologue (stp x29, x30, [sp, #-16]!)
+  // We reserve x19-x28, so LLVM prologue only saves x29/x30 = 16 bytes
+  // Yuhu frame only contains: locals, stack, header (NO separate LR/FP)
+  int frame_size_bytes = extended_frame_size() * wordSize;
   
   // AArch64 requires 16-byte stack alignment
   // Align frame size up to 16 bytes
   frame_size_bytes = align_size_up(frame_size_bytes, 16);
   
-  // CRITICAL FIX: Allocate frame FIRST, then save LR and FP to frame top
-  // This matches C2's behavior: sub(sp, sp, framesize) then stp(rfp, lr, Address(sp, framesize - 2*wordSize))
-  // This ensures LR and FP are saved at the top of the frame (high address), not in expression stack area
-  
-  // Step 1: Calculate new stack pointer (includes space for LR and FP)
+  // Allocate Yuhu frame body (LLVM prologue already saved x29/x30)
+  // After LLVM prologue: sp points to saved x29/x30 area
+  // We allocate additional space for Yuhu frame body
   Value *stack_pointer = builder()->CreateSub(
     current_sp,
     LLVMValue::intptr_constant(frame_size_bytes),
     "new_sp");
   
-  // Step 1.5: Actually modify SP register using inline assembly
-  // This ensures SP is updated before we save LR and FP
-  // Without this, LLVM will generate additional stack allocation when saving LR/FP
+  // Update SP register
   builder()->CreateWriteStackPointer(stack_pointer);
-  
-  // Step 2: Save LR and FP to the top of the frame
-  // After CreateWriteStackPointer, SP is now stack_pointer
-  // We need to save to [sp + frame_size_bytes - 2*wordSize] and [sp + frame_size_bytes - wordSize]
-  // This matches C2's behavior: stp(rfp, lr, Address(sp, framesize - 2*wordSize))
-  // Note: frame_size_bytes includes space for LR and FP (2 words)
-  
-  // Read LR register (x30)
-  Value *lr = builder()->CreateReadLinkRegister();
-  
-  // Read previous FP (from last_Java_fp)
-  Value *prev_fp = builder()->CreateValueOfStructEntry(
-    thread(),
-    JavaThread::last_Java_fp_offset(),
-    YuhuType::intptr_type(),
-    "prev_fp");
-  
-  // After CreateWriteStackPointer, SP is now stack_pointer
-  // We need to save to [sp + frame_size_bytes - 1*wordSize] for LR and [sp + frame_size_bytes - 2*wordSize] for FP
-  // Read current SP (which is now stack_pointer) to use as base
-  Value *current_sp_after_alloc = builder()->CreateReadStackPointer();
-  
-  // Calculate offsets from current SP (which is stack_pointer)
-  // LR at [sp + frame_size_bytes - 1*wordSize] (top of frame, for return address)
-  // FP at [sp + frame_size_bytes - 2*wordSize] (second from top, for saved FP)
-  int lr_offset_bytes = frame_size_bytes - 1 * wordSize;  // LR at [sp + frame_size_bytes - 1*wordSize]
-  int fp_offset_bytes = frame_size_bytes - 2 * wordSize;    // FP at [sp + frame_size_bytes - 2*wordSize]
-  
-  // Save LR to [current_sp_after_alloc + lr_offset_bytes]
-  Value *lr_save_addr = builder()->CreateIntToPtr(
-    builder()->CreateAdd(
-      current_sp_after_alloc,
-      LLVMValue::intptr_constant(lr_offset_bytes)),
-    PointerType::getUnqual(YuhuType::intptr_type()));
-  builder()->CreateStore(lr, lr_save_addr);
-  
-  // Save FP to [current_sp_after_alloc + fp_offset_bytes]
-  Value *fp_save_addr = builder()->CreateIntToPtr(
-    builder()->CreateAdd(
-      current_sp_after_alloc,
-      LLVMValue::intptr_constant(fp_offset_bytes)),
-    PointerType::getUnqual(YuhuType::intptr_type()));
-  builder()->CreateStore(prev_fp, fp_save_addr);
   
   // Check for stack overflow - checks current_sp to ensure there's enough space
   // for both the new frame and throw_StackOverflowError (if needed)
@@ -184,9 +137,13 @@ void YuhuStack::initialize(Value* method) {
   assert(offset == extended_frame_size(), "should do");
   
   // For AArch64, frame pointer points to the frame header
-  // Store the previous frame pointer (reuse prev_fp defined earlier at line 87)
-  // prev_fp was already loaded from last_Java_fp and saved to [current_sp - 2]
-  // Now we also store it to frame_pointer_addr for frame pointer chain
+  // Read the previous frame pointer from last_Java_fp
+  Value *prev_fp = builder()->CreateValueOfStructEntry(
+    thread(),
+    JavaThread::last_Java_fp_offset(),
+    YuhuType::intptr_type(),
+    "prev_fp");
+  // Store previous FP to frame pointer slot for frame pointer chain
   builder()->CreateStore(prev_fp, fp);
   
   // Update frame pointer to point to this frame
@@ -258,17 +215,23 @@ void YuhuStack::initialize(Value* method) {
   builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
   
   // Call inline assembly to store last_Java_fp
-  // prev_fp is already intptr_type (i64), no conversion needed
+  // CRITICAL: last_Java_fp should point to where LLVM prologue saved x29/x30
+  // LLVM prologue does: stp x29, x30, [sp, #-16]!
+  // After prologue: *(sp) = x29, *(sp+8) = x30
+  // HotSpot expects: *(fp+0) = saved FP, *(fp+1) = return address
+  // So last_Java_fp = current_sp (the sp value after LLVM prologue, before Yuhu allocation)
+  // Note: current_sp was read at the start of initialize(), it's the sp after LLVM prologue
   std::vector<Value*> store_fp_args;
   store_fp_args.push_back(fp_addr_i64);
-  store_fp_args.push_back(prev_fp);
+  store_fp_args.push_back(current_sp);  // Use LLVM prologue's sp, where x29/x30 are saved
   builder()->CreateCall(store_asm_type, store_sp_asm, store_fp_args);
   
   // Call inline assembly to store last_Java_pc
-  // lr is already intptr_type (i64), no conversion needed
+  // Read LR register (x30) for return address
+  Value *lr_value = builder()->CreateReadLinkRegister();
   std::vector<Value*> store_pc_args;
   store_pc_args.push_back(pc_addr_i64);
-  store_pc_args.push_back(lr);
+  store_pc_args.push_back(lr_value);
   builder()->CreateCall(store_asm_type, store_sp_asm, store_pc_args);
   
   // DEBUG: Print confirmation

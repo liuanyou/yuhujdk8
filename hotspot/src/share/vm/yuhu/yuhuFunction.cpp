@@ -98,6 +98,8 @@ void YuhuFunction::initialize(const char *name) {
     }
   }
 
+  // Register reservation for x19-x28 is configured globally via the TargetMachine (-mattr).
+
   // Get our arguments
   Function::arg_iterator ai = function()->arg_begin();
   llvm::Value *method = NULL;  // Will be set below for both OSR and normal entry

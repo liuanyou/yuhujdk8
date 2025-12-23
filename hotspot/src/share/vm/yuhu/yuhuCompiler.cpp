@@ -541,11 +541,27 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
   int frame_words = header_words + monitor_words + stack_words;
-  // CRITICAL: frame_size MUST include space for LR and FP (2 words)
-  // This matches C2's behavior: framesize includes return pc and rfp
-  // See macroAssembler_aarch64.cpp:build_frame() and aarch64.ad:1539
-  // frame_size in words = extended_frame_size + 2 (for LR and FP)
-  int frame_size = frame_words + locals_words + 2;  // +2 for LR and FP
+  // CRITICAL: frame_size is used by HotSpot for stack frame traversal:
+  //   sender_sp = unextended_sp + frame_size
+  //   sender_pc = *(sender_sp - 1)   // return address (x30 saved by LLVM prologue)
+  //   sender_fp = *(sender_sp - 2)   // saved frame pointer (x29 saved by LLVM prologue)
+  //
+  // Stack layout (high to low address):
+  //   [caller's frame]
+  //   ---------------  <- sender_sp = unextended_sp + frame_size
+  //   [x30 (LR)]       <- sender_sp - 1 (saved by LLVM prologue: stp x29, x30, [sp, #-16]!)
+  //   [x29 (FP)]       <- sender_sp - 2 (saved by LLVM prologue)
+  //   [locals, stack, header]  <- Yuhu frame body (NO separate Yuhu LR/FP)
+  //   ---------------  <- unextended_sp
+  //
+  // LLVM prologue currently saves x20,x19,x29,x30 = 32 bytes (4 words)
+  // TODO: Post-compilation analysis to dynamically determine actual prologue size
+  // frame_size = Yuhu frame body + LLVM prologue (currently 4 words)
+  int llvm_prologue_words = 4;  // Temporary: x20,x19,x29,x30 saved by LLVM prologue
+  int frame_size = frame_words + locals_words + llvm_prologue_words;
+  // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
+  // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
+  frame_size = align_size_up(frame_size, 2);
 
   // Install the method into the VM
   CodeOffsets offsets;
