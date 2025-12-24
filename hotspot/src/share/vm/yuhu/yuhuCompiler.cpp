@@ -42,6 +42,7 @@
 #include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhuMemoryManager.hpp"
 #include "yuhu/yuhuNativeWrapper.hpp"
+#include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
 
@@ -362,22 +363,6 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
   return (int)(end - start);
 }
 
-// Emit normal entry adapter into the given CodeBuffer using YuhuMacroAssembler.
-// Arguments expected by LLVM function: (Method*, base_pc, thread, arg_base, arg_count)
-// Incoming from i2c adapter: x0-x7 = Java method arguments
-// rmethod (R12) = Method*
-// rthread (R28) = JavaThread*
-// This adapter:
-// 1. Packs Java args into a temporary buffer
-// 2. Passes Method*, base_pc, thread, arg_base, arg_count to LLVM
-// 3. Lets LLVM prologue allocate the Yuhu frame
-// NOTE: base_pc parameter is ignored - we use PC-relative address calculation instead.
-// Simplified normal adapter according to 021 design
-// The adapter does NOT allocate any stack frame or pack arguments
-// It simply jumps to the LLVM function
-// - x0-x7 are already Java method parameters (for static methods, x0 is NULL)
-// - Method* and Thread* are read from registers (x12, x28) in LLVM function
-// - Stack arguments (> 8) are read from x20 (esp) in LLVM function
 static int generate_normal_adapter_into(CodeBuffer& cb,
                                        Method* method,
                                        address base_pc,  // Unused - kept for compatibility
@@ -541,24 +526,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
   int frame_words = header_words + monitor_words + stack_words;
-  // CRITICAL: frame_size is used by HotSpot for stack frame traversal:
-  //   sender_sp = unextended_sp + frame_size
-  //   sender_pc = *(sender_sp - 1)   // return address (x30 saved by LLVM prologue)
-  //   sender_fp = *(sender_sp - 2)   // saved frame pointer (x29 saved by LLVM prologue)
-  //
-  // Stack layout (high to low address):
-  //   [caller's frame]
-  //   ---------------  <- sender_sp = unextended_sp + frame_size
-  //   [x30 (LR)]       <- sender_sp - 1 (saved by LLVM prologue: stp x29, x30, [sp, #-16]!)
-  //   [x29 (FP)]       <- sender_sp - 2 (saved by LLVM prologue)
-  //   [locals, stack, header]  <- Yuhu frame body (NO separate Yuhu LR/FP)
-  //   ---------------  <- unextended_sp
-  //
-  // LLVM prologue currently saves x20,x19,x29,x30 = 32 bytes (4 words)
-  // TODO: Post-compilation analysis to dynamically determine actual prologue size
-  // frame_size = Yuhu frame body + LLVM prologue (currently 4 words)
-  int llvm_prologue_words = 4;  // Temporary: x20,x19,x29,x30 saved by LLVM prologue
-  int frame_size = frame_words + locals_words + llvm_prologue_words;
+  
+  // Step 1: Analyze LLVM prologue to get actual stack space used
+  address llvm_code_start = entry->code_start();
+  int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start);
+  int actual_prologue_words = (actual_prologue_bytes + wordSize - 1) / wordSize;  // Round up
+  
+  tty->print_cr("Yuhu: Prologue analysis - code_start=%p, prologue_bytes=%d, prologue_words=%d",
+                llvm_code_start, actual_prologue_bytes, actual_prologue_words);
+  
+  // Step 2: Calculate final frame_size using actual prologue size
+  int frame_size = frame_words + locals_words + actual_prologue_words;
   // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
   // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
   frame_size = align_size_up(frame_size, 2);
@@ -658,6 +636,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                   combined_base, entry->code_start());
     tty->print_cr("Yuhu: frame_size=%d words (header=%d, monitor=%d, stack=%d, extra_locals=%d)",
                   frame_size, header_words, monitor_words, stack_words, extra_locals);
+    tty->print_cr("Yuhu: CodeBuffer range: code_begin=%p, code_end=%p, size=%zu",
+                  combined_cb.insts()->start(), combined_cb.insts()->end(),
+                  combined_cb.insts()->end() - combined_cb.insts()->start());
     env->register_method(target,
                          entry_bci,
                          &offsets,
@@ -671,6 +652,18 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                          env->comp_level(),
                          false,
                          false);
+    
+    // Verify nmethod was installed correctly
+    address test_pc = combined_base + adapter_size + 16;  // Some PC in LLVM code
+    CodeBlob* found_blob = CodeCache::find_blob(test_pc);
+    tty->print_cr("Yuhu: Post-registration check - test_pc=%p, found_blob=%p",
+                  test_pc, found_blob);
+    if (found_blob != NULL) {
+      tty->print_cr("Yuhu: Found blob - code_begin=%p, code_end=%p",
+                    found_blob->code_begin(), found_blob->code_end());
+    } else {
+      tty->print_cr("Yuhu: WARNING - CodeCache::find_blob returned NULL!");
+    }
   } else {
     // OSR method: build adapter + LLVM code into a combined CodeCache blob.
 
@@ -809,13 +802,14 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   // Print the LLVM bitcode, if requested
   if (YuhuPrintBitcodeOf != NULL) {
     if (!fnmatch(YuhuPrintBitcodeOf, name, 0)) {
+      tty->print_cr("=== YUHU DEBUG: LLVM IR for function %s ===", name);
       // LLVM 20: dump() may not be available in all builds
       // Use print() with llvm::errs() instead
-      // Note: dump() is a convenience method that calls print(errs())
-      // If dump() is not available, we can use print() directly
       llvm::raw_ostream &OS = llvm::errs();
       function->print(OS);
       OS.flush();
+      tty->print_cr("=== END LLVM IR ===");
+      tty->flush();
     }
   }
 

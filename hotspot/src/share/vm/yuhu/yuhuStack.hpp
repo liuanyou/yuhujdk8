@@ -167,18 +167,46 @@ class YuhuStack : public YuhuCompileInvariants {
       llvm::PointerType::getUnqual(YuhuType::intptr_type()),
       "last_Java_fp_addr");
   }
+  llvm::Value* last_Java_pc_addr() const {
+    return builder()->CreateAddressOfStructEntry(
+      thread(),
+      JavaThread::last_Java_pc_offset(),
+      llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+      "last_Java_pc_addr");
+  }
 
  public:
   void CreateSetLastJavaFrame() {
     // Note that whenever _last_Java_sp != NULL other anchor fields
     // must be valid.  The profiler apparently depends on this.
-    // For normal compilation, we reset last_Java_sp at method entry,
-    // so it should be 0 when the first VM call is made.
-    NOT_PRODUCT(CreateAssertLastJavaSPIsNull());
+    // 
+    // YUHU MODIFICATION: We now set last_Java_sp/fp/pc at function entry
+    // (in yuhuStack.cpp::initialize()), so last_Java_sp may already be non-zero
+    // when CreateSetLastJavaFrame() is called from VM runtime wrappers.
+    // We skip the assertion and allow updating last_Java_sp/fp/pc.
+    // 
+    // CRITICAL FIX: When calling VM functions (like safepoints), we need to
+    // ensure that last_Java_sp is set to the unextended_sp (the SP value after
+    // allocating the Yuhu frame, not the current SP value which may have changed
+    // during execution). The unextended_sp is stored in the frame header at
+    // unextended_sp_offset (which is slot_addr(extended_frame_size() - 4)).
+    // 
+    // NOT_PRODUCT(CreateAssertLastJavaSPIsNull());  // DISABLED
+    
     builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
-    // XXX There's last_Java_pc as well, but I don't think anything uses it
-    // Also XXX: should we fence here?  Zero doesn't...
-    builder()->CreateStore(CreateLoadStackPointer(), last_Java_sp_addr());
+    
+    // CRITICAL: Use the unextended_sp (SP after frame allocation) instead of
+    // current SP which may have been modified during execution
+    // The unextended_sp is stored in the frame at the unextended_sp slot
+    llvm::Value* unextended_sp = builder()->CreateLoad(
+      YuhuType::intptr_type(),
+      slot_addr(unextended_sp_slot_offset()));
+    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
+    
+    // NOTE: We do not update last_Java_pc here as it was correctly set in initialize()
+    // Using llvm.returnaddress would give the caller's return address (LR), not current PC
+    // The PC value set in initialize() is more appropriate for stack walking
+    
     // Also also XXX: we could probably cache the sp (and the fp we know??)
   }
   void CreateResetLastJavaFrame() {
@@ -225,6 +253,14 @@ class YuhuStack : public YuhuCompileInvariants {
   }
   int locals_slots_offset() const {
     return _locals_slots_offset;
+  }
+
+  // The unextended_sp is stored in the frame header after method slot
+  // and before PC slot (so it's at offset 8 in the header)
+  int unextended_sp_slot_offset() const {
+    // unextended_sp is stored after oop_tmp and method slots, before pc slot
+    // So its offset is method_slot_offset() + 1
+    return _method_slot_offset + 1;
   }
   int monitor_offset(int index) const {
     assert(index >= 0 && index < max_monitors(), "invalid monitor index");

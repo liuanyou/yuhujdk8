@@ -150,30 +150,6 @@ void YuhuStack::initialize(Value* method) {
   CreateStoreFramePointer(
     builder()->CreatePtrToInt(fp, YuhuType::intptr_type()));
   
-  // Set last_Java_sp and last_Java_fp in thread object for stack frame traversal
-  // This is required for safepoint operations and stack walking
-  // After stack frame allocation, we need to save the current frame's sp and fp
-  // to thread object so that stack traversal can work correctly:
-  //   1. Get current frame's sp and fp from last_Java_sp and last_Java_fp
-  //   2. Calculate sender_sp = sp + frame_size
-  //   3. Read sender_fp from [sender_sp - 2] (which is [sp + frame_size - 2])
-  //   4. Read sender_pc (LR) from [sender_sp - 1] (which is [sp + frame_size - 1])
-  // 
-  // last_Java_sp should be the current frame's SP (stack_pointer, which is unextended_sp)
-  // last_Java_fp should be the current frame's FP VALUE (the value stored in fp slot, not the address)
-  //   - For the first frame, this is NULL (prev_fp)
-  //   - For subsequent frames, this is the previous frame's FP
-  // last_Java_pc should be the return address (LR, saved at [sp + frame_size - 1])
-  
-  // Store last_Java_sp, last_Java_fp, and last_Java_pc using inline assembly
-  // to prevent LLVM from optimizing them away. These values are read by HotSpot VM
-  // code (safepoint, stack walking) which LLVM cannot see, so it would consider
-  // these stores as dead code and remove them.
-  //
-  // We use inline assembly with "memory" clobber to ensure the stores are not optimized.
-  // The "memory" clobber tells LLVM that the assembly may read/write arbitrary memory,
-  // preventing optimization of memory operations around it.
-  
   // Get addresses for last_Java_sp, last_Java_fp, and last_Java_pc
   Value *last_sp_addr = last_Java_sp_addr();
   Value *last_fp_addr = last_Java_fp_addr();
@@ -201,7 +177,7 @@ void YuhuStack::initialize(Value* method) {
   llvm::InlineAsm* store_sp_asm = llvm::InlineAsm::get(
     store_asm_type,
     "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-    "r,r",           // Both inputs are in general-purpose registers
+    "r,r,~{memory}",  // Both inputs in registers, clobber memory
     true,            // Has side effects: yes (writes to memory)
     false,           // Is align stack: no
     llvm::InlineAsm::AD_ATT
@@ -213,22 +189,24 @@ void YuhuStack::initialize(Value* method) {
   store_sp_args.push_back(sp_addr_i64);
   store_sp_args.push_back(stack_pointer);
   builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
-  
-  // Call inline assembly to store last_Java_fp
-  // CRITICAL: last_Java_fp should point to where LLVM prologue saved x29/x30
-  // LLVM prologue does: stp x29, x30, [sp, #-16]!
-  // After prologue: *(sp) = x29, *(sp+8) = x30
-  // HotSpot expects: *(fp+0) = saved FP, *(fp+1) = return address
-  // So last_Java_fp = current_sp (the sp value after LLVM prologue, before Yuhu allocation)
-  // Note: current_sp was read at the start of initialize(), it's the sp after LLVM prologue
+
   std::vector<Value*> store_fp_args;
   store_fp_args.push_back(fp_addr_i64);
   store_fp_args.push_back(current_sp);  // Use LLVM prologue's sp, where x29/x30 are saved
   builder()->CreateCall(store_asm_type, store_sp_asm, store_fp_args);
   
   // Call inline assembly to store last_Java_pc
-  // Read LR register (x30) for return address
-  Value *lr_value = builder()->CreateReadLinkRegister();
+  // Use llvm.returnaddress intrinsic to get the return address (LR)
+  // This is more reliable than reading x30 register, which may have been spilled
+  llvm::Function* returnaddr_intrinsic = llvm::Intrinsic::getDeclaration(
+      builder()->GetInsertBlock()->getModule(),
+      llvm::Intrinsic::returnaddress);
+  Value* lr_value = builder()->CreateCall(
+      returnaddr_intrinsic,
+      {builder()->getInt32(0)},  // Level 0 = current function
+      "return_address");
+  lr_value = builder()->CreatePtrToInt(lr_value, YuhuType::intptr_type(), "lr_as_int");
+  
   std::vector<Value*> store_pc_args;
   store_pc_args.push_back(pc_addr_i64);
   store_pc_args.push_back(lr_value);

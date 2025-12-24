@@ -298,14 +298,10 @@ void YuhuFunction::initialize(const char *name) {
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
 
-  // For normal compilation, reset last_Java_sp at method entry
-  // This ensures that the assertion in CreateSetLastJavaFrame() will pass
-  // when the first VM call is made. If the method is called from another
-  // compiled method, the caller's last_Java_sp may still be set, so we
-  // reset it here to ensure a clean state.
-  if (!is_osr()) {
-    _stack->CreateResetLastJavaFrame();
-  }
+  // NOTE: We no longer call CreateResetLastJavaFrame() here.
+  // The last_Java_sp/fp/pc are set directly in yuhuStack.cpp::initialize()
+  // using inline assembly at the very beginning of the function.
+  // Resetting them here would overwrite the correct values.
 
   // Create the entry state
   YuhuState *entry_state;
