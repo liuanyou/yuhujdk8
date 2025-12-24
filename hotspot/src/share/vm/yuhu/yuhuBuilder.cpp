@@ -446,74 +446,35 @@ Value* YuhuBuilder::dump() {
 
 // Public interface to low-level non-VM calls
 
-CallInst* YuhuBuilder::CreateGetFrameAddress() {
-  // LLVM 20+ uses opaque pointer types, so we reconstruct FunctionType from signature
-  // frame_address signature: "i" -> "C" (int -> void*)
-  llvm::FunctionType* func_type = llvm::FunctionType::get(
-    PointerType::getUnqual(YuhuType::jbyte_type()),
-    std::vector<llvm::Type*>{YuhuType::jint_type()},
-    false);
-  return CreateCall(func_type, frame_address(), LLVMValue::jint_constant(0));
+CallInst* YuhuBuilder::CreateReadFramePointer() {
+  // Read frame pointer register (x29) on AArch64 using inline assembly
+  // LLVM's read_register intrinsic doesn't support x29 directly with "fp" name
+  // So we use inline assembly to directly read the register
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov $0, x29"
+  // $0 is the output operand (result register)
+  // "=r" means output to a general-purpose register
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov $0, x29",  // AArch64 assembly: move x29 (frame pointer) to output register
+    "=r",           // Output constraint: =r means output to a register
+    false,          // Has side effects: no
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
+  );
+  
+  // LLVM 20+ requires FunctionType for CreateCall
+  return CreateCall(asm_type, asm_func, std::vector<Value*>(), "fp");
 }
 
 CallInst* YuhuBuilder::CreateReadStackPointer() {
-  // Read actual SP register (x31) on AArch64 using @llvm.read_register intrinsic
-  // This is the correct way to get the stack pointer, not frame pointer
-  // LLVM 20+ requires explicit type parameter
-  YuhuContext& ctx = YuhuContext::current();
-  llvm::Module* mod = ctx.module();
-  
-  // Create metadata string "sp" to specify the register name
-  llvm::MDNode* md = llvm::MDNode::get(
-    ctx,
-    llvm::MDString::get(ctx, "sp"));
-  
-  // Get read_register intrinsic declaration
-  llvm::Function* read_reg = llvm::Intrinsic::getDeclaration(
-    mod,
-    llvm::Intrinsic::read_register,
-    {YuhuType::intptr_type()});
-  
-  // Create function type for read_register: (metadata) -> intptr_t
-  llvm::FunctionType* func_type = llvm::FunctionType::get(
-    YuhuType::intptr_type(),
-    {llvm::Type::getMetadataTy(ctx)},
-    false);
-  
-  // Call read_register with "sp" metadata
-  std::vector<Value*> args;
-  args.push_back(llvm::MetadataAsValue::get(ctx, md));
-  return CreateCall(func_type, read_reg, args, "sp");
+    return CreateReadRegister("sp");
 }
 
 CallInst* YuhuBuilder::CreateReadLinkRegister() {
-  // Read LR register (x30) on AArch64 using @llvm.read_register intrinsic
-  // This is needed to save the return address to the standard AArch64 frame location
-  // NOTE: LLVM expects "x30" (not "lr") for AArch64 Link Register
-  YuhuContext& ctx = YuhuContext::current();
-  llvm::Module* mod = ctx.module();
-  
-  // Create metadata string "x30" to specify the register name (AArch64 Link Register)
-  llvm::MDNode* md = llvm::MDNode::get(
-    ctx,
-    llvm::MDString::get(ctx, "x30"));
-  
-  // Get read_register intrinsic declaration
-  llvm::Function* read_reg = llvm::Intrinsic::getDeclaration(
-    mod,
-    llvm::Intrinsic::read_register,
-    {YuhuType::intptr_type()});
-  
-  // Create function type for read_register: (metadata) -> intptr_t
-  llvm::FunctionType* func_type = llvm::FunctionType::get(
-    YuhuType::intptr_type(),
-    {llvm::Type::getMetadataTy(ctx)},
-    false);
-  
-  // Call read_register with "x30" metadata
-  std::vector<Value*> args;
-  args.push_back(llvm::MetadataAsValue::get(ctx, md));
-  return CreateCall(func_type, read_reg, args, "lr");
+    return CreateReadRegister("lr");
 }
 
 CallInst* YuhuBuilder::CreateReadMethodRegister() {
@@ -560,6 +521,26 @@ CallInst* YuhuBuilder::CreateReadThreadRegister() {
   
   // LLVM 20+ requires FunctionType for CreateCall
   return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rthread");
+}
+
+CallInst *YuhuBuilder::CreateReadCurrentPC() {
+    YuhuContext &ctx = YuhuContext::current();
+
+    // Create function type that returns i64 (the PC value)
+    llvm::FunctionType* asm_type = llvm::FunctionType::get(
+            YuhuType::intptr_type(),  // Return type: i64 for PC address
+            {},                      // No input parameters
+            false);
+
+    llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+            asm_type,
+            "adr $0, .",    // AArch64: get current PC address to x0
+            "=r",           // Output constraint: result goes to a register
+            true,           // Has side effects: yes (prevents optimization)
+            false,          // Is align stack: no
+            llvm::InlineAsm::AD_ATT);
+
+    return CreateCall(asm_type, asm_func, std::vector<Value*>());
 }
 
 void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {

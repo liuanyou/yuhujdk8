@@ -36,7 +36,6 @@ void YuhuStack::initialize(Value* method) {
   bool setup_sp_and_method = (method != NULL);
 
   int locals_words  = max_locals();
-  int extra_locals  = locals_words - arg_size();
   // For AArch64, header_words includes all frame header metadata:
   //   - oop_tmp (1 word)
   //   - method (1 word)
@@ -60,7 +59,6 @@ void YuhuStack::initialize(Value* method) {
   
   // Calculate frame size in bytes
   // NOTE: LR and FP are saved by LLVM's prologue (stp x29, x30, [sp, #-16]!)
-  // We reserve x19-x28, so LLVM prologue only saves x29/x30 = 16 bytes
   // Yuhu frame only contains: locals, stack, header (NO separate LR/FP)
   int frame_size_bytes = extended_frame_size() * wordSize;
   
@@ -76,13 +74,13 @@ void YuhuStack::initialize(Value* method) {
     LLVMValue::intptr_constant(frame_size_bytes),
     "new_sp");
   
-  // Update SP register
-  builder()->CreateWriteStackPointer(stack_pointer);
-  
   // Check for stack overflow - checks current_sp to ensure there's enough space
   // for both the new frame and throw_StackOverflowError (if needed)
   // Pass stack_pointer so we can calculate frame_size = current_sp - stack_pointer
   CreateStackOverflowCheck(stack_pointer);
+
+  // Update SP register
+  builder()->CreateWriteStackPointer(stack_pointer);
   
   // Initialize stack pointer storage
   initialize_stack_pointers(stack_pointer);
@@ -135,20 +133,15 @@ void YuhuStack::initialize(Value* method) {
 
   // Push the frame
   assert(offset == extended_frame_size(), "should do");
-  
-  // For AArch64, frame pointer points to the frame header
-  // Read the previous frame pointer from last_Java_fp
-  Value *prev_fp = builder()->CreateValueOfStructEntry(
-    thread(),
-    JavaThread::last_Java_fp_offset(),
-    YuhuType::intptr_type(),
-    "prev_fp");
+
+  Value *current_fp = builder()->CreateReadFramePointer();
+
   // Store previous FP to frame pointer slot for frame pointer chain
-  builder()->CreateStore(prev_fp, fp);
+  builder()->CreateStore(current_fp, fp);
   
   // Update frame pointer to point to this frame
   CreateStoreFramePointer(
-    builder()->CreatePtrToInt(fp, YuhuType::intptr_type()));
+    builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
   
   // Get addresses for last_Java_sp, last_Java_fp, and last_Java_pc
   Value *last_sp_addr = last_Java_sp_addr();
@@ -190,27 +183,35 @@ void YuhuStack::initialize(Value* method) {
   store_sp_args.push_back(stack_pointer);
   builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
 
+  llvm::InlineAsm* store_fp_asm = llvm::InlineAsm::get(
+    store_asm_type,
+    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+    "r,r,~{memory}",  // Both inputs in registers, clobber memory
+    true,            // Has side effects: yes (writes to memory)
+    false,           // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+
   std::vector<Value*> store_fp_args;
   store_fp_args.push_back(fp_addr_i64);
-  store_fp_args.push_back(current_sp);  // Use LLVM prologue's sp, where x29/x30 are saved
-  builder()->CreateCall(store_asm_type, store_sp_asm, store_fp_args);
-  
-  // Call inline assembly to store last_Java_pc
-  // Use llvm.returnaddress intrinsic to get the return address (LR)
-  // This is more reliable than reading x30 register, which may have been spilled
-  llvm::Function* returnaddr_intrinsic = llvm::Intrinsic::getDeclaration(
-      builder()->GetInsertBlock()->getModule(),
-      llvm::Intrinsic::returnaddress);
-  Value* lr_value = builder()->CreateCall(
-      returnaddr_intrinsic,
-      {builder()->getInt32(0)},  // Level 0 = current function
-      "return_address");
-  lr_value = builder()->CreatePtrToInt(lr_value, YuhuType::intptr_type(), "lr_as_int");
-  
+  store_fp_args.push_back(current_fp);  // Use LLVM prologue's sp, where x29/x30 are saved
+  builder()->CreateCall(store_asm_type, store_fp_asm, store_fp_args);
+
+  Value* current_pc = builder()->CreateReadCurrentPC();
+
+  llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
+    store_asm_type,
+    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+    "r,r,~{memory}",  // Both inputs in registers, clobber memory
+    true,            // Has side effects: yes (writes to memory)
+    false,           // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+
   std::vector<Value*> store_pc_args;
   store_pc_args.push_back(pc_addr_i64);
-  store_pc_args.push_back(lr_value);
-  builder()->CreateCall(store_asm_type, store_sp_asm, store_pc_args);
+  store_pc_args.push_back(current_pc);
+  builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
   
   // DEBUG: Print confirmation
   tty->print_cr("YuhuStack::initialize: Created inline assembly stores for last_Java_sp, last_Java_fp, last_Java_pc");
