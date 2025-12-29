@@ -30,15 +30,21 @@
 #include "memory/allocation.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
+#include "yuhu/yuhuOffsetMapper.hpp"
 
 class YuhuCodeBuffer : public StackObj {
  public:
   YuhuCodeBuffer(YuhuMacroAssembler& masm)
-    : _masm(masm), _base_pc(NULL) {}
+    : _masm(masm), _base_pc(NULL), _offset_mapper() {
+  }
+  
+  ~YuhuCodeBuffer() {
+  }
 
  private:
   YuhuMacroAssembler& _masm;
   llvm::Value*        _base_pc;
+  YuhuOffsetMapper    _offset_mapper;
 
  private:
   YuhuMacroAssembler& masm() const {
@@ -52,6 +58,17 @@ class YuhuCodeBuffer : public StackObj {
   void set_base_pc(llvm::Value* base_pc) {
     assert(_base_pc == NULL, "only do this once");
     _base_pc = base_pc;
+  }
+  
+  // Offset mapper access methods
+  YuhuOffsetMapper* offset_mapper() const {
+    return const_cast<YuhuOffsetMapper*>(&_offset_mapper);
+  }
+  
+  void set_offset_mapper(YuhuOffsetMapper* offset_mapper) {
+    // This method may not be needed with direct member, but keeping for interface compatibility
+    // We can't really set a direct member object to point to a different object
+    ShouldNotCallThis();
   }
 
   // Allocate some space in the buffer and return its address.
@@ -73,6 +90,32 @@ class YuhuCodeBuffer : public StackObj {
     // advance() is implemented by setting the end of the code section
     masm().code_section()->set_end(masm().code_section()->end() + 1);
     return offset;
+  }
+  
+  // Insert an offset marker with virtual offset information
+  // This allows mapping between virtual offsets (from IR stage) and actual offsets (from machine code)
+  // The marker creates a distinctive pattern in the machine code that can be identified
+  // during post-processing to establish the virtual-to-actual offset mapping
+  int insert_offset_marker(int virtual_offset) {
+    // Record the actual offset at this position before inserting the marker
+    int actual_offset = masm().offset();
+    
+    // Insert a distinctive marker instruction that can be identified later
+    // This uses a specific no-op pattern that's unique and recognizable
+    // For AArch64, we use a specific instruction pattern that doesn't affect execution
+    // but creates a recognizable signature in the machine code
+    _masm.nop();  // Insert a no-op as a distinctive marker
+    
+    // Add the mapping to the offset mapper if available
+    _offset_mapper.add_mapping(virtual_offset, actual_offset);
+    
+    return actual_offset;
+  }
+
+  // Get current offset in the macro assembler
+ public:
+  int current_offset() const {
+    return masm().offset();
   }
 
   // Inline an oop into the buffer and return its offset.

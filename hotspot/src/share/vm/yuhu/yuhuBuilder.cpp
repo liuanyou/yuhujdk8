@@ -820,3 +820,208 @@ StoreInst* YuhuBuilder::CreateAtomicStore(Value* val, Value* ptr, unsigned align
   // StoreInst constructor: StoreInst(Value *Val, Value *Ptr, bool isVolatile, Align Align, AtomicOrdering Order, SyncScope::ID SSID, ...)
   return Insert(new StoreInst(val, ptr, isVolatile, llvm::Align(align), ordering, llvm::SyncScope::System), name);
 }
+
+void YuhuBuilder::insert_offset_marker(int virtual_offset) {
+  // Insert an offset marker to create mapping between virtual offset and actual offset
+  // This is used during machine code generation to build the virtual->actual offset mapping
+  code_buffer()->insert_offset_marker(virtual_offset);
+}
+
+int YuhuBuilder::get_current_code_offset() const {
+  // Get the current code offset from the macro assembler
+  return code_buffer()->current_offset();
+}
+
+void YuhuBuilder::CreateOffsetMarker(int virtual_offset) {
+  // Create a distinctive inline assembly marker that creates a recognizable pattern
+  // in the generated machine code. The pattern consists of:
+  // 1. A magic number (0xDEADBEEF) stored in a register
+  // 2. The virtual offset value stored in another register
+  // 3. Two consecutive NOP instructions
+  // This creates a unique signature: mov w0, #0xDEADBEEF; mov w1, #virtual_offset; nop; nop
+  
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create function type: void function(void) - no parameters needed
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getVoidTy(ctx),
+    {},  // No parameters
+    false);
+  
+  // Create inline assembly that generates a recognizable marker pattern
+  // AArch64 instruction pattern:
+  // mov w19, #0xBEEF     ; Magic number low 16 bits (w19 is callee-saved, less likely to interfere)
+  // movk w19, #0xDEAD, lsl #16  ; Magic number high 16 bits
+  // mov w20, #<virtual_offset>   ; Virtual offset (w20 is used for esp in Yuhu)
+  // nop                          ; Marker boundary
+  // nop                          ; Marker boundary
+  char asm_string[256];
+  snprintf(asm_string, sizeof(asm_string),
+           "mov w19, #0xBEEF\n"
+           "movk w19, #0xDEAD, lsl #16\n"
+           "mov w20, #%d\n"
+           "nop\n"
+           "nop",
+           virtual_offset & 0xFFFF);  // Ensure virtual_offset fits in 16-bit immediate
+  
+  llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
+    asm_type,
+    asm_string,
+    "~{w19},~{w20},~{memory}",  // Clobbers w19, w20, and memory
+    true,            // Has side effects: yes (to prevent optimization)
+    false,           // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+  
+  // Call the inline assembly
+  CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>());
+  
+  // Record the virtual offset for later mapping
+  // Note: We don't record the actual offset here because we don't know it yet
+  // It will be determined after machine code generation by scanning for the marker pattern
+  code_buffer()->offset_mapper()->add_mapping(virtual_offset, -1);  // -1 indicates unknown actual offset
+}
+
+void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code_size, YuhuOffsetMapper* mapper) {
+  // Scan the generated machine code to find offset markers and update the mapper with actual offsets
+  // Marker pattern (AArch64, 20 bytes total):
+  //   mov w19, #0xBEEF             (4 bytes: 0x5297FDDF or similar encoding)
+  //   movk w19, #0xDEAD, lsl #16   (4 bytes: 0x72BBD5B3 or similar encoding)
+  //   mov w20, #<virtual_offset>   (4 bytes: varies based on virtual_offset)
+  //   nop                          (4 bytes: 0xD503201F)
+  //   nop                          (4 bytes: 0xD503201F)
+  
+  if (mapper == NULL) {
+    tty->print_cr("Yuhu: scan_and_update_offset_markers - mapper is NULL");
+    return;
+  }
+  
+  tty->print_cr("Yuhu: Scanning machine code for offset markers: code_start=%p, code_size=%zu", 
+                code_start, code_size);
+  
+  // AArch64 instruction encodings (little-endian)
+  const uint32_t NOP_INSTRUCTION = 0xD503201F;  // nop instruction
+  const uint32_t MAGIC_LOW_MASK  = 0xFFFF;      // Check lower 16 bits
+  const uint32_t MAGIC_HIGH_MASK = 0xFFFF;      // Check for 0xDEAD in high bits
+  
+  int markers_found = 0;
+  
+  // Scan the code 4 bytes at a time (instruction-aligned)
+  for (size_t offset = 0; offset + 20 <= code_size; offset += 4) {
+    address current = code_start + offset;
+    uint32_t* instructions = (uint32_t*)current;
+    
+    // Check for the marker pattern:
+    // 1. Check for two consecutive NOPs at the end (instructions[3] and [4])
+    if (instructions[3] == NOP_INSTRUCTION && instructions[4] == NOP_INSTRUCTION) {
+      // 2. Check if instruction[0] is mov w19, #0xBEEF
+      //    MOV (immediate) encoding: sf=0, opc=10, hw=00, imm16=0xBEEF, Rd=19 (w19)
+      //    Binary: 0_10_100101_00_<imm16>_<Rd>
+      //    For w19 (Rd=19=0x13): instruction should match pattern
+      uint32_t inst0 = instructions[0];
+      uint32_t inst1 = instructions[1];
+      uint32_t inst2 = instructions[2];
+      
+      // Check if inst0 is "mov w19, #<imm>" (MOV immediate to w19)
+      // Encoding: 0x52800000 | (imm16 << 5) | Rd
+      // For w19: 0x52800013 | (imm16 << 5)
+      bool is_mov_w19 = ((inst0 & 0xFFE00000) == 0x52800000) && ((inst0 & 0x1F) == 19);
+      uint32_t imm_low = (inst0 >> 5) & 0xFFFF;
+      
+      // Check if inst1 is "movk w19, #<imm>, lsl #16" (MOVK with shift)
+      // Encoding: 0x72A00000 | (imm16 << 5) | Rd
+      // For w19 with lsl #16: 0x72A00013 | (imm16 << 5)
+      bool is_movk_w19 = ((inst1 & 0xFFE00000) == 0x72A00000) && ((inst1 & 0x1F) == 19);
+      uint32_t imm_high = (inst1 >> 5) & 0xFFFF;
+      
+      // Check if the magic number is 0xDEADBEEF
+      if (is_mov_w19 && is_movk_w19 && imm_low == 0xBEEF && imm_high == 0xDEAD) {
+        // 3. Extract virtual offset from inst2 (mov w20, #<virtual_offset>)
+        // Check if inst2 is "mov w20, #<imm>"
+        bool is_mov_w20 = ((inst2 & 0xFFE00000) == 0x52800000) && ((inst2 & 0x1F) == 20);
+        
+        if (is_mov_w20) {
+          int virtual_offset = (inst2 >> 5) & 0xFFFF;  // Extract 16-bit immediate
+          int actual_offset = offset;  // Actual offset in the generated code
+          
+          tty->print_cr("Yuhu: Found offset marker at offset %d: virtual_offset=%d", 
+                        actual_offset, virtual_offset);
+          
+          // Update the mapper with the actual offset
+          // First, check if this virtual offset exists in the mapper
+          if (mapper->has_mapping(virtual_offset)) {
+            // Update the existing mapping
+            mapper->add_mapping(virtual_offset, actual_offset);
+            markers_found++;
+          } else {
+            tty->print_cr("Yuhu: WARNING - Found marker for unknown virtual_offset=%d", virtual_offset);
+          }
+          
+          // Skip past this marker to avoid re-scanning
+          offset += 16;  // Skip the remaining bytes of the marker
+        }
+      }
+    }
+  }
+  
+  tty->print_cr("Yuhu: Finished scanning, found %d offset markers", markers_found);
+  
+  // Print the updated mappings
+  if (markers_found > 0) {
+    mapper->print_mappings();
+  }
+}
+void YuhuBuilder::relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env) {
+  // This method should be called after machine code generation and marker scanning
+  // to relocate OopMap offsets from virtual to actual values
+  
+  if (offset_mapper != NULL && env != NULL) {
+    tty->print_cr("Yuhu: Relocating OopMaps using offset mapper with %d mappings", 
+                  offset_mapper->num_mappings());
+    
+    // Print the mappings for debugging
+    offset_mapper->print_mappings();
+    
+    // Get the OopMapSet from the DebugInformationRecorder
+    OopMapSet* oopmaps = env->debug_info()->_oopmaps;
+    if (oopmaps != NULL) {
+      tty->print_cr("Yuhu: Found OopMapSet with %d maps", oopmaps->size());
+      
+      // Relocate each OopMap in the set
+      int relocated_count = 0;
+      int failed_count = 0;
+      
+      for (int i = 0; i < oopmaps->size(); i++) {
+        OopMap* oopmap = oopmaps->at(i);
+        if (oopmap != NULL) {
+          int virtual_offset = oopmap->offset();  // Original virtual offset
+          int actual_offset = offset_mapper->get_actual_offset(virtual_offset);
+          
+          if (actual_offset == -1) {
+            tty->print_cr("Yuhu: WARNING - No actual offset found for virtual_offset=%d", virtual_offset);
+            failed_count++;
+            continue;
+          }
+          
+          tty->print_cr("Yuhu: Relocating OopMap %d: virtual=%d -> actual=%d", 
+                        i, virtual_offset, actual_offset);
+          
+          // Update the OopMap's offset to the actual offset
+          if (actual_offset != virtual_offset) {
+            oopmap->set_offset(actual_offset);
+            tty->print_cr("Yuhu: Updated OopMap offset from %d to %d", 
+                          virtual_offset, actual_offset);
+            relocated_count++;
+          }
+        }
+      }
+      
+      tty->print_cr("Yuhu: OopMap relocation summary: %d relocated, %d failed", 
+                    relocated_count, failed_count);
+    } else {
+      tty->print_cr("Yuhu: Warning - No OopMapSet found in DebugInformationRecorder");
+    }
+  } else {
+    tty->print_cr("Yuhu: Warning - No offset_mapper or env provided for OopMap relocation");
+  }
+}

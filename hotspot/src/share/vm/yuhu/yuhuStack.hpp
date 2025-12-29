@@ -203,9 +203,34 @@ class YuhuStack : public YuhuCompileInvariants {
       slot_addr(unextended_sp_slot_offset()));
     builder()->CreateStore(unextended_sp, last_Java_sp_addr());
     
-    // NOTE: We do not update last_Java_pc here as it was correctly set in initialize()
-    // Using llvm.returnaddress would give the caller's return address (LR), not current PC
-    // The PC value set in initialize() is more appropriate for stack walking
+    // CRITICAL: Also update last_Java_pc for proper stack walking during VM calls
+    // Use inline assembly like in initialize() to prevent LLVM optimization
+    // Get current PC using CreateReadCurrentPC which reads the current program counter
+    llvm::Value* current_pc = builder()->CreateReadCurrentPC();
+    
+    // Convert PC address to i64 for inline assembly
+    llvm::Value *pc_addr_i64 = builder()->CreatePtrToInt(last_Java_pc_addr(), YuhuType::intptr_type(), "pc_addr_i64");
+    
+    // Use the same inline assembly pattern as in initialize()
+    YuhuContext& ctx2 = YuhuContext::current();
+    llvm::FunctionType* store_asm_type2 = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(ctx2),
+      {YuhuType::intptr_type(), YuhuType::intptr_type()},  // addr, value
+      false);
+    
+    llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
+      store_asm_type2,
+      "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+      "r,r,~{memory}",  // Both inputs in registers, clobber memory
+      true,            // Has side effects: yes (writes to memory)
+      false,           // Is align stack: no
+      llvm::InlineAsm::AD_ATT
+    );
+    
+    std::vector<llvm::Value*> store_pc_args;
+    store_pc_args.push_back(pc_addr_i64);
+    store_pc_args.push_back(current_pc);
+    builder()->CreateCall(store_asm_type2, store_pc_asm, store_pc_args);
     
     // Also also XXX: we could probably cache the sp (and the fp we know??)
   }

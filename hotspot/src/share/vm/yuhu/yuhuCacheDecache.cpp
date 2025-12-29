@@ -37,6 +37,13 @@ using namespace llvm;
 void YuhuDecacher::start_frame() {
   // Start recording the debug information
   _pc_offset = code_buffer()->create_unique_offset();
+  
+  // Insert offset marker to create mapping between virtual offset and actual offset
+  // This is essential for OopMap relocation after machine code generation
+  // Use the builder to create a distinctive LLVM IR marker that can be identified
+  // during machine code generation
+  builder()->CreateOffsetMarker(_pc_offset);
+  
   _oopmap = new OopMap(
     oopmap_slot_munge(stack()->oopmap_frame_size()),
     oopmap_slot_munge(arg_size()));

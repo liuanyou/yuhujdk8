@@ -224,6 +224,20 @@ class YuhuBuilder : public llvm::IRBuilder<> {
                                 llvm::Type* type,
                                 const char*       name = "");
 
+  // Offset mapping support for IR to machine code translation
+  // This is used to map virtual offsets (from IR stage) to actual offsets (from machine code stage)
+  void insert_offset_marker(int virtual_offset);
+  int get_current_code_offset() const;
+  
+  // Insert an offset marker in the LLVM IR that can be identified during machine code generation
+  void CreateOffsetMarker(int virtual_offset);
+  
+  // Scan generated machine code to find offset markers and update the mapper
+  static void scan_and_update_offset_markers(address code_start, size_t code_size, YuhuOffsetMapper* mapper);
+  
+  // OopMap relocation support
+  void relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env);
+
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.
   // XXX these are hacky and should be removed.

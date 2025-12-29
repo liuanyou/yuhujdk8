@@ -498,6 +498,24 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // MemoryManager state will be available in stage 2 after CodeCache integration
     // Note: Compiler threads are already in WXWrite mode, so no need to manage WX state
     generate_native_code(entry, function, func_name);
+    
+    // After native code generation, scan the generated machine code for offset markers
+    // and update the offset mapper with the actual PC offsets
+    YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
+    if (offset_mapper != NULL) {
+      // Scan the generated code to find markers and update the mapper
+      address code_start = entry->code_start();
+      size_t code_size = entry->code_limit() - code_start;
+      
+      tty->print_cr("Yuhu: Scanning generated code for offset markers...");
+      builder.scan_and_update_offset_markers(code_start, code_size, offset_mapper);
+      
+      // After scanning and updating the mapper, relocate OopMaps
+      builder.relocate_oopmaps(offset_mapper, env);
+      tty->print_cr("Yuhu: OopMap relocation completed with %d mappings", offset_mapper->num_mappings());
+    } else {
+      tty->print_cr("Yuhu: WARNING - No offset mapper available for OopMap relocation");
+    }
   }
 
   bool is_osr = (entry_bci != InvocationEntryBci);
