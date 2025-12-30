@@ -49,6 +49,8 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
   // This is because i2c adapter passes NULL in x0 for static methods
   if (is_static()) {
     params.push_back(YuhuType::intptr_type());  // void* null (x0)
+  } else {
+    params.push_back(YuhuType::oop_type()); // for non-static methods, this is the first parameter
   }
   
   // Add Java method parameters
