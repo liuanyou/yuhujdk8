@@ -220,6 +220,8 @@ class OopMapSet : public ResourceObj {
   void grow_om_data();
   void set(int index,OopMap* value) { assert((index == 0) || ((index > 0) && (index < om_size())),"bad index"); _om_data[index] = value; }
 
+  void quick_sort_by_offset(int left, int right);
+  void swap_entries(int i, int j);
  public:
   OopMapSet();
 
@@ -237,6 +239,8 @@ class OopMapSet : public ResourceObj {
 
   // returns OopMap in that is anchored to the pc
   OopMap* find_map_at_offset(int pc_offset) const;
+
+  void sort_by_offset();
 
   int heap_size() const;
   void copy_to(address addr);

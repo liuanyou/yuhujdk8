@@ -237,6 +237,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   
   // OopMap relocation support
   void relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env);
+  void adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset);
 
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.

@@ -885,11 +885,16 @@ void YuhuBuilder::CreateOffsetMarker(int virtual_offset) {
 void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code_size, YuhuOffsetMapper* mapper) {
   // Scan the generated machine code to find offset markers and update the mapper with actual offsets
   // Marker pattern (AArch64, 20 bytes total):
-  //   mov w19, #0xBEEF             (4 bytes: 0x5297FDDF or similar encoding)
+  //   mov w19, #0xBEEF             (4 bytes: 0x52817DEF or similar encoding)
   //   movk w19, #0xDEAD, lsl #16   (4 bytes: 0x72BBD5B3 or similar encoding)
   //   mov w20, #<virtual_offset>   (4 bytes: varies based on virtual_offset)
   //   nop                          (4 bytes: 0xD503201F)
   //   nop                          (4 bytes: 0xD503201F)
+  // 
+  // IMPORTANT: The marker indicates where the safepoint setup begins,
+  // but the actual OopMap offset should be where last_java_pc is recorded.
+  // This is typically at an 'adr' instruction that appears after the marker.
+  // We scan forward from the marker to find the 'adr' instruction and use its offset.
   
   if (mapper == NULL) {
     tty->print_cr("Yuhu: scan_and_update_offset_markers - mapper is NULL");
@@ -901,8 +906,8 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
   
   // AArch64 instruction encodings (little-endian)
   const uint32_t NOP_INSTRUCTION = 0xD503201F;  // nop instruction
-  const uint32_t MAGIC_LOW_MASK  = 0xFFFF;      // Check lower 16 bits
-  const uint32_t MAGIC_HIGH_MASK = 0xFFFF;      // Check for 0xDEAD in high bits
+  const uint32_t ADR_MASK = 0x9F000000;          // ADR instruction mask
+  const uint32_t ADR_PATTERN = 0x10000000;       // ADR instruction pattern
   
   int markers_found = 0;
   
@@ -914,43 +919,57 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
     // Check for the marker pattern:
     // 1. Check for two consecutive NOPs at the end (instructions[3] and [4])
     if (instructions[3] == NOP_INSTRUCTION && instructions[4] == NOP_INSTRUCTION) {
-      // 2. Check if instruction[0] is mov w19, #0xBEEF
-      //    MOV (immediate) encoding: sf=0, opc=10, hw=00, imm16=0xBEEF, Rd=19 (w19)
-      //    Binary: 0_10_100101_00_<imm16>_<Rd>
-      //    For w19 (Rd=19=0x13): instruction should match pattern
       uint32_t inst0 = instructions[0];
       uint32_t inst1 = instructions[1];
       uint32_t inst2 = instructions[2];
       
       // Check if inst0 is "mov w19, #<imm>" (MOV immediate to w19)
-      // Encoding: 0x52800000 | (imm16 << 5) | Rd
-      // For w19: 0x52800013 | (imm16 << 5)
       bool is_mov_w19 = ((inst0 & 0xFFE00000) == 0x52800000) && ((inst0 & 0x1F) == 19);
       uint32_t imm_low = (inst0 >> 5) & 0xFFFF;
       
       // Check if inst1 is "movk w19, #<imm>, lsl #16" (MOVK with shift)
-      // Encoding: 0x72A00000 | (imm16 << 5) | Rd
-      // For w19 with lsl #16: 0x72A00013 | (imm16 << 5)
       bool is_movk_w19 = ((inst1 & 0xFFE00000) == 0x72A00000) && ((inst1 & 0x1F) == 19);
       uint32_t imm_high = (inst1 >> 5) & 0xFFFF;
       
       // Check if the magic number is 0xDEADBEEF
       if (is_mov_w19 && is_movk_w19 && imm_low == 0xBEEF && imm_high == 0xDEAD) {
         // 3. Extract virtual offset from inst2 (mov w20, #<virtual_offset>)
-        // Check if inst2 is "mov w20, #<imm>"
         bool is_mov_w20 = ((inst2 & 0xFFE00000) == 0x52800000) && ((inst2 & 0x1F) == 20);
         
         if (is_mov_w20) {
           int virtual_offset = (inst2 >> 5) & 0xFFFF;  // Extract 16-bit immediate
-          int actual_offset = offset;  // Actual offset in the generated code
+          int marker_offset = offset;  // Marker position
           
           tty->print_cr("Yuhu: Found offset marker at offset %d: virtual_offset=%d", 
-                        actual_offset, virtual_offset);
+                        marker_offset, virtual_offset);
+          
+          // CRITICAL: Scan forward from the marker to find the 'adr' instruction
+          // that records the actual PC for last_java_pc
+          // The 'adr' instruction typically appears within 100 bytes after the marker
+          int actual_offset = marker_offset;  // Default to marker offset
+          bool found_adr = false;
+          
+          for (size_t scan_offset = offset + 20; scan_offset < offset + 200 && scan_offset + 4 <= code_size; scan_offset += 4) {
+            uint32_t inst = *((uint32_t*)(code_start + scan_offset));
+            
+            // Check if this is an ADR instruction
+            // ADR encoding: |0|immlo|10000|immhi|Rd|
+            // Mask: 1F000000, Pattern: 10000000
+            if ((inst & ADR_MASK) == ADR_PATTERN) {
+              actual_offset = scan_offset;
+              found_adr = true;
+              tty->print_cr("Yuhu: Found ADR instruction at offset %d for virtual_offset=%d", 
+                            actual_offset, virtual_offset);
+              break;
+            }
+          }
+          
+          if (!found_adr) {
+            tty->print_cr("Yuhu: WARNING - No ADR instruction found after marker, using marker offset");
+          }
           
           // Update the mapper with the actual offset
-          // First, check if this virtual offset exists in the mapper
           if (mapper->has_mapping(virtual_offset)) {
-            // Update the existing mapping
             mapper->add_mapping(virtual_offset, actual_offset);
             markers_found++;
           } else {
@@ -958,7 +977,7 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
           }
           
           // Skip past this marker to avoid re-scanning
-          offset += 16;  // Skip the remaining bytes of the marker
+          offset += 16;
         }
       }
     }
@@ -1018,10 +1037,49 @@ void YuhuBuilder::relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env) 
       
       tty->print_cr("Yuhu: OopMap relocation summary: %d relocated, %d failed", 
                     relocated_count, failed_count);
+      
+      // CRITICAL: Sort the OopMapSet by offset after relocation
+      // The OopMapSet::find_map_at_offset function requires entries to be sorted
+      // in ascending order by offset for binary search to work correctly
+      tty->print_cr("Yuhu: Sorting OopMapSet by offset...");
+      oopmaps->sort_by_offset();
+
+      // Print sorted offsets for verification
+      tty->print_cr("Yuhu: OopMapSet after sorting:");
+      for (int i = 0; i < oopmaps->size(); i++) {
+        OopMap* oopmap = oopmaps->at(i);
+        if (oopmap != NULL) {
+          tty->print_cr("  OopMap %d: offset=%d", i, oopmap->offset());
+        }
+      }
     } else {
       tty->print_cr("Yuhu: Warning - No OopMapSet found in DebugInformationRecorder");
     }
   } else {
     tty->print_cr("Yuhu: Warning - No offset_mapper or env provided for OopMap relocation");
   }
+}
+
+void YuhuBuilder::adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset) {
+    if (env != NULL) {
+        // Get the OopMapSet from the DebugInformationRecorder
+        OopMapSet *oopmaps = env->debug_info()->_oopmaps;
+        if (oopmaps != NULL) {
+            for (int i = 0; i < oopmaps->size(); i++) {
+                OopMap *oopmap = oopmaps->at(i);
+                if (oopmap != NULL) {
+                    oopmap->set_offset(oopmap->offset() + plus_offset);
+                }
+            }
+
+            // Print sorted offsets for verification
+            tty->print_cr("Yuhu: OopMapSet after adjusting:");
+            for (int i = 0; i < oopmaps->size(); i++) {
+                OopMap* oopmap = oopmaps->at(i);
+                if (oopmap != NULL) {
+                    tty->print_cr("  OopMap %d: offset=%d", i, oopmap->offset());
+                }
+            }
+        }
+    }
 }

@@ -398,7 +398,90 @@ void YuhuBuilder::relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env) 
 }
 ```
 
-#### 6. 验证机制
+#### 6. OopMap 排序与适配器偏移量调整
+
+在 OopMap 重定位完成后，需要对 OopMapSet 进行排序以确保 PC 偏移量线性递增，同时需要调整适配器区域的偏移量：
+
+**OopMapSet 排序方法：**
+```cpp
+// OopMapSet::sort_by_offset() 方法通过 PC offset 对 OopMap 进行排序
+// 确保 OopMapSet::find_map_at_offset 函数能够正确工作
+void OopMapSet::sort_by_offset() {
+  // 使用冒泡排序按 offset 升序排列 OopMaps
+  int count = size();
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = 0; j < count - 1 - i; j++) {
+      OopMap* map1 = at(j);
+      OopMap* map2 = at(j + 1);
+      if (map1 != NULL && map2 != NULL && map1->offset() > map2->offset()) {
+        // 交换 OopMap 指针
+        set(j, map2);
+        set(j + 1, map1);
+      }
+    }
+  }
+}
+```
+
+**适配器偏移量调整方法：**
+```cpp
+// YuhuBuilder::adjust_oopmaps_pc_offset 方法调整 OopMap 中的 PC 偏移量
+// 由于 last_java_pc 包含适配器区域，OopMap 中的 PC 偏移量也需要加上适配器区域的大小
+void YuhuBuilder::adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset) {
+  if (env != NULL) {
+    OopMapSet* oopmaps = env->debug_info()->_oopmaps;
+    if (oopmaps != NULL) {
+      tty->print_cr("Yuhu: Adjusting OopMap PC offsets by +%d (adapter size)", plus_offset);
+      
+      for (int i = 0; i < oopmaps->size(); i++) {
+        OopMap* oopmap = oopmaps->at(i);
+        if (oopmap != NULL) {
+          int old_offset = oopmap->offset();
+          int new_offset = old_offset + plus_offset;
+          oopmap->set_offset(new_offset);
+          
+          tty->print_cr("Yuhu: OopMap %d: offset %d -> %d", 
+                        i, old_offset, new_offset);
+        }
+      }
+    }
+  }
+}
+```
+
+**集成到编译流程：**
+```cpp
+// 在 YuhuCompiler::compile_method 中
+{
+  ThreadInVMfromNative tiv(JavaThread::current());
+  generate_native_code(entry, function, func_name);
+  
+  // 机器码生成后，扫描代码查找偏移标记并更新映射器
+  YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
+  if (offset_mapper != NULL) {
+    // 1. 扫描生成的代码以查找标记并更新映射
+    address code_start = entry->code_start();
+    size_t code_size = entry->code_limit() - code_start;
+    
+    builder.scan_and_update_offset_markers(code_start, code_size, offset_mapper);
+    
+    // 2. 使用更新后的映射器重定位 OopMap 偏移量
+    builder.relocate_oopmaps(offset_mapper, env);
+    
+    // 3. 对 OopMapSet 按 PC offset 进行排序
+    OopMapSet* oopmaps = env->debug_info()->_oopmaps;
+    if (oopmaps != NULL) {
+      oopmaps->sort_by_offset();
+    }
+    
+    // 4. 调整 OopMap PC 偏移量以包含适配器区域大小
+    int adapter_size = entry->adapter_code_size();  // 适配器代码大小
+    builder.adjust_oopmaps_pc_offset(env, adapter_size);
+  }
+}
+```
+
+#### 7. 验证机制
 - **调试输出**：验证映射关系是否正确建立
 - **一致性检查**：确保所有 OopMap 偏移量都得到正确更新
 - **运行时验证**：通过 GC 和栈遍历验证 OopMap 的正确性

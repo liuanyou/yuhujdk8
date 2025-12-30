@@ -309,6 +309,44 @@ OopMap* OopMapSet::find_map_at_offset(int pc_offset) const {
   return m;
 }
 
+void OopMapSet::sort_by_offset() {
+    int len = om_count();
+    if (len <= 1) return;
+
+    quick_sort_by_offset(0, len - 1);
+}
+
+void OopMapSet::quick_sort_by_offset(int left, int right) {
+    if (left >= right) return;
+
+    int pivot_index = (left + right) / 2;
+    OopMap* pivot = _om_data[pivot_index];
+    int pivot_offset = pivot->offset();
+
+    swap_entries(pivot_index, right);
+
+    int store_index = left;
+
+    for (int i = left; i < right; i++) {
+        if (_om_data[i]->offset() < pivot_offset) {
+            swap_entries(i, store_index);
+            store_index++;
+        }
+    }
+
+    swap_entries(store_index, right);
+
+    quick_sort_by_offset(left, store_index - 1);
+    quick_sort_by_offset(store_index + 1, right);
+}
+
+void OopMapSet::swap_entries(int i, int j) {
+    if (i == j) return;
+    OopMap* temp = _om_data[i];
+    _om_data[i] = _om_data[j];
+    _om_data[j] = temp;
+}
+
 class DoNothingClosure: public OopClosure {
  public:
   void do_oop(oop* p)       {}

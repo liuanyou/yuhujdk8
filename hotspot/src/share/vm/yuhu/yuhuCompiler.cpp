@@ -623,6 +623,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Copy LLVM code after adapter.
     memcpy(combined_base + adapter_size, entry->code_start(), llvm_code_size);
 
+    // adjust oopmaps offset
+    builder.adjust_oopmaps_pc_offset(env, adapter_size);
+
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
     combined_cb.initialize_oop_recorder(env->oop_recorder());
