@@ -79,7 +79,9 @@ class YuhuCodeBuffer : public StackObj {
     masm().align(BytesPerWord);
     void *result = masm().pc();
     // advance() is implemented by setting the end of the code section
+    int offset = masm().offset();
     masm().code_section()->set_end(masm().code_section()->end() + size);
+    tty->print_cr("Yuhu: after set_end: before=%d, after=%d, size=%d", offset, masm().offset(), size);
     return result;
   }
 
@@ -88,7 +90,8 @@ class YuhuCodeBuffer : public StackObj {
   int create_unique_offset() const {
     int offset = masm().offset();
     // advance() is implemented by setting the end of the code section
-    masm().code_section()->set_end(masm().code_section()->end() + 1);
+    masm().code_section()->set_end(masm().code_section()->end() + 4);
+    tty->print_cr("Yuhu: after set_end: before=%d, after=%d, size=%d", offset, masm().offset(), 4);
     return offset;
   }
   
@@ -142,6 +145,7 @@ class YuhuCodeBuffer : public StackObj {
     void *dst = masm().pc();
     // advance() is implemented by setting the end of the code section
     masm().code_section()->set_end(masm().code_section()->end() + size);
+    tty->print_cr("Yuhu: after set_end: before=%d, after=%d, size=%d", offset, masm().offset(), size);
     memcpy(dst, src, size);
     return offset;
   }

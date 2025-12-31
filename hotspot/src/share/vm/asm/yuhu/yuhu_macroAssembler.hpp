@@ -229,11 +229,13 @@ public:
     // Store oop and metadata into code buffer (similar to Zero architecture)
     void store_oop(jobject obj) {
         code_section()->relocate(pc(), oop_Relocation::spec_for_immediate());
+        code_section()->maybe_expand_to_ensure_remaining(sizeof(address));
         emit_address((address) obj);
     }
 
     void store_Metadata(Metadata* md) {
         code_section()->relocate(pc(), metadata_Relocation::spec_for_immediate());
+        code_section()->maybe_expand_to_ensure_remaining(sizeof(address));
         emit_address((address) md);
     }
 

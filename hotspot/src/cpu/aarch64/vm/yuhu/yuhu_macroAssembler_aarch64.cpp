@@ -950,7 +950,7 @@ address YuhuMacroAssembler::write_inst_adrp_direct(YuhuRegister reg, int32_t pag
     instruction |= (immlo << 29);
     
     // 将编码的指令写入代码缓冲区
-    emit_int32(instruction);
+    write_inst(instruction);
     
     return current_pc();
 }
