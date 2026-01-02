@@ -30,6 +30,8 @@
 #include "runtime/os.hpp"
 #include "runtime/synchronizer.hpp"
 #include "runtime/thread.hpp"
+#include "runtime/deoptimization.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "interpreter/interpreter.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
@@ -394,18 +396,25 @@ Value* YuhuBuilder::debug_stack_overflow_check() {
 Value* YuhuBuilder::deoptimized_entry_point() {
   // For AArch64, we don't use CppInterpreter, so we need a different approach
   // TemplateInterpreter uses a different deoptimization mechanism
-  // The signature is "iT" -> "i": int main_loop(int recurse, Thread* thread)
+  // The signature is "iT" -> "v": void unpack_with_reexecution(int recurse, Thread* thread)
   // This is used when a callee gets deoptimized and we need to reexecute in the interpreter
   // 
-  // For AArch64 with TemplateInterpreter, deoptimization is handled differently:
-  // - Deoptimization::unpack_frames handles frame creation
-  // - The interpreter entry point is determined by the method kind
-  // - We may need to create a stub function or use a different mechanism
-  //
-  // TODO: Implement proper deoptimized entry point for AArch64/TemplateInterpreter
-  // For now, we return NULL which will cause a runtime error if called
-  // This should be replaced with a proper implementation
-  return NULL;
+  // For AArch64 with TemplateInterpreter, deoptimization is handled by the same
+  // SharedRuntime deoptimization blob used by C1 and C2 compilers.
+  // 
+  // The deoptimization blob provides multiple entry points:
+  // - unpack_with_reexecution(): for normal deoptimization with re-execution
+  // - unpack_with_exception_in_tls(): when there's an exception in TLS
+  // 
+  // Use the same deoptimization blob infrastructure as C1/C2
+  DeoptimizationBlob* deopt_blob = SharedRuntime::deopt_blob();
+  assert(deopt_blob != NULL, "deoptimization blob must have been created");
+  
+  // Return the reexecution entry point with signature "iT" -> "v"
+  // (int recurse, Thread* thread) -> void
+  return make_function(
+    (address) deopt_blob->unpack_with_reexecution(),
+    "iT", "v");
 }
 
 // Native-Java transition
