@@ -1456,34 +1456,115 @@ void YuhuTopLevelBlock::do_call() {
     callee = get_direct_callee(call_method);
   }
 
-  // Load the YuhuEntry from the callee
-  Value *base_pc = builder()->CreateValueOfStructEntry(
-    callee, Method::from_interpreted_offset(),
+  // Load from_compiled_entry from Method (volatile address load)
+  Value *from_compiled_entry = builder()->CreateValueOfStructEntry(
+    callee,
+    Method::from_compiled_offset(),
     YuhuType::intptr_type(),
-    "base_pc");
+    "from_compiled_entry");
 
-  // Load the entry point from the YuhuEntry
-  Value *entry_point = builder()->CreateLoad(
-    PointerType::getUnqual(YuhuType::entry_point_type()),  // Explicitly pass type for LLVM 20+
-    builder()->CreateIntToPtr(
-      builder()->CreateAdd(
-        base_pc,
-        LLVMValue::intptr_constant(in_bytes(YuhuEntry::entry_point_offset()))),
-      PointerType::getUnqual(
-        PointerType::getUnqual(YuhuType::entry_point_type()))),
-    "entry_point");
+  // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
+  // decache will pop all arguments from the stack via xpop(),
+  // so we must collect them first.
+  std::vector<Value*> call_args;
+  int arg_slots = call_method->arg_size();
 
-  // Make the call
+  if (is_static) {
+    // Static: first argument is NULL placeholder for receiver
+    call_args.push_back(LLVMValue::intptr_constant(0));
+    // Collect remaining Java arguments from stack in reverse order
+    for (int i = arg_slots - 1; i >= 0; i--) {
+      YuhuValue* v = xstack(i);
+      switch (v->basic_type()) {
+        case T_BOOLEAN:
+        case T_BYTE:
+        case T_CHAR:
+        case T_SHORT:
+        case T_INT:
+          call_args.push_back(v->jint_value());
+          break;
+        case T_LONG:
+          call_args.push_back(v->jlong_value());
+          break;
+        case T_FLOAT:
+          call_args.push_back(v->jfloat_value());
+          break;
+        case T_DOUBLE:
+          call_args.push_back(v->jdouble_value());
+          break;
+        case T_OBJECT:
+        case T_ARRAY:
+          call_args.push_back(v->jobject_value());
+          break;
+        default:
+          ShouldNotReachHere();
+      }
+    }
+  } else {
+    // Non-static: receiver is at position arg_size-1
+    YuhuValue* recv_val = xstack(arg_slots - 1);
+    call_args.push_back(recv_val->jobject_value());
+    // Collect remaining Java arguments (excluding receiver)
+    for (int i = arg_slots - 2; i >= 0; i--) {
+      YuhuValue* v = xstack(i);
+      switch (v->basic_type()) {
+        case T_BOOLEAN:
+        case T_BYTE:
+        case T_CHAR:
+        case T_SHORT:
+        case T_INT:
+          call_args.push_back(v->jint_value());
+          break;
+        case T_LONG:
+          call_args.push_back(v->jlong_value());
+          break;
+        case T_FLOAT:
+          call_args.push_back(v->jfloat_value());
+          break;
+        case T_DOUBLE:
+          call_args.push_back(v->jdouble_value());
+          break;
+        case T_OBJECT:
+        case T_ARRAY:
+          call_args.push_back(v->jobject_value());
+          break;
+        default:
+          ShouldNotReachHere();
+      }
+    }
+  }
+
+  // NOW it's safe to decache (this will xpop() all arguments)
   decache_for_Java_call(call_method);
-  // CreateCall3 doesn't exist in LLVM, use CreateCall with FunctionType
-  // entry_point signature: (Method*, intptr_t, Thread*) -> int
-  llvm::FunctionType* deopt_func_type = YuhuBuilder::make_ftype("MiT", "i");
-  std::vector<Value*> deopt_args;
-  deopt_args.push_back(callee);
-  deopt_args.push_back(base_pc);
-  deopt_args.push_back(thread());
+
+  // Cast from_compiled_entry to a function pointer matching the callee's signature
+  // We need to construct the callee's FunctionType based on its Java signature
+  std::vector<llvm::Type*> param_types;
+  
+  // First parameter: receiver (for non-static) or NULL (for static)
+  if (is_static) {
+    param_types.push_back(YuhuType::intptr_type());  // void* null
+  } else {
+    param_types.push_back(YuhuType::oop_type());  // receiver
+  }
+  
+  // Add Java method parameters
+  for (int i = 0; i < sig->count(); i++) {
+    ciType* param_type = sig->type_at(i);
+    param_types.push_back(YuhuType::to_stackType(param_type));
+  }
+  
+  // Return type is always int
+  llvm::FunctionType* compiled_ftype = FunctionType::get(YuhuType::jint_type(), param_types, false);
+  
+  Value *compiled_entry = builder()->CreateIntToPtr(
+    from_compiled_entry,
+    PointerType::getUnqual(compiled_ftype),
+    "compiled_entry");
+
+  // Call the compiled entry
   Value *deoptimized_frames = builder()->CreateCall(
-    deopt_func_type, entry_point, deopt_args);
+    compiled_ftype, compiled_entry, call_args);
 
   // If the callee got deoptimized then reexecute in the interpreter
   BasicBlock *reexecute      = function()->CreateBlock("reexecute");
