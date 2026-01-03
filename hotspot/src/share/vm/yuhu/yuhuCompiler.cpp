@@ -452,18 +452,31 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   // Remove any existing functions with the same name in both modules to avoid
   // duplicated symbols (e.g., LLVM auto-suffix ".1") and potential EE failures.
+  // Also clear all other functions from the module to avoid conflicts from
+  // previously compiled methods (e.g., Matrix::multiply appearing in encodeArrayLoop IR)
   {
-    const std::string func_name_str(func_name);
     llvm::Module* mod_normal = _normal_context->module();
     llvm::Module* mod_native = _native_context->module();
+    
+    // Clear all functions from normal module
     if (mod_normal != NULL) {
-      if (llvm::Function* oldf = mod_normal->getFunction(func_name_str)) {
-        oldf->eraseFromParent();
+      std::vector<llvm::Function*> to_erase;
+      for (auto& func : mod_normal->getFunctionList()) {
+        to_erase.push_back(&func);
+      }
+      for (llvm::Function* func : to_erase) {
+        func->eraseFromParent();
       }
     }
+    
+    // Clear all functions from native module
     if (mod_native != NULL) {
-      if (llvm::Function* oldf = mod_native->getFunction(func_name_str)) {
-        oldf->eraseFromParent();
+      std::vector<llvm::Function*> to_erase;
+      for (auto& func : mod_native->getFunctionList()) {
+        to_erase.push_back(&func);
+      }
+      for (llvm::Function* func : to_erase) {
+        func->eraseFromParent();
       }
     }
   }
