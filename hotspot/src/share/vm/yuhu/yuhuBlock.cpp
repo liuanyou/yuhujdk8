@@ -1047,9 +1047,11 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
   // Find the object we're accessing, if necessary
   Value *object = NULL;
   if (is_field) {
-    YuhuValue *value = pop();
-    check_null(value);
-    object = value->generic_value();
+    YuhuValue *obj_value = pop();
+    // Explicit null check for field access - always perform the check
+    // to ensure Java semantics (NPE instead of segfault)
+    check_null(obj_value);
+    object = obj_value->generic_value();
   }
   if (is_get && field->is_constant() && field->is_static()) {
     YuhuConstant *constant = YuhuConstant::for_field(iter());

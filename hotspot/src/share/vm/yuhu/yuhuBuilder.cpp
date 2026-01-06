@@ -54,12 +54,13 @@ Value* YuhuBuilder::CreateAddressOfStructEntry(Value*      base,
                                                 llvm::Type* type,
                                                 const char* name) {
   // LLVM 20+ uses opaque pointer types, so we can't get element type from PointerType
-  // Instead, we use CreateGEP with explicit index calculation
-  // For struct access, we calculate the byte offset and use CreateGEP
-  // Note: We use jbyte_type() as the element type for byte-level addressing
+  // Calculate address as: base_as_int + offset
+  // This is more explicit and avoids potential GEP optimization issues
+  Value* base_int = CreatePtrToInt(base, YuhuType::intptr_type());
   Value* byte_offset = LLVMValue::intptr_constant(in_bytes(offset));
-  Value* gep = CreateGEP(YuhuType::jbyte_type(), base, byte_offset);
-  return CreateBitCast(gep, type, name);
+  Value* result_int = CreateAdd(base_int, byte_offset, "field_addr_int");
+  Value* result_ptr = CreateIntToPtr(result_int, type, name);
+  return result_ptr;
 }
 
 LoadInst* YuhuBuilder::CreateValueOfStructEntry(Value*      base,

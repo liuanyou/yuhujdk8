@@ -1503,6 +1503,8 @@ void YuhuTopLevelBlock::do_call() {
   } else {
     // Non-static: receiver is at position arg_size-1
     YuhuValue* recv_val = xstack(arg_slots - 1);
+    // Explicit null check for method call receiver
+    check_null(recv_val);
     call_args.push_back(recv_val->jobject_value());
     // Collect remaining Java arguments (excluding receiver)
     for (int i = arg_slots - 2; i >= 0; i--) {
