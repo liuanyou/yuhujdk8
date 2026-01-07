@@ -35,6 +35,7 @@
 #include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
+#include "oops/method.hpp"
 
 using namespace llvm;
 

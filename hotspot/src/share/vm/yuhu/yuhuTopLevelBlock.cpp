@@ -1235,10 +1235,17 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
 }
 
 Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method) {
-  return builder()->CreateBitCast(
-    builder()->CreateInlineMetadata(method, YuhuType::Method_type()),
-                                    YuhuType::Method_type(),
-                                    "callee");
+  // Generate call to static call stub that returns the _from_compiled_entry directly
+  // This stub loads the Method* and returns _from_compiled_entry, avoiding
+  // the problematic field access in the generated LLVM IR
+  address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method);
+  
+  // The stub will return the _from_compiled_entry directly
+  // So we return the stub address as the compiled entry address
+  return builder()->CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)stub_addr),
+    YuhuType::intptr_type(),  // Return intptr_type instead of Method_type
+    "compiled_entry");
 }
 
 Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
@@ -1453,15 +1460,25 @@ void YuhuTopLevelBlock::do_call() {
     }
   }
   else {
+    // For direct calls (including optimized virtual calls), use get_direct_callee
+    // which now returns the compiled entry address directly via stub
     callee = get_direct_callee(call_method);
   }
 
-  // Load from_compiled_entry from Method (volatile address load)
-  Value *from_compiled_entry = builder()->CreateValueOfStructEntry(
-    callee,
-    Method::from_compiled_offset(),
-    YuhuType::intptr_type(),
-    "from_compiled_entry");
+  // For direct calls, callee is now the compiled entry address
+  // For virtual/interface calls, callee is the method pointer that needs _from_compiled_entry field
+  Value *from_compiled_entry;
+  if (call_is_virtual) {
+    // Load from_compiled_entry from Method (volatile address load)
+    from_compiled_entry = builder()->CreateValueOfStructEntry(
+      callee,
+      Method::from_compiled_offset(),
+      YuhuType::intptr_type(),
+      "from_compiled_entry");
+  } else {
+    // For direct calls, callee is already the compiled entry address
+    from_compiled_entry = callee;
+  }
 
   // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
   // decache will pop all arguments from the stack via xpop(),

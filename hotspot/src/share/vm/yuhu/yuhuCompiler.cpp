@@ -45,6 +45,9 @@
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
+#include "asm/yuhu/yuhu_macroAssembler.hpp"
+#include "code/codeCache.hpp"
+#include "oops/method.hpp"
 
 #include <fnmatch.h>
 #include <cstring>
@@ -1336,4 +1339,85 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
   }
   *(dst++) = '\0';
   return buf;
+}
+
+// Generate a static call stub for direct method calls
+// This stub loads the Method* and jumps to _from_compiled_entry
+// Following C1/C2 approach to avoid slot addressing issues
+// IMPORTANT: Preserve Method* in x12 (x_method_in_constant_pool) register
+address YuhuCompiler::generate_static_call_stub(ciMethod* method) {
+  // Allocate permanent stub in Code Cache
+  // Stub size: approximately 32 bytes for AArch64
+  // - adr x9, method_literal  (4 bytes) - Get address of literal
+  // - ldr x9, [x9]            (4 bytes) - Load Method* from literal
+  // - mov x12, x9               (4 bytes) - Move Method* to x12 (x_method_in_constant_pool)
+  // - ldr x9, [x9, #72]       (4 bytes) - Load _from_compiled_entry
+  // - br x9                   (4 bytes) - Jump to entry
+  // - .align 8                (padding)
+  // - .quad <Method*>         (8 bytes) - Method* constant
+  const int stub_size = 64;  // Generous size to account for alignment
+  
+  ResourceMark rm;
+  
+  // Allocate buffer space in Code Cache for the stub
+  BufferBlob* stub_blob = BufferBlob::create("yuhu_static_call_stub", stub_size);
+  if (stub_blob == NULL) {
+    fatal("CodeCache is full - cannot allocate static call stub");
+    return NULL;
+  }
+  
+  CodeBuffer stub_buffer(stub_blob);
+  YuhuMacroAssembler masm(&stub_buffer);
+  
+  // Get the Method* address
+  Method* method_ptr = method->get_Method();
+  
+  // AArch64 stub code using YuhuMacroAssembler:
+  // We need to:
+  // 1. Load Method* from a PC-relative location
+  // 2. Move Method* to x12 register (x_method_in_constant_pool) for c2i adapter
+  // 3. Load _from_compiled_entry from Method*
+  // 4. Jump to the entry point
+  
+  // Use x9 as temporary register
+  YuhuLabel method_literal;
+  
+  // Get address of the Method* literal
+  masm.write_inst_adr(YuhuMacroAssembler::x9, method_literal);
+  
+  // Load Method* value from the literal
+  masm.write_inst_ldr(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::x9, 0));
+  
+  // Move Method* to x12 register (x_method_in_constant_pool) for c2i adapter
+  // This is CRITICAL: c2i adapter expects Method* in x12
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
+  
+  // Load _from_compiled_entry field (offset 72) from Method*
+  masm.write_inst_ldr(YuhuMacroAssembler::x9, 
+                      YuhuAddress(YuhuMacroAssembler::x9, Method::from_compiled_offset()));
+  
+  // Jump to the compiled entry
+  masm.write_inst_br(YuhuMacroAssembler::x9);
+  
+  // Align to 8-byte boundary for the literal
+  while ((masm.current_pc() - stub_buffer.insts_begin()) % 8 != 0) {
+    masm.write_inst("nop");
+  }
+  
+  // Bind the label and emit the Method* literal
+  masm.pin_label(method_literal);
+  // Use emit_int64 to properly emit the 64-bit address
+  stub_buffer.insts()->emit_int64((intptr_t)method_ptr);
+  
+  // The stub is now permanently in the Code Cache via BufferBlob
+  address stub_addr = stub_buffer.insts_begin();
+  
+  if (YuhuTraceInstalls) {
+    tty->print_cr("Yuhu: Generated static call stub at " PTR_FORMAT " for method %s",
+                  p2i(stub_addr), method->name()->as_utf8());
+    tty->print_cr("  Method* = " PTR_FORMAT ", _from_compiled_offset = %d",
+                  p2i(method_ptr), Method::from_compiled_offset());
+  }
+  
+  return stub_addr;
 }

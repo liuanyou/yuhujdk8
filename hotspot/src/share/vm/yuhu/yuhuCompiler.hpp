@@ -82,6 +82,9 @@ class YuhuCompiler : public AbstractCompiler {
                                    BasicType*      arg_types,
                                    BasicType       return_type);
 
+  // Generate static call stub for direct method calls
+  address generate_static_call_stub(ciMethod* method);
+
   // Free compiled methods (and native wrappers)
   void free_compiled_method(address code);
 
