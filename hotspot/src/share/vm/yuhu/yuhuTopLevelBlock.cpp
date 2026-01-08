@@ -1236,16 +1236,16 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
 
 Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method) {
   // Generate call to static call stub that returns the _from_compiled_entry directly
-  // This stub loads the Method* and returns _from_compiled_entry, avoiding
+  // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
   // the problematic field access in the generated LLVM IR
   address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method);
   
-  // The stub will return the _from_compiled_entry directly
-  // So we return the stub address as the compiled entry address
+  // Return the stub address as an integer constant
+  // This will be used to access the compiled entry point
   return builder()->CreateIntToPtr(
     LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),  // Return intptr_type instead of Method_type
-    "compiled_entry");
+    YuhuType::intptr_type(),
+    "direct_callee_stub");
 }
 
 Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
@@ -1461,22 +1461,20 @@ void YuhuTopLevelBlock::do_call() {
   }
   else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
-    // which now returns the compiled entry address directly via stub
+    // which now returns the stub address that jumps to _from_compiled_entry
     callee = get_direct_callee(call_method);
   }
 
-  // For direct calls, callee is now the compiled entry address
-  // For virtual/interface calls, callee is the method pointer that needs _from_compiled_entry field
   Value *from_compiled_entry;
   if (call_is_virtual) {
-    // Load from_compiled_entry from Method (volatile address load)
+    // For virtual/interface calls, load _from_compiled_entry from Method
     from_compiled_entry = builder()->CreateValueOfStructEntry(
       callee,
       Method::from_compiled_offset(),
       YuhuType::intptr_type(),
       "from_compiled_entry");
   } else {
-    // For direct calls, callee is already the compiled entry address
+    // For direct calls, callee is already the compiled entry address from stub
     from_compiled_entry = callee;
   }
 
