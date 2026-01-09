@@ -232,6 +232,7 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuStateScanner.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuDebugInfo.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
   CXXFLAGS/yuhu_macroAssembler_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhu_templateTable_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
@@ -264,6 +265,7 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuStateScanner.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuBlock.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuState.o = $(PCH_FLAG/NO_PCH)
+    PCH_FLAG/yuhuDebugInfo.o = $(PCH_FLAG/NO_PCH)
     # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
     PCH_FLAG/yuhu_macroAssembler_aarch64.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhu_templateTable_aarch64.o = $(PCH_FLAG/NO_PCH)

@@ -43,6 +43,7 @@
 #include "yuhu/yuhuMemoryManager.hpp"
 #include "yuhu/yuhuNativeWrapper.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
+#include "yuhu/yuhuDebugInfo.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
@@ -676,6 +677,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     tty->print_cr("Yuhu: CodeBuffer range: code_begin=%p, code_end=%p, size=%zu",
                   combined_cb.insts()->start(), combined_cb.insts()->end(),
                   combined_cb.insts()->end() - combined_cb.insts()->start());
+    
+    // Generate minimal scope descriptor for deoptimization support
+    // This allows the VM to handle deoptimization when called methods deopt
+    DebugInformationRecorder* debug_info = env->debug_info();
+    if (debug_info != NULL) {
+      tty->print_cr("Yuhu: Generating minimal scope descriptor for deoptimization support");
+      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
+    }
+    
     env->register_method(target,
                          entry_bci,
                          &offsets,
@@ -767,6 +777,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     tty->print_cr("Yuhu: Registering OSR method - combined_base=%p, frame_size=%d words",
                   combined_base, frame_size);
+    
+    // Generate minimal scope descriptor for deoptimization support
+    DebugInformationRecorder* debug_info = env->debug_info();
+    if (debug_info != NULL) {
+      tty->print_cr("Yuhu: Generating minimal scope descriptor for OSR method");
+      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
+    }
+    
     env->register_method(target,
                          entry_bci,
                          &offsets,
