@@ -1552,6 +1552,7 @@ void YuhuTopLevelBlock::do_call() {
   }
 
   // NOW it's safe to decache (this will xpop() all arguments)
+  // This creates an OopMap at the call site
   decache_for_Java_call(call_method);
 
   // Cast from_compiled_entry to a function pointer matching the callee's signature
@@ -1603,6 +1604,14 @@ void YuhuTopLevelBlock::do_call() {
 
   // Cache after the call
   builder()->SetInsertPoint(call_completed);
+
+  // IMPORTANT: Create another OopMap at the return point
+  // The decache_for_Java_call() above created an OopMap at the call site,
+  // but we also need an OopMap at the return address because deoptimization
+  // can happen when returning from the callee.
+  // We use YuhuJavaCallDecacher again to create an OopMap at this return point.
+  YuhuJavaCallDecacher(function(), bci(), call_method).scan(current_state());
+
   cache_after_Java_call(call_method);
 
   // Check for pending exceptions
