@@ -69,6 +69,17 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuStack*                       _stack;
   llvm::Value*                     _arg_base;
   llvm::Value*                     _arg_count;
+  // Collection for deferred OopMaps to implement delayed safepoint addition
+  GrowableArray<OopMap*>*           _deferred_oopmaps;
+  GrowableArray<int>*               _deferred_offsets;
+  
+  // Collections for deferred frame information (for decaching)
+  GrowableArray<int>*               _deferred_frame_offsets;
+  GrowableArray<ciMethod*>*         _deferred_frame_targets;
+  GrowableArray<int>*               _deferred_frame_bcis;
+  GrowableArray<GrowableArray<ScopeValue*>*>* _deferred_frame_locals;
+  GrowableArray<GrowableArray<ScopeValue*>*>* _deferred_frame_expressions;
+  GrowableArray<GrowableArray<MonitorValue*>*>* _deferred_frame_monitors;
 
  public:
   llvm::Function* function() const {
@@ -89,6 +100,47 @@ class YuhuFunction : public YuhuTargetInvariants {
   }
   llvm::Value* arg_base() const { return _arg_base; }
   llvm::Value* arg_count() const { return _arg_count; }
+  
+  // Methods for deferred OopMap handling
+  void add_deferred_oopmap(int pc_offset, OopMap* oopmap) {
+    if (_deferred_oopmaps == NULL) {
+      _deferred_oopmaps = new GrowableArray<OopMap*>();
+      _deferred_offsets = new GrowableArray<int>();
+    }
+    _deferred_oopmaps->append(oopmap);
+    _deferred_offsets->append(pc_offset);
+  }
+  
+  GrowableArray<OopMap*>* deferred_oopmaps() const { return _deferred_oopmaps; }
+  GrowableArray<int>* deferred_offsets() const { return _deferred_offsets; }
+  
+  // Methods for deferred frame handling
+  void add_deferred_frame(int pc_offset, ciMethod* target, int bci,
+                        GrowableArray<ScopeValue*>* locals,
+                        GrowableArray<ScopeValue*>* expressions,
+                        GrowableArray<MonitorValue*>* monitors) {
+    if (_deferred_frame_offsets == NULL) {
+      _deferred_frame_offsets = new GrowableArray<int>();
+      _deferred_frame_targets = new GrowableArray<ciMethod*>();
+      _deferred_frame_bcis = new GrowableArray<int>();
+      _deferred_frame_locals = new GrowableArray<GrowableArray<ScopeValue*>*>();
+      _deferred_frame_expressions = new GrowableArray<GrowableArray<ScopeValue*>*>();
+      _deferred_frame_monitors = new GrowableArray<GrowableArray<MonitorValue*>*>();
+    }
+    _deferred_frame_offsets->append(pc_offset);
+    _deferred_frame_targets->append(target);
+    _deferred_frame_bcis->append(bci);
+    _deferred_frame_locals->append(locals);
+    _deferred_frame_expressions->append(expressions);
+    _deferred_frame_monitors->append(monitors);
+  }
+  
+  GrowableArray<int>* deferred_frame_offsets() const { return _deferred_frame_offsets; }
+  GrowableArray<ciMethod*>* deferred_frame_targets() const { return _deferred_frame_targets; }
+  GrowableArray<int>* deferred_frame_bcis() const { return _deferred_frame_bcis; }
+  GrowableArray<GrowableArray<ScopeValue*>*>* deferred_frame_locals() const { return _deferred_frame_locals; }
+  GrowableArray<GrowableArray<ScopeValue*>*>* deferred_frame_expressions() const { return _deferred_frame_expressions; }
+  GrowableArray<GrowableArray<MonitorValue*>*>* deferred_frame_monitors() const { return _deferred_frame_monitors; }
 
   // On-stack replacement
  private:

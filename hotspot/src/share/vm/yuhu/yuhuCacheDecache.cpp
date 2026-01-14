@@ -47,7 +47,11 @@ void YuhuDecacher::start_frame() {
   _oopmap = new OopMap(
     oopmap_slot_munge(stack()->oopmap_frame_size()),
     oopmap_slot_munge(arg_size()));
-  debug_info()->add_safepoint(pc_offset(), oopmap());
+    
+  // Store the oopmap for later processing
+  // We do NOT call debug_info()->add_safepoint() here because virtual offsets
+  // may not be in proper order. We'll process them after machine code generation.
+  function()->add_deferred_oopmap(pc_offset(), oopmap());
 }
 
 void YuhuDecacher::start_stack(int stack_depth) {
@@ -287,20 +291,9 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
 }
 
 void YuhuDecacher::end_frame() {
-  // Record the scope
-  debug_info()->describe_scope(
-    pc_offset(),
-    target(),
-    bci(),
-    true,
-    false,
-    false,
-    debug_info()->create_scope_values(locarray()),
-    debug_info()->create_scope_values(exparray()),
-    debug_info()->create_monitor_values(monarray()));
-
-  // Finish recording the debug information
-  debug_info()->end_safepoint(pc_offset());
+  // Add the frame information to the deferred collection for later processing
+  // This ensures all OopMaps are handled consistently in the relocation process
+  function()->add_deferred_frame(pc_offset(), target(), bci(), locarray(), exparray(), monarray());
 }
 
 void YuhuCacher::process_stack_slot(int          index,

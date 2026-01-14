@@ -4,6 +4,8 @@
 #include "code/debugInfoRec.hpp"
 #include "ci/ciMethod.hpp"
 
+class YuhuFunction;
+
 // YuhuDebugInfo: 为 Yuhu 编译的方法生成最小的 scope descriptor
 // 用于支持逆优化（deoptimization）
 class YuhuDebugInfo : public AllStatic {
@@ -12,7 +14,8 @@ public:
   // 使用已经记录的 OopMapSet，为每个 OopMap 生成对应的 scope
   static void generate_minimal_debug_info(DebugInformationRecorder* recorder,
                                            ciMethod* method,
-                                           int frame_size);
+                                           int frame_size,
+                                           YuhuFunction* function = NULL);
 
 private:
   // 为特定的 OopMap 记录 scope descriptor

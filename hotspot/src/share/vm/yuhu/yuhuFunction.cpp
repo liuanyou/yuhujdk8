@@ -73,6 +73,18 @@ void YuhuFunction::initialize(const char *name) {
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _arg_base = NULL;
   _arg_count = NULL;
+  // Initialize deferred OopMap collections
+  _deferred_oopmaps = NULL;
+  _deferred_offsets = NULL;
+  
+  // Initialize deferred frame collections
+  _deferred_frame_offsets = NULL;
+  _deferred_frame_targets = NULL;
+  _deferred_frame_bcis = NULL;
+  _deferred_frame_locals = NULL;
+  _deferred_frame_expressions = NULL;
+  _deferred_frame_monitors = NULL;
+  
   _function = Function::Create(
     entry_point_type(),
     Function::ExternalLinkage,  // Changed from InternalLinkage to ExternalLinkage
