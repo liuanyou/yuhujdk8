@@ -94,6 +94,9 @@ void YuhuFunction::initialize(const char *name) {
     name,
     YuhuContext::current().module());  // Pass Module so Function is added automatically
   
+  // Initialize the debug information recorder
+  _debug_info_recorder = new YuhuDebugInformationRecorder();
+  
   // Debug: Print linkage value to verify it's set correctly
   // In LLVM, ExternalLinkage should be 6, InternalLinkage should be 0
   int linkage_value = (int)_function->getLinkage();
@@ -464,4 +467,32 @@ void YuhuFunction::add_deferred_zero_check(YuhuTopLevelBlock* block,
 void YuhuFunction::do_deferred_zero_checks() {
   for (int i = 0; i < deferred_zero_checks()->length(); i++)
     deferred_zero_checks()->at(i)->process();
+}
+
+void YuhuFunction::process_deferred_oopmaps() {
+  // Add deferred OopMaps to the YuhuDebugInformationRecorder instead of directly to DebugInformationRecorder
+  // This allows us to handle virtual offsets that will be converted to real offsets later
+  if (_deferred_oopmaps != NULL && _deferred_offsets != NULL) {
+    if (_debug_info_recorder != NULL) {
+      tty->print_cr("Yuhu: Processing %d deferred OopMaps from YuhuFunction before destruction", _deferred_oopmaps->length());
+      for (int i = 0; i < _deferred_oopmaps->length(); i++) {
+        OopMap* oopmap = _deferred_oopmaps->at(i);
+        int pc_offset = _deferred_offsets->at(i);
+        // Add the OopMap to the YuhuDebugInformationRecorder
+        _debug_info_recorder->add_safepoint(pc_offset, oopmap);
+        _debug_info_recorder->describe_scope(
+          pc_offset,
+          target(),  // Use the current method
+          0,         // bci = 0
+          false,     // reexecute
+          false,     // rethrow_exception
+          false,     // is_method_handle_invoke
+          (GrowableArray<ScopeValue*>*)NULL,
+          (GrowableArray<ScopeValue*>*)NULL,
+          (GrowableArray<MonitorValue*>*)NULL);
+        _debug_info_recorder->end_safepoint(pc_offset);
+        tty->print_cr("Yuhu: Added OopMap to YuhuDebugInformationRecorder at virtual pc_offset=%d", pc_offset);
+      }
+    }
+  }
 }

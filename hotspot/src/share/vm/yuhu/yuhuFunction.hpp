@@ -36,6 +36,7 @@
 #include "yuhu/yuhuContext.hpp"
 #include "yuhu/yuhuInvariants.hpp"
 #include "yuhu/yuhuStack.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 
 class YuhuTopLevelBlock;
 class DeferredZeroCheck;
@@ -47,8 +48,15 @@ class YuhuFunction : public YuhuTargetInvariants {
   static llvm::Function* build(ciEnv*        env,
                                YuhuBuilder* builder,
                                ciTypeFlow*   flow,
-                               const char*   name) {
+                               const char*   name,
+                               YuhuDebugInformationRecorder** debug_info_recorder = NULL) {
     YuhuFunction function(env, builder, flow, name);
+    // Process any deferred OopMaps before function goes out of scope
+    function.process_deferred_oopmaps();
+    // Optionally return the debug information recorder
+    if (debug_info_recorder != NULL) {
+      *debug_info_recorder = function.debug_info_recorder();
+    }
     return function.function();
   }
 
@@ -69,6 +77,8 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuStack*                       _stack;
   llvm::Value*                     _arg_base;
   llvm::Value*                     _arg_count;
+  // YuhuDebugInformationRecorder to collect virtual OopMap information
+  YuhuDebugInformationRecorder*    _debug_info_recorder;
   // Collection for deferred OopMaps to implement delayed safepoint addition
   GrowableArray<OopMap*>*           _deferred_oopmaps;
   GrowableArray<int>*               _deferred_offsets;
@@ -142,6 +152,12 @@ class YuhuFunction : public YuhuTargetInvariants {
   GrowableArray<GrowableArray<ScopeValue*>*>* deferred_frame_expressions() const { return _deferred_frame_expressions; }
   GrowableArray<GrowableArray<MonitorValue*>*>* deferred_frame_monitors() const { return _deferred_frame_monitors; }
 
+  // Access to the debug information recorder
+  YuhuDebugInformationRecorder* debug_info_recorder() const { return _debug_info_recorder; }
+  
+  // Process deferred OopMaps before destruction
+  void process_deferred_oopmaps();
+  
   // On-stack replacement
  private:
   bool is_osr() const {

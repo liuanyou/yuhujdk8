@@ -488,8 +488,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Emit the entry point
   YuhuEntry *entry = (YuhuEntry *) cb.malloc(sizeof(YuhuEntry));
 
-  // Build the LLVM IR for the method
-  Function *function = YuhuFunction::build(env, &builder, flow, func_name);
+  // Build the LLVM IR for the method and get the debug information recorder
+  YuhuDebugInformationRecorder* debug_info_recorder = NULL;
+  Function *function = YuhuFunction::build(env, &builder, flow, func_name, &debug_info_recorder);
   if (env->failing()) {
     tty->print_cr("Yuhu: compile failing during IR build for %s (func_name=%s) entry_bci=%d comp_level=%d",
                   base_name, func_name, entry_bci, env->comp_level());
@@ -528,8 +529,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       builder.scan_and_update_offset_markers(code_start, code_size, offset_mapper);
       
       // After scanning and updating the mapper, relocate OopMaps
-      builder.relocate_oopmaps(offset_mapper, env);
-      tty->print_cr("Yuhu: OopMap relocation completed with %d mappings", offset_mapper->num_mappings());
+//      builder.relocate_oopmaps(offset_mapper, env);
+//      tty->print_cr("Yuhu: OopMap relocation completed with %d mappings", offset_mapper->num_mappings());
     } else {
       tty->print_cr("Yuhu: WARNING - No offset mapper available for OopMap relocation");
     }
@@ -640,8 +641,18 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Copy LLVM code after adapter.
     memcpy(combined_base + adapter_size, entry->code_start(), llvm_code_size);
 
+    // Convert virtual offsets to real offsets and add to the debug information recorder
+    if (debug_info_recorder != NULL) {
+      DebugInformationRecorder* real_debug_info = env->debug_info();
+      YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
+      if (real_debug_info != NULL && offset_mapper != NULL) {
+        tty->print_cr("Yuhu: Converting virtual offsets to real offsets and adding to debug info recorder");
+        debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper, adapter_size);
+      }
+    }
+
     // adjust oopmaps offset
-    builder.adjust_oopmaps_pc_offset(env, adapter_size);
+//    builder.adjust_oopmaps_pc_offset(env, adapter_size);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
@@ -683,7 +694,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     DebugInformationRecorder* debug_info = env->debug_info();
     if (debug_info != NULL) {
       tty->print_cr("Yuhu: Generating minimal scope descriptor for deoptimization support");
-      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
+//      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
     }
     
     env->register_method(target,

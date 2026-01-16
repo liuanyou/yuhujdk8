@@ -107,7 +107,13 @@ Modify the static call stub to ensure that:
 - The return address points back into the caller's nmethod (not the stub)
 - The stub is completely transparent to the deoptimization system
 
-### Step 3: Mark Deopt-Unsafe Regions
+### Step 3: Avoid Duplicate OopMap Registration
+Prevent double registration of OopMap information:
+- Ensure OopMaps added via YuhuDebugInformationRecorder are not re-added
+- Consider commenting out redundant `generate_minimal_debug_info` calls if OopMaps are already registered
+- Maintain only one path for OopMap registration to avoid conflicts
+
+### Step 4: Mark Deopt-Unsafe Regions
 For regions where scope descriptors cannot be accurately generated:
 - Disable uncommon traps
 - Ensure no safepoints are inserted by LLVM
@@ -115,19 +121,32 @@ For regions where scope descriptors cannot be accurately generated:
 ## Implementation Plan
 
 ### Phase 1: Basic Scope Descriptor Generation
-1. Create `YuhuScopeDescRecorder` class (similar to C1/C2's DebugInformationRecorder)
+1. Create `YuhuDebugInformationRecorder` class (similar to C1/C2's DebugInformationRecorder)
 2. Record at minimum:
    - Method entry point → BCI 0
    - Method exit points → BCI (end of method)
    - Exception handler entries → corresponding BCIs
 3. Attach scope descriptors to the nmethod during compilation
 
-### Phase 2: Stub Transparency
+### Phase 2: Virtual-to-Real Offset Mapping
+1. Implement virtual PC offset collection during LLVM IR generation
+2. Add offset marker instructions in IR that translate to recognizable patterns in machine code
+3. Scan generated machine code to locate actual PC offsets
+4. Map virtual offsets to real offsets using YuhuOffsetMapper
+5. Convert collected OopMap information from virtual to real offsets
+
+### Phase 3: OopMap Lifecycle Management
+1. Collect OopMaps during IR generation in YuhuFunction
+2. Preserve OopMap information beyond YuhuFunction lifetime using deferred collections
+3. Transfer OopMap data to persistent YuhuDebugInformationRecorder
+4. Integrate with DebugInformationRecorder during nmethod registration
+
+### Phase 4: Stub Transparency
 1. Ensure static call stubs use proper calling conventions
 2. Verify return addresses point into caller nmethod
 3. Test deoptimization through stub calls
 
-### Phase 3: Full Deopt Support
+### Phase 5: Full Deopt Support
 1. Add LLVM instrumentation to track BCI mappings
 2. Generate OopMaps for GC-safe points
 3. Support inlined method deoptimization
@@ -137,22 +156,169 @@ For regions where scope descriptors cannot be accurately generated:
 ### File 1: `hotspot/src/share/vm/yuhu/yuhuCompiler.cpp`
 Add scope descriptor recording during nmethod creation:
 ```cpp
-// In generate_code() or similar method
-DebugInformationRecorder* debug_info = new DebugInformationRecorder(oop_maps);
-debug_info->describe_scope(0, method, 0); // Entry point at BCI 0
+// Build the LLVM IR for the method and get the debug information recorder
+YuhuDebugInformationRecorder* debug_info_recorder = NULL;
+Function *function = YuhuFunction::build(env, &builder, flow, func_name, &debug_info_recorder);
 
-// Attach to nmethod
-nm->set_debug_info(debug_info);
+// After machine code generation, scan for offset markers and update mapper
+address code_start = entry->code_start();
+size_t code_size = entry->code_limit() - code_start;
+YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
+
+// Scan generated machine code to find offset markers and update the mapper
+builder.scan_and_update_offset_markers(code_start, code_size, offset_mapper);
+
+// Convert virtual offsets to real offsets and add to the debug information recorder
+if (debug_info_recorder != NULL) {
+  DebugInformationRecorder* real_debug_info = env->debug_info();
+  if (real_debug_info != NULL) {
+    debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper);
+  }
+}
 ```
 
-### File 2: `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp`
-Mark deoptimization points during code generation:
+### File 2: `hotspot/src/share/vm/yuhu/yuhuFunction.cpp`
+Implement deferred OopMap processing to preserve information beyond function lifetime:
 ```cpp
-// When generating calls, record the call site BCI
-compiler()->record_scope_desc(current_bci(), calling_method);
+void YuhuFunction::process_deferred_oopmaps() {
+  // Add deferred OopMaps to the YuhuDebugInformationRecorder instead of directly to DebugInformationRecorder
+  // This allows us to handle virtual offsets that will be converted to real offsets later
+  if (_deferred_oopmaps != NULL && _deferred_offsets != NULL) {
+    if (_debug_info_recorder != NULL) {
+      for (int i = 0; i < _deferred_oopmaps->length(); i++) {
+        OopMap* oopmap = _deferred_oopmaps->at(i);
+        int pc_offset = _deferred_offsets->at(i);
+        // Add the OopMap to the YuhuDebugInformationRecorder
+        _debug_info_recorder->add_safepoint(pc_offset, oopmap);
+        _debug_info_recorder->describe_scope(
+          pc_offset,
+          target(),  // Use the current method
+          0,         // bci = 0
+          false,     // reexecute
+          false,     // rethrow_exception
+          false,     // is_method_handle_invoke
+          (GrowableArray<ScopeValue*>*)NULL,
+          (GrowableArray<ScopeValue*>*)NULL,
+          (GrowableArray<MonitorValue*>*)NULL);
+        _debug_info_recorder->end_safepoint(pc_offset);
+      }
+    }
+  }
+}
 ```
 
-### File 3: Static Call Stub Generation
+### File 3: `hotspot/src/share/vm/yuhu/yuhuDebugInformationRecorder.hpp`
+Create dedicated class to collect virtual PC offset OopMap information:
+```cpp
+class YuhuDebugInformationRecorder : public ResourceObj {
+private:
+  // Storage for virtual PC offset OopMap information
+  GrowableArray<int>* _virtual_offsets;
+  GrowableArray<OopMap*>* _oopmaps;
+  
+  // Storage for virtual PC offset frame information
+  GrowableArray<int>* _virtual_frame_offsets;
+  GrowableArray<ciMethod*>* _frame_targets;
+  GrowableArray<int>* _frame_bcis;
+  GrowableArray<GrowableArray<ScopeValue*>*>* _frame_locals;
+  GrowableArray<GrowableArray<ScopeValue*>*>* _frame_expressions;
+  GrowableArray<GrowableArray<MonitorValue*>*>* _frame_monitors;
+
+public:
+  YuhuDebugInformationRecorder();
+  void add_safepoint(int virtual_pc_offset, OopMap* oopmap);
+  void describe_scope(int virtual_pc_offset, ciMethod* method, int bci, bool reexecute, bool rethrow_exception, bool is_method_handle_invoke, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* expressions, GrowableArray<MonitorValue*>* monitors);
+  void end_safepoint(int virtual_pc_offset);
+  void convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder, ciMethod* method, YuhuOffsetMapper* offset_mapper);
+};
+```
+
+### File 4: `hotspot/src/share/vm/yuhu/yuhuOffsetMapper.cpp`
+Handle mapping between virtual offsets (from IR stage) and actual offsets (from machine code stage):
+```cpp
+class YuhuOffsetMapper : public StackObj {
+ private:
+  // Map to store virtual offset to actual offset mapping
+  std::map<int, int> _offset_map;
+  
+  // Array to store offset mappings for ordered iteration
+  GrowableArray<OffsetMapping>* _mappings;
+
+ public:
+  YuhuOffsetMapper();
+  ~YuhuOffsetMapper();
+
+  // Add a new mapping from virtual offset to actual offset
+  void add_mapping(int virtual_offset, int actual_offset);
+
+  // Get the actual offset for a given virtual offset
+  int get_actual_offset(int virtual_offset) const;
+
+  // Check if a mapping exists for the given virtual offset
+  bool has_mapping(int virtual_offset) const;
+
+  // Get the number of mappings
+  int num_mappings() const;
+};
+```
+
+### File 5: `hotspot/src/share/vm/yuhu/yuhuBuilder.cpp`
+Implement scan and update of offset markers in generated machine code:
+```cpp
+void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code_size, YuhuOffsetMapper* mapper) {
+  // Scan the generated machine code to find offset markers and update the mapper with actual offsets
+  // Marker pattern (AArch64, 20 bytes total):
+  //   mov w19, #0xBEEF             (4 bytes: 0x52817DEF or similar encoding)
+  //   movk w19, #0xDEAD, lsl #16   (4 bytes: 0x72BBD5B3 or similar encoding)
+  //   mov w20, #<virtual_offset>   (4 bytes: varies based on virtual_offset)
+  //   nop                          (4 bytes: 0xD503201F)
+  //   nop                          (4 bytes: 0xD503201F)
+  
+  // Scan the code 4 bytes at a time (instruction-aligned)
+  for (size_t offset = 0; offset + 20 <= code_size; offset += 4) {
+    address current = code_start + offset;
+    uint32_t* instructions = (uint32_t*)current;
+    
+    // Check for the marker pattern:
+    // 1. Check for two consecutive NOPs at the end (instructions[3] and [4])
+    if (instructions[3] == NOP_INSTRUCTION && instructions[4] == NOP_INSTRUCTION) {
+      uint32_t inst0 = instructions[0];
+      uint32_t inst1 = instructions[1];
+      uint32_t inst2 = instructions[2];
+      
+      // Check if inst0 is "mov w19, #<imm>" (MOV immediate to w19)
+      bool is_mov_w19 = ((inst0 & 0xFFE00000) == 0x52800000) && ((inst0 & 0x1F) == 19);
+      uint32_t imm_low = (inst0 >> 5) & 0xFFFF;
+      
+      // Check if inst1 is "movk w19, #<imm>, lsl #16" (MOVK with shift)
+      bool is_movk_w19 = ((inst1 & 0xFFE00000) == 0x72A00000) && ((inst1 & 0x1F) == 19);
+      uint32_t imm_high = (inst1 >> 5) & 0xFFFF;
+      
+      // Check if the magic number is 0xDEADBEEF
+      if (is_mov_w19 && is_movk_w19 && imm_low == 0xBEEF && imm_high == 0xDEAD) {
+        // 3. Extract virtual offset from inst2 (mov w20, #<virtual_offset>)
+        bool is_mov_w20 = ((inst2 & 0xFFE00000) == 0x52800000) && ((inst2 & 0x1F) == 20);
+        
+        if (is_mov_w20) {
+          int virtual_offset = (inst2 >> 5) & 0xFFFF;  // Extract 16-bit immediate
+          int marker_offset = offset;  // Marker position
+          
+          // CRITICAL: Scan forward from the marker to find the 'adr' instruction
+          // that records the actual PC for last_java_pc
+          int actual_offset = marker_offset;  // Default to marker offset
+          
+          // Update the mapper with the actual offset
+          if (mapper->has_mapping(virtual_offset)) {
+            mapper->add_mapping(virtual_offset, actual_offset);
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### File 6: Static Call Stub Generation
 Ensure stub preserves proper return address:
 ```cpp
 // In generate_static_call_stub()
@@ -178,13 +344,14 @@ Ensure stub preserves proper return address:
 
 - **Priority**: P0 (Blocker for production use)
 - **Difficulty**: High
-- **Estimated Effort**: 2-3 weeks for Phase 1, 4-6 weeks for full implementation
+- **Status**: Partially Implemented
+- **Implemented Components**: YuhuDebugInformationRecorder, virtual-to-actual offset mapping, deferred OopMap processing
 - **Dependencies**: Understanding of HotSpot deoptimization mechanism, LLVM IR to BCI mapping
 
 ## Next Steps
 
-1. Study C1/C2's DebugInformationRecorder implementation
-2. Create minimal YuhuScopeDescRecorder
-3. Add scope descriptor generation for method entry/exit
-4. Test with simple deoptimization scenario
-5. Extend to cover all deoptimization points
+1. Verify the current implementation resolves the deoptimization issue
+2. Test with the specific failing case (UTF_8 encoder)
+3. Perform comprehensive deoptimization testing
+4. Address any remaining gaps in scope descriptor coverage
+5. Optimize performance of offset mapping and scanning

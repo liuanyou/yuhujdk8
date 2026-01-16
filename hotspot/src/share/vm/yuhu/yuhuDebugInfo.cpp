@@ -129,66 +129,62 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
     }
   }
   
-  // Fallback: process existing OopMaps from recorder (old behavior)
-  tty->print_cr("Yuhu: No deferred OopMaps provided, using fallback method");
+  // The OopMap information should already be in the recorder from the YuhuDebugInformationRecorder conversion
+  // during machine code generation. At this point, the recorder should contain properly mapped OopMap info.
+  tty->print_cr("Yuhu: OopMap information should already be in recorder from YuhuDebugInformationRecorder conversion");
   
-  // 获取已经记录的 OopMapSet
+  // Check if there are any OopMaps in the recorder
   OopMapSet* oopmaps = recorder->_oopmaps;
-  if (oopmaps == NULL || oopmaps->size() == 0) {
-    tty->print_cr("Yuhu: Warning - No OopMaps found, cannot generate debug info");
-    return;
-  }
-  
-  tty->print_cr("Yuhu: Generating scope descriptors for %d OopMaps", oopmaps->size());
-  
-  // 问题修复：由于虚拟offset和物理PC offset可能存在顺序不一致的问题，
-  // 我们需要先收集所有OopMap信息，然后按照offset排序后再添加到recorder中
-  // 这样确保所有PC offset严格递增，满足DebugInformationRecorder的要求
-  
-  // 创建临时数组来存储OopMap及其offset，然后进行排序
-  GrowableArray<OopMap*>* sorted_maps = new GrowableArray<OopMap*>(oopmaps->size());
-  
-  // 复制所有OopMap到临时数组
-  for (int i = 0; i < oopmaps->size(); i++) {
-    OopMap* oopmap = oopmaps->at(i);
-    if (oopmap != NULL) {
-      sorted_maps->append(oopmap);
-    }
-  }
-  
-  // 按照offset对OopMap进行排序 - 实现一个简单的冒泡排序
-  for (int i = 0; i < sorted_maps->length(); i++) {
-    for (int j = i + 1; j < sorted_maps->length(); j++) {
-      OopMap* oopmap_i = sorted_maps->at(i);
-      OopMap* oopmap_j = sorted_maps->at(j);
-      if (oopmap_i->offset() > oopmap_j->offset()) {
-        // 交换元素
-        sorted_maps->at_put(i, oopmap_j);
-        sorted_maps->at_put(j, oopmap_i);
+  if (oopmaps != NULL && oopmaps->size() > 0) {
+    tty->print_cr("Yuhu: Found %d OopMaps already in recorder", oopmaps->size());
+    // Process existing OopMaps that are already in the recorder
+    // Create temporary array to sort OopMaps by offset
+    GrowableArray<OopMap*>* sorted_maps = new GrowableArray<OopMap*>(oopmaps->size());
+    
+    // Copy all OopMaps to temporary array
+    for (int i = 0; i < oopmaps->size(); i++) {
+      OopMap* oopmap = oopmaps->at(i);
+      if (oopmap != NULL) {
+        sorted_maps->append(oopmap);
       }
     }
-  }
-  
-  // 按排序后的顺序添加到recorder中
-  int last_recorded_offset = -1;  // 初始化为无效值
-  for (int i = 0; i < sorted_maps->length(); i++) {
-    OopMap* oopmap = sorted_maps->at(i);
-    int pc_offset = oopmap->offset();
     
-    // 跳过重复的offset
-    if (pc_offset <= last_recorded_offset) {
-      tty->print_cr("Yuhu: Skipping duplicate or non-increasing pc_offset=%d (was %d)", 
-                   pc_offset, last_recorded_offset);
-      continue;
+    // Sort OopMaps by offset using bubble sort
+    for (int i = 0; i < sorted_maps->length(); i++) {
+      for (int j = i + 1; j < sorted_maps->length(); j++) {
+        OopMap* oopmap_i = sorted_maps->at(i);
+        OopMap* oopmap_j = sorted_maps->at(j);
+        if (oopmap_i->offset() > oopmap_j->offset()) {
+          // Swap elements
+          sorted_maps->at_put(i, oopmap_j);
+          sorted_maps->at_put(j, oopmap_i);
+        }
+      }
     }
     
-    tty->print_cr("Yuhu: Recording scope for OopMap %d at pc_offset=%d", i, pc_offset);
-    record_scope_for_oopmap(recorder, method, pc_offset, oopmap);
-    last_recorded_offset = pc_offset;
+    // Process OopMaps in sorted order
+    int last_recorded_offset = -1;  // Initialize to invalid value
+    for (int i = 0; i < sorted_maps->length(); i++) {
+      OopMap* oopmap = sorted_maps->at(i);
+      int pc_offset = oopmap->offset();
+      
+      // Skip duplicate offsets
+      if (pc_offset <= last_recorded_offset) {
+        tty->print_cr("Yuhu: Skipping duplicate or non-increasing pc_offset=%d (was %d)", 
+                     pc_offset, last_recorded_offset);
+        continue;
+      }
+      
+      tty->print_cr("Yuhu: Recording scope for OopMap %d at pc_offset=%d", i, pc_offset);
+      record_scope_for_oopmap(recorder, method, pc_offset, oopmap);
+      last_recorded_offset = pc_offset;
+    }
+    
+    // Clean up temporary array
+    delete sorted_maps;
+  } else {
+    tty->print_cr("Yuhu: No OopMaps found in recorder - this may indicate an issue with the conversion process");
   }
-  
-  // 清理临时数组
-  delete sorted_maps;
 }
 
 // 为特定的 OopMap 记录 scope descriptor
