@@ -74,6 +74,11 @@ YuhuCompiler::YuhuCompiler()
   // already hold CompileThread_lock. Therefore, this lock must be acquired AFTER
   // CompileThread_lock in the lock order, meaning it needs a higher rank.
   _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
+  
+  // Initialize stub patching tracking structures
+  _stub_patch_methods = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<ciMethod*>(100, true);
+  _stub_patch_addresses = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<GrowableArray<address>*>(100, true);
+  
   MutexLocker locker(execution_engine_lock());
 
   // Make LLVM safe for multithreading
@@ -571,7 +576,16 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   tty->print_cr("Yuhu: Prologue analysis - code_start=%p, prologue_bytes=%d, prologue_words=%d",
                 llvm_code_start, actual_prologue_bytes, actual_prologue_words);
   
-  // Step 2: Calculate final frame_size using actual prologue size
+  // Step 2: Find x28's offset relative to x29 and patch all stubs that call this method
+  int x28_offset = YuhuPrologueAnalyzer::find_x28_offset_from_x29(llvm_code_start);
+  // x28 must be found in the prologue, otherwise we cannot patch the stubs
+  assert(x28_offset != -1, "x28 not found in prologue - unable to patch x28 restoration stubs");
+  tty->print_cr("Yuhu: Found x28 at offset %d from x29, patching stubs for %s",
+                x28_offset, func_name);
+  // Patch all stubs that call this method
+  patch_stubs_for_method(target, x28_offset);
+  
+  // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = frame_words + locals_words + actual_prologue_words;
   // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
   // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
@@ -1374,7 +1388,7 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
 // This stub loads the Method* and jumps to _from_compiled_entry
 // Following C1/C2 approach to avoid slot addressing issues
 // IMPORTANT: Preserve Method* in x12 (x_method_in_constant_pool) register
-address YuhuCompiler::generate_static_call_stub(ciMethod* method) {
+address YuhuCompiler::generate_static_call_stub(ciMethod* target_method, ciMethod* current_method) {
   // Allocate permanent stub in Code Cache
   // Stub size: approximately 32 bytes for AArch64
   // - adr x9, method_literal  (4 bytes) - Get address of literal
@@ -1398,8 +1412,12 @@ address YuhuCompiler::generate_static_call_stub(ciMethod* method) {
   CodeBuffer stub_buffer(stub_blob);
   YuhuMacroAssembler masm(&stub_buffer);
   
-  // Get the Method* address
-  Method* method_ptr = method->get_Method();
+  // First, insert placeholder instruction to restore x28 from x29
+  masm.write_inst(0xcafebabe);
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x28, YuhuMacroAssembler::x8);
+  
+  // Get the Method* address (target method)
+  Method* method_ptr = target_method->get_Method();
   
   // AArch64 stub code using YuhuMacroAssembler:
   // We need to:
@@ -1421,7 +1439,7 @@ address YuhuCompiler::generate_static_call_stub(ciMethod* method) {
   // This is CRITICAL: c2i adapter expects Method* in x12
   masm.write_inst_mov_reg(YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
   
-  // Load _from_compiled_entry field (offset 72) from Method*
+  // Load _from_compiled_entry field from Method*
   masm.write_inst_ldr(YuhuMacroAssembler::x9, 
                       YuhuAddress(YuhuMacroAssembler::x9, Method::from_compiled_offset()));
   
@@ -1441,12 +1459,119 @@ address YuhuCompiler::generate_static_call_stub(ciMethod* method) {
   // The stub is now permanently in the Code Cache via BufferBlob
   address stub_addr = stub_buffer.insts_begin();
   
+  // Register this stub for patching when the current method (caller) is compiled
+  // When the current method is compiled, we'll know its x28 offset and can patch this stub
+  register_stub_for_patching(current_method, stub_addr);
+  
   if (YuhuTraceInstalls) {
-    tty->print_cr("Yuhu: Generated static call stub at " PTR_FORMAT " for method %s",
-                  p2i(stub_addr), method->name()->as_utf8());
+    tty->print_cr("Yuhu: Generated static call stub at " PTR_FORMAT " for target method %s (from caller %s)",
+                  p2i(stub_addr), target_method->name()->as_utf8(), current_method->name()->as_utf8());
     tty->print_cr("  Method* = " PTR_FORMAT ", _from_compiled_offset = %d",
                   p2i(method_ptr), Method::from_compiled_offset());
   }
   
   return stub_addr;
 }
+
+// Patch the placeholder instruction in the static call stub with the correct x28 offset
+void YuhuCompiler::patch_x28_restoration_stub(address stub_addr, int x28_offset_from_x29) {
+  if (stub_addr == NULL) {
+    return;
+  }
+  
+  // The first instruction in the stub is the placeholder: ldr x8, [x29, #0x1FF8]
+  uint32_t* inst_ptr = (uint32_t*)stub_addr;
+  uint32_t inst = *inst_ptr;
+  
+  // Check if this is our placeholder instruction
+  if (inst == 0xcafebabe) {
+    // For negative offsets like -80, we need to use LDUR instruction instead of LDR
+    // LDUR allows unscaled signed 9-bit offsets (-256 to +255)
+    // For x28_offset_from_x29 = -80:
+    int offset = x28_offset_from_x29;  // e.g., -80
+    
+    // Ensure the offset fits in 9-bit signed range for LDUR (-256 to +255)
+    assert(offset >= -256 && offset <= 255, "Offset out of range for AArch64 LDUR instruction");
+    
+    // Create LDUR x8, [x29, #offset] instruction
+    // LDUR encoding: sf=1 (64-bit), size=11, V=0, opc=01, imm9=offset, op2=00, Rn=29, Rt=8
+    // Format: 11_111_0_00_01_0_imm9_00_Rn_Rt
+    // Which is: 11111000010_imm9_00_Rn_Rt = 0xF8400000 | ((imm9 & 0x1FF) << 12) | (Rn << 5) | Rt
+    uint32_t imm9 = (uint32_t)offset & 0x1FF;  // 9-bit two's complement
+    uint32_t new_inst = 0xF8400000 | (imm9 << 12) | (29 << 5) | 8;
+    
+    // Patch the instruction directly
+    *inst_ptr = new_inst;
+    
+    if (YuhuTraceInstalls) {
+      tty->print_cr("Yuhu: Patched x28 restoration at " PTR_FORMAT ", offset %d, new instruction 0x%08x (ldur x8, [x29, #%d])", 
+                    p2i(stub_addr), x28_offset_from_x29, new_inst, offset);
+    }
+  } else {
+    if (YuhuTraceInstalls) {
+      tty->print_cr("Yuhu: WARNING - Unexpected instruction 0x%08x at " PTR_FORMAT ", expected 0xcafebabe", 
+                    inst, p2i(stub_addr));
+    }
+  }
+}
+
+// Register a stub that needs patching when the target method is compiled
+void YuhuCompiler::register_stub_for_patching(ciMethod* target_method, address stub_addr) {
+  // Find if we already have entries for this method
+  int index = -1;
+  for (int i = 0; i < _stub_patch_methods->length(); i++) {
+    if (_stub_patch_methods->at(i) == target_method) {
+      index = i;
+      break;
+    }
+  }
+  
+  if (index == -1) {
+    // First stub for this method, create new entry
+    _stub_patch_methods->append(target_method);
+    GrowableArray<address>* stubs = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<address>(10, true);
+    stubs->append(stub_addr);
+    _stub_patch_addresses->append(stubs);
+  } else {
+    // Add to existing entry
+    _stub_patch_addresses->at(index)->append(stub_addr);
+  }
+  
+  if (YuhuTraceInstalls) {
+    tty->print_cr("Yuhu: Registered stub " PTR_FORMAT " for patching when %s is compiled",
+                  p2i(stub_addr), target_method->name()->as_utf8());
+  }
+}
+
+// Patch all stubs that call the given method
+void YuhuCompiler::patch_stubs_for_method(ciMethod* target_method, int x28_offset) {
+  // Find the method in our tracking list
+  int index = -1;
+  for (int i = 0; i < _stub_patch_methods->length(); i++) {
+    if (_stub_patch_methods->at(i) == target_method) {
+      index = i;
+      break;
+    }
+  }
+  
+  if (index == -1) {
+    // No stubs to patch for this method
+    return;
+  }
+  
+  // Patch all stubs for this method
+  GrowableArray<address>* stubs = _stub_patch_addresses->at(index);
+  for (int i = 0; i < stubs->length(); i++) {
+    address stub_addr = stubs->at(i);
+    patch_x28_restoration_stub(stub_addr, x28_offset);
+  }
+  
+  tty->print_cr("Yuhu: Patched %d stubs for method %s",
+                stubs->length(), target_method->name()->as_utf8());
+  
+  // Clean up: remove this method's entries
+  delete stubs;
+  _stub_patch_methods->remove_at(index);
+  _stub_patch_addresses->remove_at(index);
+}
+

@@ -1238,7 +1238,8 @@ Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method) {
   // Generate call to static call stub that returns the _from_compiled_entry directly
   // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
   // the problematic field access in the generated LLVM IR
-  address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method);
+  // Pass both the target method and the current method being compiled
+  address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method, target());
   
   // Return the stub address as an integer constant
   // This will be used to access the compiled entry point

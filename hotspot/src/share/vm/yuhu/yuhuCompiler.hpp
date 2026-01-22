@@ -83,10 +83,29 @@ class YuhuCompiler : public AbstractCompiler {
                                    BasicType       return_type);
 
   // Generate static call stub for direct method calls
-  address generate_static_call_stub(ciMethod* method);
+  address generate_static_call_stub(ciMethod* target_method, ciMethod* current_method);
+
+  // Patch the placeholder instruction in the static call stub with the correct x28 offset
+  void patch_x28_restoration_stub(address stub_addr, int x28_offset_from_x29);
 
   // Free compiled methods (and native wrappers)
   void free_compiled_method(address code);
+
+  // Track stubs that need patching for x28 restoration
+ private:
+  // Map from ciMethod to list of stub addresses that call it
+  // Key: ciMethod* (the callee being called)
+  // Value: GrowableArray of stub addresses that need patching when callee is compiled
+  GrowableArray<ciMethod*>* _stub_patch_methods;
+  GrowableArray<GrowableArray<address>*>* _stub_patch_addresses;
+  
+  // Add a stub that needs patching when the target method is compiled
+  void register_stub_for_patching(ciMethod* target_method, address stub_addr);
+  
+  // Patch all stubs that call the given method
+  void patch_stubs_for_method(ciMethod* target_method, int x28_offset);
+  
+ public:
 
   // Each thread generating IR needs its own context.  The normal
   // context is used for bytecode methods, and is protected from
