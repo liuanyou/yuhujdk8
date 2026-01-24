@@ -8,6 +8,9 @@
 #include "utilities/globalDefinitions.hpp"
 
 // Analyze AArch64 prologue to determine stack space used by callee-saved register spills.
+// NOTE: This includes both callee-saved register saves AND spill space allocated by LLVM.
+// LLVM allocates spill space (sub sp, sp, #N) AFTER setting up the frame pointer,
+// and we need to count it as part of the prologue for correct frame_size calculation.
 int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
   if (code_start == NULL) {
     return 0;
@@ -15,8 +18,9 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
 
   int total_prologue_bytes = 0;
   unsigned char* pc = (unsigned char*)code_start;
+  bool found_frame_setup = false;
 
-  // Scan the first 10 instructions (prologue is typically 3-6 instructions)
+  // Scan the first 20 instructions (prologue is typically 6-10 instructions)
   for (int i = 0; i < 10; i++) {
     uint32_t inst = *(uint32_t*)pc;
 
@@ -26,9 +30,21 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
       // imm is negative (e.g., -16, -32)
       total_prologue_bytes += (-imm);
     }
-    // If we hit a sub sp, sp, #N instruction, that's Yuhu's frame allocation, not prologue
+    // Check for add x29, sp, #imm (frame pointer setup)
+    else if (is_add_x29_sp_imm(inst)) {
+      found_frame_setup = true;
+    }
+    // Check for sub sp, sp, #imm (LLVM spill space allocation)
+    // IMPORTANT: We MUST count this! LLVM generates this after setting FP
+    // to allocate space for spilled registers. This IS part of the prologue.
     else if (is_sub_sp_imm(inst)) {
-      break;  // End of LLVM prologue
+      int imm = extract_sub_sp_immediate(inst);
+      // imm is positive (e.g., 64 for sub sp, sp, #0x40)
+      total_prologue_bytes += imm;  // 先累加！
+      // After FP is set up and spill space is allocated, prologue is done
+      if (found_frame_setup) {
+        break;  // 累加完再 break
+      }
     }
 
     pc += 4;  // AArch64 instructions are 4 bytes
@@ -97,6 +113,25 @@ bool YuhuPrologueAnalyzer::is_sub_sp_imm(uint32_t inst) {
   // Also check with shift = 1 (lsl #12)
   uint32_t expected_shift = 0xD14003FF;
   return (inst & mask) == expected_shift;
+}
+
+// Extract the immediate value from sub sp, sp, #imm instruction
+int YuhuPrologueAnalyzer::extract_sub_sp_immediate(uint32_t inst) {
+  // imm12 is bits [21:10], scaled by shift amount
+  int imm12 = (inst >> 10) & 0xFFF;
+
+  // Shift is bits [23:22]
+  int shift_val = (inst >> 22) & 0x3;
+
+  // Apply scaling based on shift
+  switch (shift_val) {
+    case 0:  // LSL #0
+      return imm12;
+    case 1:  // LSL #12
+      return imm12 << 12;
+    default:  // Invalid for SUB instruction
+      return imm12;
+  }
 }
 
 // Analyze AArch64 prologue to find where x28 is saved relative to x29

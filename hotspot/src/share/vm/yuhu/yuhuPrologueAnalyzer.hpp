@@ -23,6 +23,9 @@ public:
   // Check if instruction is sub sp, sp, #imm (indicates end of prologue, start of Yuhu frame alloc)
   static bool is_sub_sp_imm(uint32_t inst);
 
+  // Extract immediate from sub sp, sp, #imm instruction
+  static int extract_sub_sp_immediate(uint32_t inst);
+
 private:
   // Check if instruction is a pre-indexed stp (e.g., stp x29, x30, [sp, #-16]!)
   static bool is_stp_pre_index(uint32_t inst);
