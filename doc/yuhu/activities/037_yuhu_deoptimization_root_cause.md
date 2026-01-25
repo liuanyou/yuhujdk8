@@ -1,10 +1,14 @@
 # 037: Yuhu Deoptimization Crash - LLVM Spill Space 导致 frame_size 计算错误
 
-**Date**: 2026-01-24
+**Date**: 2026-01-24 ~ 2026-01-25
 **Status**: 🟢 Fixed - 已找到根因并实现修复
-**Related Issue**: Yuhu 编译的 encodeArrayLoop 方法在去优化时崩溃
+**Related Issues**:
+1. Yuhu 编译的 encodeArrayLoop 方法在去优化时崩溃
+2. 去优化时 locals 数组为空导致断言失败
 
 ## 问题摘要
+
+### 问题 1: frame_size 计算错误
 
 当 Yuhu 编译的 `sun.nio.cs.UTF_8$Encoder.encodeArrayLoop` 触发去优化时，JVM 崩溃：
 
@@ -13,7 +17,19 @@ Internal Error (frame_aarch64.inline.hpp:99)
 assert(pc != NULL) failed: no pc?
 ```
 
+### 问题 2: locals 数组为空
+
+修复问题 1 后，发现新的崩溃：
+
+```
+Internal Error (vframeArray.cpp:427)
+assert(method()->max_locals() == locals()->size()) failed: just checking
+method()->max_locals() = 12, locals()->size() = 0
+```
+
 ## 根本原因
+
+### 问题 1: LLVM Spill Space 没有被计算
 
 **LLVM 生成的 spill 空间没有被 `YuhuPrologueAnalyzer` 计算到 frame_size 中！**
 
@@ -360,3 +376,229 @@ sender_pc=0x<valid_address> (from [l_sender_sp-1])  ← 正确的返回地址
 4. **完善自动化测试**
    - 添加去优化的回归测试
    - 确保未来不会引入类似问题
+
+---
+
+## 问题 2: locals 数组为空导致去优化失败
+
+### 新的错误表现
+
+修复了 frame_size 问题后，发现新的崩溃（`hs_err_pid70207.log`）：
+
+```
+# A fatal error has been detected by the Java Runtime Environment:
+#  Internal Error (/Users/liuanyou/CLionProjects/jdk8/hotspot/src/share/vm/runtime/vframeArray.cpp:427)
+#  assert(method()->max_locals() == locals()->size()) failed: just checking
+#
+# method()->max_locals() = 12
+# locals()->size() = 0
+```
+
+### 根本原因
+
+**Yuhu 没有为 `describe_scope` 提供 locals 数组！**
+
+#### 问题详解
+
+1. **Yuhu 的 debug 信息记录**
+
+在 `yuhuFunction.cpp:483-492`，Yuhu 调用 `describe_scope`：
+
+```cpp
+_debug_info_recorder->describe_scope(
+  pc_offset,
+  target(),
+  0,
+  false, false, false,
+  (GrowableArray<ScopeValue*>*)NULL,  // ← locals 是 NULL！
+  (GrowableArray<ScopeValue*>*)NULL,  // ← expressions 是 NULL！
+  (GrowableArray<MonitorValue*>*)NULL);
+```
+
+2. **ScopeDesc 的处理流程**
+
+```
+YuhuFunction::process_deferred_oopmaps()
+  └─> describe_scope(NULL, NULL, NULL)
+      └─> DebugInformationRecorder 记录到 stream
+          └─> nmethod 创建
+              └─> 去优化时 ScopeDesc 读取
+                  └─> decode_scope_values() 返回 NULL
+                      └─> locals()->size() = 0
+                          └─> assert failed!
+```
+
+3. **去优化时的断言**
+
+在 `vframeArray.cpp:427`：
+
+```cpp
+int vframeArrayElement::on_stack_size(...) const {
+  assert(method()->max_locals() == locals()->size(), "just checking");
+  // ↑ max_locals = 12, locals()->size() = 0
+  int locks = monitors() == NULL ? 0 : monitors()->number_of_monitors();
+  int temps = expressions()->size();
+  // ...
+}
+```
+
+### 为什么需要 locals 数组？
+
+去优化时，JVM 需要：
+1. **恢复局部变量**：从编译帧的栈位置读取局部变量的值
+2. **构建解释器帧**：将局部变量复制到解释器帧
+3. **继续执行**：在解释器中从正确的 bci 继续执行
+
+如果没有 locals 信息：
+- JVM 不知道每个局部变量在栈上的位置
+- 无法正确恢复局部变量的值
+- 去优化后的行为不确定
+
+### 解决方案
+
+#### 修改 yuhuFunction.cpp
+
+**修改前**：
+```cpp
+_debug_info_recorder->describe_scope(
+  pc_offset,
+  target(),
+  0,
+  false, false, false,
+  (GrowableArray<ScopeValue*>*)NULL,
+  (GrowableArray<ScopeValue*>*)NULL,
+  (GrowableArray<MonitorValue*>*)NULL);
+```
+
+**修改后**：
+```cpp
+// Build locals array for ScopeDesc
+int max_locals = target()->max_locals();
+GrowableArray<ScopeValue*>* locals = new GrowableArray<ScopeValue*>(max_locals);
+
+// Create a LocationValue for each local variable
+// Yuhu stores locals in an interpreter-compatible frame layout
+// The offset for local[i] follows the interpreter convention:
+//   local_offset_in_bytes(i) = -(i * wordSize)
+for (int i = 0; i < max_locals; i++) {
+  int stack_offset = -(i * wordSize);
+  Location loc = Location::new_stk_loc(Location::normal, stack_offset);
+  locals->append(new LocationValue(loc));
+}
+
+// Create DebugTokens
+DebugToken* locals_token = _debug_info_recorder->create_scope_values(locals);
+DebugToken* expressions_token = _debug_info_recorder->create_scope_values(NULL);
+DebugToken* monitors_token = _debug_info_recorder->create_monitor_values(NULL);
+
+_debug_info_recorder->describe_scope(
+  pc_offset,
+  target(),
+  0,
+  false, false, false,
+  locals_token,
+  expressions_token,
+  monitors_token);
+```
+
+### 修改的文件（问题 2）
+
+1. **hotspot/src/share/vm/yuhu/yuhuFunction.cpp**
+   - 添加 `#include "code/debugInfo.hpp"`
+   - 添加 `#include "code/location.hpp"`
+   - 修改 `process_deferred_oopmaps()` 函数，创建 locals 数组
+
+### 为什么使用解释器 convention？
+
+根据 `Interpreter::local_offset_in_bytes()` 的定义：
+
+```cpp
+static int local_offset_in_bytes(int n) {
+  return ((frame::interpreter_frame_expression_stack_direction() * n) * stackElementSize);
+}
+```
+
+在 AArch64 上，`interpreter_frame_expression_stack_direction() = -1`，所以：
+
+- `local[0]` 的 offset = `-(0 * wordSize) = 0`
+- `local[1]` 的 offset = `-(1 * wordSize) = -wordSize`
+- `local[2]` 的 offset = `-(2 * wordSize) = -2*wordSize`
+
+这个约定与解释器帧的布局一致，确保去优化时能正确找到局部变量。
+
+### 测试步骤（问题 2）
+
+#### 1. 编译修改后的代码
+
+```bash
+cd /Users/liuanyou/CLionProjects/jdk8
+make clean
+make configure
+make
+```
+
+#### 2. 运行测试
+
+```bash
+cd test_yuhu
+java -XX:+UseYuhuCompiler \
+     -XX:TieredStopAtLevel=6 \
+     -XX:CompileCommand=yuhuonly,sun.nio.cs.*::* \
+     -cp . \
+     TestEncoder
+```
+
+#### 3. 验证修复
+
+运行后应该看到：
+```
+Yuhu: Added OopMap to YuhuDebugInformationRecorder at virtual pc_offset=XXX with 12 locals
+```
+
+去优化时不再崩溃！断言通过：
+```
+assert(method()->max_locals() == locals()->size()) succeeded
+// max_locals() = 12, locals()->size() = 12 ✅
+```
+
+### 相关文件（问题 2）
+
+#### 修改的文件
+- `hotspot/src/share/vm/yuhu/yuhuFunction.cpp` - 创建 locals 数组
+
+#### 相关的 HotSpot 文件
+- `hotspot/src/share/vm/code/debugInfo.hpp` - ScopeValue 定义
+- `hotspot/src/share/vm/code/location.hpp` - Location 类
+- `hotspot/src/share/vm/code/debugInfoRec.hpp` - DebugInformationRecorder
+- `hotspot/src/share/vm/code/scopeDesc.cpp` - ScopeDesc 读取
+- `hotspot/src/share/vm/runtime/vframeArray.cpp` - 去优化时使用 ScopeDesc
+
+### 经验总结（问题 2）
+
+1. **ScopeDesc 是去优化的关键**
+   - 必须提供完整的 locals、expressions、monitors 信息
+   - 否则去优化时无法恢复执行状态
+
+2. **DebugInformationRecorder 的使用**
+   - `describe_scope` 需要 `DebugToken*`，不是直接的 `GrowableArray*`
+   - 必须先用 `create_scope_values()` 转换
+
+3. **Location 的约定**
+   - 栈位置使用 `Location::new_stk_loc(Type, offset)` 创建
+   - offset 是字节数，会被除以 `LogBytesPerInt`
+
+4. **解释器兼容的重要性**
+   - Yuhu 使用解释器兼容的栈帧布局
+   - locals 的 offset 必须遵循解释器 convention
+   - 这样去优化时才能正确映射变量
+
+### 综合：两个问题的关联
+
+这两个问题都源于 Yuhu 在 debug 信息生成上的不完整：
+
+| 问题 | 根因 | 影响 |
+|------|------|------|
+| **问题 1: frame_size 错误** | PrologueAnalyzer 没有计算 LLVM spill 空间 | 栈展开时 sender_sp 计算错误 |
+| **问题 2: locals 为空** | describe_scope 没有提供 locals 数组 | 去优化时无法恢复局部变量 |
+
+修复这两个问题后，Yuhu 的去优化流程现在应该能正常工作了！

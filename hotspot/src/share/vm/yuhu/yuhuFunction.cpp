@@ -25,7 +25,11 @@
 
 #include "precompiled.hpp"
 #include "ci/ciTypeFlow.hpp"
+#include "code/debugInfo.hpp"
+#include "code/location.hpp"
 #include "memory/allocation.hpp"
+#include "oops/method.hpp"
+#include "utilities/debug.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
@@ -34,8 +38,6 @@
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhu_globals.hpp"
-#include "utilities/debug.hpp"
-#include "oops/method.hpp"
 
 using namespace llvm;
 
@@ -475,6 +477,25 @@ void YuhuFunction::process_deferred_oopmaps() {
   if (_deferred_oopmaps != NULL && _deferred_offsets != NULL) {
     if (_debug_info_recorder != NULL) {
       tty->print_cr("Yuhu: Processing %d deferred OopMaps from YuhuFunction before destruction", _deferred_oopmaps->length());
+
+      // Build locals array for ScopeDesc
+      // For deoptimization to work, we need to provide locals information
+      int max_locals = target()->max_locals();
+      GrowableArray<ScopeValue*>* locals = new GrowableArray<ScopeValue*>(max_locals);
+
+      // Create a LocationValue for each local variable
+      // Yuhu stores locals in an interpreter-compatible frame layout
+      // The locals are stored at positive offsets from FP
+      // Since Location doesn't support negative offsets, we use positive offsets
+      // The actual interpretation is handled by the deoptimization code
+      for (int i = 0; i < max_locals; i++) {
+        // Use positive offset for local[i]
+        // Local variables grow toward higher addresses from FP
+        int stack_offset = i * wordSize;
+        Location loc = Location::new_stk_loc(Location::normal, stack_offset);
+        locals->append(new LocationValue(loc));
+      }
+
       for (int i = 0; i < _deferred_oopmaps->length(); i++) {
         OopMap* oopmap = _deferred_oopmaps->at(i);
         int pc_offset = _deferred_offsets->at(i);
@@ -487,11 +508,11 @@ void YuhuFunction::process_deferred_oopmaps() {
           false,     // reexecute
           false,     // rethrow_exception
           false,     // is_method_handle_invoke
-          (GrowableArray<ScopeValue*>*)NULL,
+          locals,
           (GrowableArray<ScopeValue*>*)NULL,
           (GrowableArray<MonitorValue*>*)NULL);
         _debug_info_recorder->end_safepoint(pc_offset);
-        tty->print_cr("Yuhu: Added OopMap to YuhuDebugInformationRecorder at virtual pc_offset=%d", pc_offset);
+        tty->print_cr("Yuhu: Added OopMap to YuhuDebugInformationRecorder at virtual pc_offset=%d with %d locals", pc_offset, max_locals);
       }
     }
   }
