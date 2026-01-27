@@ -75,6 +75,7 @@ void YuhuFunction::initialize(const char *name) {
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _arg_base = NULL;
   _arg_count = NULL;
+  _fp_offset_from_sp = 0;  // Will be analyzed on first return
   // Initialize deferred OopMap collections
   _deferred_oopmaps = NULL;
   _deferred_offsets = NULL;
@@ -95,7 +96,15 @@ void YuhuFunction::initialize(const char *name) {
                                 // Use Function::ExternalLinkage instead of GlobalVariable::ExternalLinkage
     name,
     YuhuContext::current().module());  // Pass Module so Function is added automatically
-  
+
+  // CRITICAL: Force LLVM to generate frame pointer (x29) setup
+  // Without this, LLVM only saves x29/x30 but doesn't set x29 = sp
+  // This is needed for proper debugging, stack walking, and exception handling
+  _function->addFnAttr(llvm::Attribute::get(
+    YuhuContext::current(),
+    "frame-pointer",
+    "all"));  // "all" means force frame pointer in all functions
+
   // Initialize the debug information recorder
   _debug_info_recorder = new YuhuDebugInformationRecorder();
   
@@ -124,6 +133,7 @@ void YuhuFunction::initialize(const char *name) {
   Function::arg_iterator ai = function()->arg_begin();
   llvm::Value *method = NULL;  // Will be set below for both OSR and normal entry
   llvm::Value *osr_buf = NULL;  // Will be set for OSR entry only
+  llvm::AllocaInst* sp_storage_alloca = NULL;  // Will hold sp_storage alloca for both OSR and normal entry
   
   if (is_osr()) {
     // OSR entry: keep old signature for now (will be handled in phase 6)
@@ -176,7 +186,13 @@ void YuhuFunction::initialize(const char *name) {
         "entry",
         function());
       builder()->SetInsertPoint(early_entry_block);
-      
+
+      // CRITICAL: Create sp_storage alloca FIRST thing in entry block
+      // This ensures LLVM puts it in the prologue, not in the middle of the function
+      // This alloca is used by YuhuStack to store the stack pointer value
+      sp_storage_alloca = builder()->CreateAlloca(
+        YuhuType::intptr_type(), 0, "sp_storage");
+
       // Create thread_ptr in this entry block
       llvm::Value *thread_int = builder()->CreateReadThreadRegister();
       llvm::Value *thread = builder()->CreateIntToPtr(
@@ -184,14 +200,14 @@ void YuhuFunction::initialize(const char *name) {
         PointerType::getUnqual(YuhuType::oop_type()),
         "thread_ptr");
       set_thread(thread);
-      
+
       // Create method_ptr as well
       llvm::Value *method_int = builder()->CreateReadMethodRegister();
       method = builder()->CreateIntToPtr(
         method_int,
         YuhuType::Method_type(),
         "method_ptr");
-      
+
       tty->print_cr("Yuhu: Created method_ptr and thread_ptr in early entry basic block (before creating blocks)");
       tty->flush();
     } else {
@@ -213,6 +229,35 @@ void YuhuFunction::initialize(const char *name) {
     // Store the entry block so we can add a branch later
     // This will be fixed when YuhuStack::CreateBuildAndPushFrame is called
     // For now, we'll leave entry block without a terminator and fix it at line 251
+  }
+
+  // CRITICAL: Create unified exit block BEFORE creating stack
+  // This ensures that stack overflow check can jump to it
+  _unified_exit_block = NULL;
+  if (!is_osr()) {
+    // For normal entry, create unified exit block now
+    _unified_exit_block = llvm::BasicBlock::Create(
+      YuhuContext::current(),
+      "unified_exit",
+      function());
+
+    // Set insert point to the exit block
+    llvm::BasicBlock* orig_insert_block = builder()->GetInsertBlock();
+    builder()->SetInsertPoint(_unified_exit_block);
+
+    // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
+    builder()->CreateEpiloguePlaceholder();
+
+    // Create ret instruction
+    builder()->CreateRet(LLVMValue::jint_constant(0));
+
+    // Restore original insert point
+    if (orig_insert_block) {
+      builder()->SetInsertPoint(orig_insert_block);
+    }
+
+    tty->print_cr("Yuhu: Created unified exit block at %p", _unified_exit_block);
+    tty->flush();
   }
 
   // Create the list of blocks
@@ -284,7 +329,14 @@ void YuhuFunction::initialize(const char *name) {
       stack_frame_block = CreateBlock();
     }
     builder()->SetInsertPoint(stack_frame_block);
-    
+
+    // CRITICAL: For OSR entry, create sp_storage alloca if not already created
+    // This must be the FIRST instruction in the entry block
+    if (is_osr() && sp_storage_alloca == NULL) {
+      sp_storage_alloca = builder()->CreateAlloca(
+        YuhuType::intptr_type(), 0, "sp_storage");
+    }
+
     // For OSR entry, create method_ptr and thread_ptr if not already set
     if (is_osr()) {
       // OSR entry: method and thread should already be set from function arguments
@@ -316,7 +368,8 @@ void YuhuFunction::initialize(const char *name) {
   }
   
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
-  _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
+  // Pass sp_storage_alloca so YuhuStack uses the alloca created in the entry block
+  _stack = YuhuStack::CreateBuildAndPushFrame(this, method, sp_storage_alloca);
 
   // NOTE: We no longer call CreateResetLastJavaFrame() here.
   // The last_Java_sp/fp/pc are set directly in yuhuStack.cpp::initialize()
@@ -516,4 +569,39 @@ void YuhuFunction::process_deferred_oopmaps() {
       }
     }
   }
+}
+
+// Get or create the unified exit block for all return paths
+llvm::BasicBlock* YuhuFunction::unified_exit_block() {
+  if (_unified_exit_block == NULL) {
+    // Create the unified exit block
+    _unified_exit_block = llvm::BasicBlock::Create(
+      YuhuContext::current(),
+      "unified_exit",
+      function());
+
+    // Set insert point to the exit block
+    llvm::BasicBlock* orig_insert_block = builder()->GetInsertBlock();
+    builder()->SetInsertPoint(_unified_exit_block);
+
+    // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
+    builder()->CreateEpiloguePlaceholder();
+
+    // Create ret instruction
+    builder()->CreateRet(LLVMValue::jint_constant(0));
+
+    // Restore original insert point
+    if (orig_insert_block) {
+      builder()->SetInsertPoint(orig_insert_block);
+    }
+
+    tty->print_cr("Yuhu: Created unified exit block at %p (lazy)", _unified_exit_block);
+    tty->flush();
+  } else {
+    // Already created in initialize(), just return it
+    tty->print_cr("Yuhu: Reusing existing unified exit block at %p", _unified_exit_block);
+    tty->flush();
+  }
+
+  return _unified_exit_block;
 }

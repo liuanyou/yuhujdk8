@@ -20,7 +20,7 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
   unsigned char* pc = (unsigned char*)code_start;
   bool found_frame_setup = false;
 
-  // Scan the first 20 instructions (prologue is typically 6-10 instructions)
+  // Scan the first 10 instructions (prologue is typically 6-10 instructions)
   for (int i = 0; i < 10; i++) {
     uint32_t inst = *(uint32_t*)pc;
 
@@ -143,9 +143,10 @@ int YuhuPrologueAnalyzer::find_x28_offset_from_x29(address code_start) {
   unsigned char* pc = (unsigned char*)code_start;
   int sp_offset_from_x29 = 0;  // Track the relationship between sp and x29
   int x28_saved_sp_offset = -1;  // Track where x28 is saved on stack
+  bool found_yuhu_frame_alloc = false;  // Track if we've seen Yuhu's frame allocation
 
-  // Scan the first 20 instructions (prologue is typically 6-10 instructions)
-  for (int i = 0; i < 20; i++) {
+  // Scan the first 10 instructions (prologue is typically 6-10 instructions)
+  for (int i = 0; i < 10; i++) {
     uint32_t inst = *(uint32_t*)pc;
 
     // Check for add x29, sp, #imm (this establishes x29 = sp + imm)
@@ -156,7 +157,17 @@ int YuhuPrologueAnalyzer::find_x28_offset_from_x29(address code_start) {
         break;  // Found both x28 and x29, stop searching
       }
     }
-    // Check for stp instructions that might save x28
+    // Check for stp instructions that might save x28 (NEW PROLOGUE: regular offset mode)
+    else if (is_stp_x28_regular(inst)) {
+      int imm = extract_stp_immediate(inst);
+      // For regular: [sp, #imm], the store happens at (current_sp + imm)
+      x28_saved_sp_offset = imm;
+      // Continue scanning to find x29 if not found yet
+      if (sp_offset_from_x29 != 0) {
+        break;  // Found both x28 and x29, stop searching
+      }
+    }
+    // Check for pre-indexed stp (OLD PROLOGUE: stp x29, x30, [sp, #-16]!)
     else if (is_stp_x28_pre_index(inst)) {
       int imm = extract_stp_immediate(inst);
       // For pre-indexed: [sp, #imm]!, the store happens at (sp + imm) before sp is updated
@@ -174,21 +185,24 @@ int YuhuPrologueAnalyzer::find_x28_offset_from_x29(address code_start) {
         break;  // Found both x28 and x29, stop searching
       }
     }
-    else if (is_stp_x28_regular(inst)) {
-      int imm = extract_stp_immediate(inst);
-      // For regular: [sp, #imm], the store happens at (sp + imm)
-      x28_saved_sp_offset = imm;
-      // Continue scanning to find x29 if not found yet
-      if (sp_offset_from_x29 != 0) {
-        break;  // Found both x28 and x29, stop searching
-      }
-    }
-    // If we hit a sub sp, sp, #N instruction, that's Yuhu's frame allocation, not prologue
+    // Mark when we see the Yuhu frame allocation (sub sp, sp, #large_imm)
+    // But continue scanning because we might have found x28 already
     else if (is_sub_sp_imm(inst)) {
-      break;  // End of LLVM prologue
+      found_yuhu_frame_alloc = true;
+      // Don't break yet - we might have already found x28 and x29
+      if (x28_saved_sp_offset != -1 && sp_offset_from_x29 != 0) {
+        break;  // Found everything, stop searching
+      }
+      // If we haven't found x28 or x29 yet, keep scanning for a few more instructions
+      // because they might come after the sub (in the new prologue order)
     }
 
     pc += 4;  // AArch64 instructions are 4 bytes
+
+    // Safety: if we've gone too far and haven't found what we need, stop
+    if (found_yuhu_frame_alloc && i > 10) {
+      break;
+    }
   }
 
   if (x28_saved_sp_offset == -1) {
@@ -196,33 +210,70 @@ int YuhuPrologueAnalyzer::find_x28_offset_from_x29(address code_start) {
   }
 
   // Calculate x28's offset from x29
-  // In the prologue sequence:
-  //   stp x28, x27, [sp, #-96]!   -> x28 is stored at (sp_original - 96), sp becomes (sp_original - 96)
-  //   add x29, sp, #0x50           -> x29 = (sp_original - 96) + 0x50 = sp_original - 16
-  // 
+  //
+  // NEW PROLOGUE (with callee-saved registers):
+  //   sub    sp, sp, #0x70           -> sp = sp_original - 112
+  //   stp    x28, x27, [sp, #0x10]   -> x28 at [sp + 16] = sp_original - 112 + 16 = sp_original - 96
+  //   add    x29, sp, #0x60          -> x29 = sp + 96 = (sp_original - 112) + 96 = sp_original - 16
+  //
   // So:
   //   x28 is at: sp_original - 96
-  //   x29 is at: sp_original - 96 + sp_offset_from_x29 = sp_original - 96 + 80 = sp_original - 16
-  //   x28 relative to x29 = (sp_original - 96) - (sp_original - 16) = -96 + 16 = -80
-  // 
-  // Formula: x28_offset_from_x29 = x28_saved_sp_offset - (x28_saved_sp_offset + sp_offset_from_x29)
-  //        = x28_saved_sp_offset - x28_saved_sp_offset - sp_offset_from_x29
-  //        = -sp_offset_from_x29
-  // 
-  // But that's not right either. Let's think more carefully:
-  // After stp [sp, #-96]!, the new sp is at (sp_original - 96)
-  // When add x29, sp, #0x50 executes, x29 = current_sp + 0x50 = (sp_original - 96) + 0x50
-  // 
-  // So x29 points to: sp_original - 96 + 0x50 = sp_original - 16
-  // And x28 is stored at: sp_original - 96
-  // Therefore: x28_offset_from_x29 = (sp_original - 96) - (sp_original - 16) = -80
-  // 
-  // Which means: x28_offset_from_x29 = x28_saved_sp_offset + sp_offset_from_x29
-  //              where x28_saved_sp_offset is the total SP adjustment from stp instruction (-96)
-  //              and sp_offset_from_x29 is the offset added to sp to get x29 (80)
-  int x28_offset_from_x29 = x28_saved_sp_offset - (x28_saved_sp_offset + sp_offset_from_x29);
+  //   x29 is at: sp_original - 16
+  //   x28_offset_from_x29 = (sp_original - 96) - (sp_original - 16) = -80
+  //
+  // Formula: x28_offset_from_x29 = x28_saved_sp_offset - sp_offset_from_x29
+  //   where x28_saved_sp_offset is the offset from current SP (16)
+  //   and sp_offset_from_x29 is the offset added to SP to get x29 (96)
+  //
+  // OLD PROLOGUE (pre-indexed stp):
+  //   stp    x29, x30, [sp, #-16]!   -> x29 at [sp_original - 16], sp becomes sp_original - 16
+  //   add    x29, sp, #0x0            -> x29 = sp = sp_original - 16
+  //   (x28 is not saved in old prologue, it's reserved throughout)
+  //
+  // The formula works for both cases:
+  //   NEW: 16 - 96 = -80  ✓
+  //   OLD: -16 - 0 = -16 ✓
+  int x28_offset_from_x29 = x28_saved_sp_offset - sp_offset_from_x29;
 
   return x28_offset_from_x29;
+}
+
+// Extract the immediate value from "add x29, sp, #imm" instruction in prologue
+// This is needed to restore SP before returning from the function.
+// Returns the immediate value (positive number), or 0 if not found.
+//
+// NOTE: In the new LLVM prologue (with alloca), the structure is:
+//   1. sub sp, sp, #0x70         (allocate all stack space at once)
+//   2. stp x28, x27, [sp, #0x10] (save callee-saved regs)
+//   3. stp x26, x25, [sp, #0x20]
+//   4. ...
+//   5. add x29, sp, #0x60        (set up frame pointer) <-- we need this!
+//
+// So "add x29, sp, #imm" comes AFTER the initial "sub sp, sp, #large_imm",
+// which means we should NOT break early when we see sub sp, sp, #imm.
+int YuhuPrologueAnalyzer::extract_add_x29_sp_imm(address code_start) {
+  if (code_start == NULL) {
+    return 0;
+  }
+
+  unsigned char* pc = (unsigned char*)code_start;
+
+  // Scan the first 10 instructions looking for "add x29, sp, #imm"
+  for (int i = 0; i < 10; i++) {
+    uint32_t inst = *(uint32_t*)pc;
+
+    if (is_add_x29_sp_imm(inst)) {
+      int imm = extract_add_immediate(inst);
+      tty->print_cr("YuhuPrologueAnalyzer: Found add x29, sp, #%d (0x%x) at offset %d",
+                    imm, imm, i * 4);
+      return imm;  // Found it!
+    }
+
+    pc += 4;  // AArch64 instructions are 4 bytes
+  }
+
+  tty->print_cr("YuhuPrologueAnalyzer: WARNING - add x29, sp, #imm not found in prologue!");
+  return 0;  // Not found, return 0 as fallback
 }
 
 // AArch64 stp (store pair) encoding for 64-bit registers:

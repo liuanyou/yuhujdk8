@@ -38,7 +38,7 @@ class YuhuStackWithNativeFrame;
 class YuhuStack : public YuhuCompileInvariants {
  public:
   static YuhuStack* CreateBuildAndPushFrame(
-    YuhuFunction* function, llvm::Value* method);
+    YuhuFunction* function, llvm::Value* method, llvm::AllocaInst* sp_storage_alloca);
   static YuhuStack* CreateBuildAndPushFrame(
     YuhuNativeWrapper* wrapper, llvm::Value* method);
 
@@ -47,12 +47,13 @@ class YuhuStack : public YuhuCompileInvariants {
     : YuhuCompileInvariants(parent) {}
 
  protected:
-  void initialize(llvm::Value* method);
+  void initialize(llvm::Value* method, llvm::AllocaInst* sp_storage_alloca, llvm::BasicBlock* exit_block);
 
  protected:
   // Stack overflow check - checks if the new stack pointer (sp) has enough space
   // FIXED: Now only takes sp parameter, checks the actual stack pointer after frame allocation
-  void CreateStackOverflowCheck(llvm::Value* sp);
+  // exit_block: unified exit block to jump to on overflow (NULL for native wrappers)
+  void CreateStackOverflowCheck(llvm::Value* sp, llvm::BasicBlock* exit_block);
 
   // Properties of the method being compiled
  protected:
@@ -69,6 +70,11 @@ class YuhuStack : public YuhuCompileInvariants {
  protected:
   virtual address interpreter_entry_point() const = 0;
 
+  // Get the unified exit block for all return paths
+  // Returns NULL for native wrappers which handle their own returns
+ protected:
+  virtual llvm::BasicBlock* unified_exit_block() const = 0;
+
   // Interface with the AArch64 stack
   // AArch64 uses standard ABI stack, not ZeroStack
  private:
@@ -79,10 +85,16 @@ class YuhuStack : public YuhuCompileInvariants {
   mutable llvm::AllocaInst* _sp_storage;  // Storage for stack pointer
 
   // Initialize stack pointer and frame pointer storage
-  void initialize_stack_pointers(llvm::Value* stack_pointer) {
+  // If sp_storage_alloca is NULL (native wrapper case), create a new alloca
+  void initialize_stack_pointers(llvm::Value* stack_pointer, llvm::AllocaInst* sp_storage_alloca) {
     _stack_pointer = stack_pointer;
-    // Create storage for stack pointer
-    _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+    if (sp_storage_alloca != NULL) {
+      // Use the alloca created in the entry block
+      _sp_storage = sp_storage_alloca;
+    } else {
+      // Native wrapper case: create a new alloca (less ideal)
+      _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+    }
     builder()->CreateStore(stack_pointer, _sp_storage);
     // Frame pointer address will be set in initialize() when frame is created
   }
@@ -114,7 +126,11 @@ class YuhuStack : public YuhuCompileInvariants {
     // For AArch64, store the stack pointer in storage
     _stack_pointer = value;
     if (_sp_storage == NULL) {
-      _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+      // This should not happen if sp_storage_alloca was passed correctly
+      // Fallback: create a new alloca (warning: this will be in the middle of the function!)
+      _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
+      tty->print_cr("WARNING: sp_storage fallback alloca created in middle of function!");
+      tty->flush();
     }
     return builder()->CreateStore(value, _sp_storage);
   }
@@ -341,7 +357,7 @@ class YuhuStackWithNormalFrame : public YuhuStack {
   friend class YuhuStack;
 
  protected:
-  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method);
+  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method, llvm::AllocaInst* sp_storage_alloca);
 
  private:
   YuhuFunction* _function;
@@ -365,6 +381,10 @@ class YuhuStackWithNormalFrame : public YuhuStack {
   // Interpreter entry point for bailouts
  private:
   address interpreter_entry_point() const;
+
+  // Get the unified exit block for all return paths
+ private:
+  llvm::BasicBlock* unified_exit_block() const;
 };
 
 class YuhuStackWithNativeFrame : public YuhuStack {
@@ -395,6 +415,10 @@ class YuhuStackWithNativeFrame : public YuhuStack {
   // Interpreter entry point for bailouts
  private:
   address interpreter_entry_point() const;
+
+  // Get the unified exit block for all return paths
+ private:
+  llvm::BasicBlock* unified_exit_block() const;
 };
 
 #endif // SHARE_VM_YUHU_YUHUSTACK_HPP

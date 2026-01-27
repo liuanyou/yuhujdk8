@@ -778,8 +778,14 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   std::vector<Value*> args;
   args.push_back(thread());
   args.push_back(LLVMValue::jint_constant(trap_request));
-  builder()->CreateRet(
-    builder()->CreateCall(func_type, builder()->uncommon_trap(), args));
+
+  // Call uncommon_trap and then jump to unified exit block
+  // Note: uncommon_trap may throw an exception and not return, but we need to handle the return case
+  llvm::Value* call_result = builder()->CreateCall(func_type, builder()->uncommon_trap(), args);
+
+  // CRITICAL: Jump to the unified exit block (contains epilogue marker and ret)
+  // This ensures we only have ONE marker in the entire function
+  builder()->CreateBr(function()->unified_exit_block());
 }
 
 void YuhuTopLevelBlock::call_register_finalizer(Value *receiver) {
@@ -853,7 +859,7 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
   }
 
   // NOTE: We do NOT clear last_Java_sp here when returning from a Yuhu compiled method.
-  // 
+  //
   // The reason: last_Java_sp represents the "current Java frame" for stack traversal.
   // When a method returns, the caller becomes the "current frame", but the caller
   // should have already set last_Java_sp when it entered (if it's a compiled method)
@@ -873,7 +879,10 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
   //
   // TODO: Re-evaluate this decision based on actual behavior and safepoint requirements.
 
-  builder()->CreateRet(LLVMValue::jint_constant(0));
+  // CRITICAL: Jump to the unified exit block instead of creating multiple rets
+  // The unified exit block contains the epilogue marker and ret instruction
+  // This ensures we only have ONE marker in the entire function
+  builder()->CreateBr(function()->unified_exit_block());
 }
 
 void YuhuTopLevelBlock::do_arraylength() {

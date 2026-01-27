@@ -20,6 +20,11 @@ public:
   // Returns -1 if x28 is not found in the prologue
   static int find_x28_offset_from_x29(address code_start);
 
+  // Extract the immediate value from "add x29, sp, #imm" instruction in prologue
+  // Returns the immediate value (positive number)
+  // Returns 0 if not found (fallback value)
+  static int extract_add_x29_sp_imm(address code_start);
+
   // Check if instruction is sub sp, sp, #imm (indicates end of prologue, start of Yuhu frame alloc)
   static bool is_sub_sp_imm(uint32_t inst);
 

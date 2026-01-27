@@ -77,6 +77,11 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuStack*                       _stack;
   llvm::Value*                     _arg_base;
   llvm::Value*                     _arg_count;
+  llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
+
+  // Prologue analysis data
+  int _fp_offset_from_sp;  // Offset from SP to FP (imm in "add x29, sp, #imm")
+
   // YuhuDebugInformationRecorder to collect virtual OopMap information
   YuhuDebugInformationRecorder*    _debug_info_recorder;
   // Collection for deferred OopMaps to implement delayed safepoint addition
@@ -110,6 +115,10 @@ class YuhuFunction : public YuhuTargetInvariants {
   }
   llvm::Value* arg_base() const { return _arg_base; }
   llvm::Value* arg_count() const { return _arg_count; }
+
+  // Prologue analysis: get/set FP offset from SP
+  int fp_offset_from_sp() const { return _fp_offset_from_sp; }
+  void set_fp_offset_from_sp(int offset) { _fp_offset_from_sp = offset; }
   
   // Methods for deferred OopMap handling
   void add_deferred_oopmap(int pc_offset, OopMap* oopmap) {
@@ -202,6 +211,12 @@ class YuhuFunction : public YuhuTargetInvariants {
  public:
   void add_deferred_zero_check(YuhuTopLevelBlock* block,
                                YuhuValue*         value);
+
+  // Unified exit block for all return paths
+ public:
+  // Get or create the unified exit block where all returns should jump to
+  // This block contains the epilogue marker and ret instruction
+  llvm::BasicBlock* unified_exit_block();
 
  private:
   void do_deferred_zero_checks();

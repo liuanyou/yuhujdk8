@@ -28,6 +28,8 @@
 #include "memory/resourceArea.hpp"
 #include "oops/method.hpp"
 #include "runtime/os.hpp"
+#include "utilities/globalDefinitions.hpp"
+#include "utilities/align.hpp"
 #include "runtime/synchronizer.hpp"
 #include "runtime/thread.hpp"
 #include "runtime/deoptimization.hpp"
@@ -37,6 +39,7 @@
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuContext.hpp"
+#include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
 
@@ -589,6 +592,29 @@ void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {
   CreateCall(asm_type, asm_func, args);
 }
 
+
+void YuhuBuilder::CreateEpiloguePlaceholder() {
+  // Insert a marker instruction (0xcafebabe) before LLVM epilogue
+  // After compilation, we'll parse the prologue and replace this marker
+  // with the correct "add sp, x29, #-imm" instruction.
+
+  YuhuContext& ctx = YuhuContext::current();
+
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getVoidTy(ctx),
+    false);
+
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    ".inst 0xcafebabe",
+    "",
+    true,
+    false,
+    llvm::InlineAsm::AD_ATT);
+
+  CreateCall(asm_type, asm_func, std::vector<Value*>());
+}
+
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
   // Generic register reader using @llvm.read_register intrinsic
   // Used for reading x12 (rmethod), x28 (rthread), x20 (esp), etc.
@@ -1087,4 +1113,101 @@ void YuhuBuilder::adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset) {
             }
         }
     }
+}
+
+void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t code_size) {
+  if (code_start == NULL || code_size == 0) {
+    tty->print_cr("Yuhu: fixup_prologue_epilogue_markers: code_start is NULL or code_size is 0, skipping");
+    return;
+  }
+
+  tty->print_cr("Yuhu: Fixing up epilogue SP restoration markers (0xcafebabe)...");
+  tty->flush();
+
+//  // Step 1: Make code segment writable using mprotect
+//  // CodeCache is r-x by default, need to make it rwx temporarily
+//  size_t page_size = os::vm_page_size();
+//  address aligned_start = (address)align_down((intptr_t)code_start, page_size);
+//  size_t aligned_size = align_up(code_size + (code_start - aligned_start), page_size);
+//
+//  tty->print_cr("Yuhu: Making code segment writable: addr=%p, size=%zu pages",
+//                aligned_start, aligned_size / page_size);
+//
+//  if (!os::protect_memory((char*)aligned_start, aligned_size,
+//                          os::MEM_PROT_RWX)) {
+//    tty->print_cr("Yuhu: ERROR - Failed to make code segment writable!");
+//    return;
+//  }
+
+  // Step 2: Use YuhuPrologueAnalyzer to extract the frame offset from "add x29, sp, #imm"
+  int frame_offset_bytes = YuhuPrologueAnalyzer::extract_add_x29_sp_imm(code_start);
+
+  if (frame_offset_bytes == 0) {
+    tty->print_cr("Yuhu: WARNING - Could not find 'add x29, sp, #imm' in prologue!");
+    tty->print_cr("Yuhu: Using default offset of 0 (add sp, x29, #0)");
+  } else {
+    tty->print_cr("Yuhu: Found prologue offset: %d bytes", frame_offset_bytes);
+  }
+  tty->flush();
+
+  // Step 2: Generate the correct SP restore instruction
+  // We need to restore SP from x29 by subtracting the frame offset
+  // If prologue was: add x29, sp, #32 (frame pointer = sp + 32)
+  // Then epilogue should be: sub sp, x29, #32 (sp = frame pointer - 32)
+  uint32_t restore_sp_instruction;
+  if (frame_offset_bytes == 0) {
+    // No offset needed, use "add sp, x29, #0"
+    // Encoding: [31]=1(SF), [30:29]=00(op), [28:24]=10000(ADD), [23:22]=00, [21:10]=0, [9:5]=29(x29), [4:0]=31(sp)
+    restore_sp_instruction = 0x91003D9F;
+    tty->print_cr("Yuhu: Generating 'add sp, x29, #0' (0x%08x)", restore_sp_instruction);
+  } else {
+    // Use SUB instruction to subtract the frame offset (64-bit version)
+    // AArch64 SUB immediate (64-bit) encoding:
+    //   [31]=1(SF for 64-bit), [30:29]=00, [28:24]=10010(SUB), [23:22]=00(shift), [21:10]=imm12, [9:5]=xn, [4:0]=xd
+    //   sub sp, x29, #imm -> 0xD1... (bit 31=1 for 64-bit registers)
+    //
+    // Note: ADD/SUB immediate is NOT scaled (unlike LDR/STR), so use frame_offset_bytes directly
+    // The immediate must fit in 12 bits (0-4095)
+
+    // Encode: sub sp, x29, #frame_offset_bytes (64-bit version)
+    // [31]=1, [30:24]=0b1010010, [23:22]=00, [21:10]=frame_offset_bytes, [9:5]=29(x29), [4:0]=31(sp)
+    restore_sp_instruction = (0xD1 << 24) | ((frame_offset_bytes & 0xFFF) << 10) | (29 << 5) | 31;
+
+    tty->print_cr("Yuhu: Generating 'sub sp, x29, #%d' (imm=%d/0x%x, inst=0x%08x)",
+                  frame_offset_bytes, frame_offset_bytes, frame_offset_bytes, restore_sp_instruction);
+  }
+
+  // Step 3: Find and replace the marker
+  // Scan only 4-byte aligned addresses to avoid alignment issues
+  const uint32_t marker_value = 0xcafebabe;
+
+  int replaced_count = 0;
+  unsigned char* code_ptr = (unsigned char*)code_start;
+  unsigned char* code_end = code_ptr + code_size;
+
+  // Only scan 4-byte aligned addresses (pc += 4, not pc += 1)
+  for (unsigned char* pc = code_ptr; pc < code_end - 4; pc += 4) {
+    uint32_t inst = *(uint32_t*)pc;
+
+    if (inst == marker_value) {
+      // Found the marker! Replace it with SP restore instruction
+      *(uint32_t*)pc = restore_sp_instruction;
+      replaced_count++;
+    }
+  }
+
+  if (replaced_count == 0) {
+    tty->print_cr("Yuhu: WARNING - No epilogue markers found!");
+  } else {
+    tty->print_cr("Yuhu: Replaced %d epilogue markers with SP restore instruction", replaced_count);
+  }
+
+  // Step 4: Restore code segment protection (r-x)
+  tty->print_cr("Yuhu: Restoring code segment protection to r-x");
+//  if (!os::protect_memory((char*)aligned_start, aligned_size,
+//                          os::MEM_PROT_READ)) {
+//    tty->print_cr("Yuhu: ERROR - Failed to restore code segment protection!");
+//  }
+
+  tty->flush();
 }

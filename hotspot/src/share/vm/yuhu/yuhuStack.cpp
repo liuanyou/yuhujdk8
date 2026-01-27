@@ -32,7 +32,7 @@
 
 using namespace llvm;
 
-void YuhuStack::initialize(Value* method) {
+void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, llvm::BasicBlock* exit_block) {
   bool setup_sp_and_method = (method != NULL);
 
   int locals_words  = max_locals();
@@ -77,13 +77,25 @@ void YuhuStack::initialize(Value* method) {
   // Check for stack overflow - checks current_sp to ensure there's enough space
   // for both the new frame and throw_StackOverflowError (if needed)
   // Pass stack_pointer so we can calculate frame_size = current_sp - stack_pointer
-  CreateStackOverflowCheck(stack_pointer);
+  CreateStackOverflowCheck(stack_pointer, exit_block);
 
   // Update SP register
   builder()->CreateWriteStackPointer(stack_pointer);
-  
+
   // Initialize stack pointer storage
-  initialize_stack_pointers(stack_pointer);
+  // For normal entry, sp_storage_alloca was created in function entry block
+  // For native wrapper, sp_storage_alloca is NULL, so we create one here (less ideal)
+  if (sp_storage_alloca == NULL) {
+    // Native wrapper case: create alloca here (in middle of function)
+    // This is less ideal but acceptable for native wrappers
+    initialize_stack_pointers(stack_pointer, NULL);
+    tty->print_cr("Yuhu: WARNING - sp_storage alloca created in middle of function for native wrapper");
+    tty->flush();
+  } else {
+    // Normal entry case: use alloca from entry block
+    initialize_stack_pointers(stack_pointer, sp_storage_alloca);
+  }
+
   if (setup_sp_and_method)
     CreateStoreStackPointer(stack_pointer);
 
@@ -223,7 +235,8 @@ void YuhuStack::initialize(Value* method) {
 // This should match SharkStack::CreateStackOverflowCheck logic for ABI stack
 // FIXED: Now checks current_sp instead of stack_pointer to ensure there's enough
 // space for throw_StackOverflowError (which needs its own stack frame)
-void YuhuStack::CreateStackOverflowCheck(Value* sp) {
+// exit_block: unified exit block to jump to on overflow (NULL = create ret directly)
+void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block) {
   BasicBlock *overflow = CreateBlock("stack_overflow");
   BasicBlock *ok       = CreateBlock("stack_ok");
 
@@ -277,7 +290,16 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp) {
 #else
   builder()->CreateCall(builder()->throw_StackOverflowError(), thread());
 #endif
-  builder()->CreateRet(LLVMValue::jint_constant(0));
+  // CRITICAL: Jump to the unified exit block instead of creating multiple rets
+  // This ensures we only have ONE marker in the entire function
+  // If exit_block is NULL (during initialize), create ret directly
+  if (exit_block != NULL) {
+    builder()->CreateBr(exit_block);
+  } else {
+    // Called during initialize before unified_exit_block exists
+    // Create ret directly (this should rarely happen)
+    builder()->CreateRet(LLVMValue::jint_constant(0));
+  }
 
   builder()->SetInsertPoint(ok);
 }
@@ -329,8 +351,9 @@ Value* YuhuStack::slot_addr(int         offset,
 // The bits that differentiate stacks with normal and native frames on top
 
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuFunction* function,
-                                                Value*         method) {
-  return new YuhuStackWithNormalFrame(function, method);
+                                                Value*         method,
+                                                llvm::AllocaInst* sp_storage_alloca) {
+  return new YuhuStackWithNormalFrame(function, method, sp_storage_alloca);
 }
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
                                                 Value*              method) {
@@ -338,18 +361,22 @@ YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
 }
 
 YuhuStackWithNormalFrame::YuhuStackWithNormalFrame(YuhuFunction* function,
-                                                     Value*         method)
+                                                     Value*         method,
+                                                     llvm::AllocaInst* sp_storage_alloca)
   : YuhuStack(function), _function(function) {
   // For normal frames, the stack pointer and the method slot will
   // be set during each decache, so it is not necessary to do them
   // at the time the frame is created.  However, we set them for
   // non-PRODUCT builds to make crash dumps easier to understand.
-  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method));
+  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), sp_storage_alloca, function->unified_exit_block());
 }
 YuhuStackWithNativeFrame::YuhuStackWithNativeFrame(YuhuNativeWrapper* wrp,
                                                      Value*              method)
   : YuhuStack(wrp), _wrapper(wrp) {
-  initialize(method);
+  // Native wrapper doesn't have sp_storage_alloca created in entry block
+  // Pass NULL and let initialize() handle it
+  // Pass NULL as exit_block because native wrappers handle their own returns
+  initialize(method, NULL, NULL);
 }
 
 int YuhuStackWithNormalFrame::arg_size() const {
@@ -420,3 +447,11 @@ void YuhuStack::CreateAssertLastJavaSPIsNull() const {
 #endif // ASSERT
 }
 #endif // !PRODUCT
+
+llvm::BasicBlock* YuhuStackWithNormalFrame::unified_exit_block() const {
+  return function()->unified_exit_block();
+}
+
+llvm::BasicBlock* YuhuStackWithNativeFrame::unified_exit_block() const {
+  return NULL;  // Native wrappers handle their own returns
+}

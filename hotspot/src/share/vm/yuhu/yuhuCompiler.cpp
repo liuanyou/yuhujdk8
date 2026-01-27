@@ -532,7 +532,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       
       tty->print_cr("Yuhu: Scanning generated code for offset markers...");
       builder.scan_and_update_offset_markers(code_start, code_size, offset_mapper);
-      
+
       // After scanning and updating the mapper, relocate OopMaps
 //      builder.relocate_oopmaps(offset_mapper, env);
 //      tty->print_cr("Yuhu: OopMap relocation completed with %d mappings", offset_mapper->num_mappings());
@@ -584,7 +584,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                 x28_offset, func_name);
   // Patch all stubs that call this method
   patch_stubs_for_method(target, x28_offset);
-  
+
   // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = frame_words + locals_words + actual_prologue_words;
   // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
@@ -667,6 +667,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     // adjust oopmaps offset
 //    builder.adjust_oopmaps_pc_offset(env, adapter_size);
+
+      // CRITICAL: Fix up epilogue markers (0xcafebabe -> sub sp, x29, #imm)
+      // This is needed to restore SP from x29 before returning from the function.
+      // See doc/yuhu/activities/039_epilogue_sp_restoration.md for details.
+      builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);

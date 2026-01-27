@@ -195,6 +195,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadCurrentPC(); // Read current pc on AArch64
   llvm::CallInst* CreateReadRegister(const char* reg_name); // Generic register reader
   void CreateWriteStackPointer(llvm::Value* new_sp); // Write SP register (x31) on AArch64 using inline assembly
+  void CreateEpiloguePlaceholder(); // Placeholder for SP restore (replaced after compilation)
   llvm::CallInst* CreateMemset(llvm::Value* dst,
                                llvm::Value* value,
                                llvm::Value* len,
@@ -238,6 +239,10 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // OopMap relocation support
   void relocate_oopmaps(YuhuOffsetMapper* offset_mapper, ciEnv* env);
   void adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset);
+
+  // Prologue/Epilogue marker fixup support
+ public:
+  static void fixup_prologue_epilogue_markers(address code_start, size_t code_size);
 
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.
