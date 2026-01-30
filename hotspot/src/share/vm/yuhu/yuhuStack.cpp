@@ -29,6 +29,7 @@
 #include "yuhu/yuhuNativeWrapper.hpp"
 #include "yuhu/yuhuStack.hpp"
 #include "yuhu/yuhuType.hpp"
+#include "yuhu/yuhu_globals.hpp"
 
 using namespace llvm;
 
@@ -43,8 +44,8 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   //   - pc (1 word)
   //   - frame_marker (1 word)
   //   - frame_pointer_addr (1 word)
-  // This matches SharkFrame::header_words = 6
-  int header_words  = 6;
+  // This matches SharkFrame::header_words = 6 and yuhu_frame_header_words
+  int header_words  = yuhu_frame_header_words;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
   int frame_words   = header_words + monitor_words + stack_words;

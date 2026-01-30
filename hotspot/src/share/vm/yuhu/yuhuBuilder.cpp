@@ -39,15 +39,17 @@
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuContext.hpp"
+#include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
 
 using namespace llvm;
 
-YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer)
+YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
   : IRBuilder<>(YuhuContext::current()),
-    _code_buffer(code_buffer) {
+    _code_buffer(code_buffer),
+    _function(function) {
 }
 
 // Helpers for accessing structures
@@ -402,23 +404,46 @@ Value* YuhuBuilder::deoptimized_entry_point() {
   // TemplateInterpreter uses a different deoptimization mechanism
   // The signature is "iT" -> "v": void unpack_with_reexecution(int recurse, Thread* thread)
   // This is used when a callee gets deoptimized and we need to reexecute in the interpreter
-  // 
+  //
   // For AArch64 with TemplateInterpreter, deoptimization is handled by the same
   // SharedRuntime deoptimization blob used by C1 and C2 compilers.
-  // 
+  //
   // The deoptimization blob provides multiple entry points:
   // - unpack_with_reexecution(): for normal deoptimization with re-execution
   // - unpack_with_exception_in_tls(): when there's an exception in TLS
-  // 
-  // Use the same deoptimization blob infrastructure as C1/C2
-  DeoptimizationBlob* deopt_blob = SharedRuntime::deopt_blob();
-  assert(deopt_blob != NULL, "deoptimization blob must have been created");
-  
-  // Return the reexecution entry point with signature "iT" -> "v"
-  // (int recurse, Thread* thread) -> void
-  return make_function(
-    (address) deopt_blob->unpack_with_reexecution(),
-    "iT", "v");
+  //
+  // YUHU DEOPTIMIZATION STUB APPROACH:
+  // Each Yuhu function has its own per-function deoptimization stub that knows
+  // how many parameters the function has. The stub restores x0-x7 from the
+  // Yuhu frame's locals area before jumping to the standard deoptimization blob.
+
+  address yuhu_stub = NULL;
+  if (_function != NULL) {
+    yuhu_stub = _function->deoptimization_stub();
+  }
+
+  if (yuhu_stub != NULL) {
+    // Use per-function Yuhu deoptimization stub
+    tty->print_cr("Yuhu: Using per-function deoptimization stub at %p", yuhu_stub);
+    return make_function(yuhu_stub, "iT", "v");
+  } else {
+    // Fallback to standard deopt blob (may not work correctly due to missing x0-x7)
+    if (_function != NULL) {
+      tty->print_cr("Yuhu: WARNING - No per-function deopt stub, using standard deopt blob");
+    } else {
+      tty->print_cr("Yuhu: WARNING - No function context, using standard deopt blob");
+    }
+    tty->print_cr("Yuhu: WARNING - Parameter restoration may fail for methods with parameters in x0-x7");
+
+    DeoptimizationBlob* deopt_blob = SharedRuntime::deopt_blob();
+    assert(deopt_blob != NULL, "deoptimization blob must have been created");
+
+    // Return the reexecution entry point with signature "iT" -> "v"
+    // (int recurse, Thread* thread) -> void
+    return make_function(
+      (address) deopt_blob->unpack_with_reexecution(),
+      "iT", "v");
+  }
 }
 
 // Native-Java transition

@@ -457,7 +457,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   hscb.initialize_oop_recorder(env->oop_recorder());
   YuhuMacroAssembler masm(&hscb);
   YuhuCodeBuffer cb(masm);
-  YuhuBuilder builder(&cb);
+  YuhuBuilder builder(&cb, NULL);  // function will be set later by YuhuFunction
 
   // Remove any existing functions with the same name in both modules to avoid
   // duplicated symbols (e.g., LLVM auto-suffix ".1") and potential EE failures.
@@ -551,7 +551,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   //   header_words = 6
   //   extra_locals = max_locals - size_of_parameters
   //   frame_size (words) = frame_words + extra_locals
-  int header_words = 6;
+  int header_words = yuhu_frame_header_words;
   
   // Calculate max_monitors using flow analysis (similar to YuhuTargetInvariants::count_monitors)
   int max_monitors = 0;
@@ -857,7 +857,7 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
   YuhuMacroAssembler* yuhu_masm = static_cast<YuhuMacroAssembler*>(masm);
   assert(yuhu_masm != NULL, "masm must be a YuhuMacroAssembler");
   YuhuCodeBuffer cb(*yuhu_masm);
-  YuhuBuilder builder(&cb);
+  YuhuBuilder builder(&cb, NULL);  // no function context for native wrapper
 
   // Emit the entry point
   YuhuEntry *entry = (YuhuEntry *) cb.malloc(sizeof(YuhuEntry));

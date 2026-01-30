@@ -87,6 +87,9 @@ class YuhuFunction : public YuhuTargetInvariants {
   // Collection for deferred OopMaps to implement delayed safepoint addition
   GrowableArray<OopMap*>*           _deferred_oopmaps;
   GrowableArray<int>*               _deferred_offsets;
+
+  // Per-function deoptimization stub
+  address                           _deoptimization_stub;
   
   // Collections for deferred frame information (for decaching)
   GrowableArray<int>*               _deferred_frame_offsets;
@@ -163,7 +166,11 @@ class YuhuFunction : public YuhuTargetInvariants {
 
   // Access to the debug information recorder
   YuhuDebugInformationRecorder* debug_info_recorder() const { return _debug_info_recorder; }
-  
+
+  // Per-function deoptimization stub support
+  address deoptimization_stub() const { return _deoptimization_stub; }
+  void generate_deoptimization_stub();
+
   // Process deferred OopMaps before destruction
   void process_deferred_oopmaps();
   

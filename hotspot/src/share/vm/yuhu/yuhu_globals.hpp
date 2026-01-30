@@ -63,6 +63,8 @@
   develop(ccstr, YuhuVerifyFunction, NULL,                                   \
           "Runs LLVM verify over LLVM IR")                                    \
 
+// Yuhu frame layout constants
+const int yuhu_frame_header_words = 6;  // Frame header size in words
 
 YUHU_FLAGS(DECLARE_DEVELOPER_FLAG, DECLARE_PD_DEVELOPER_FLAG, DECLARE_PRODUCT_FLAG, DECLARE_PD_PRODUCT_FLAG, DECLARE_DIAGNOSTIC_FLAG, DECLARE_NOTPRODUCT_FLAG)
 

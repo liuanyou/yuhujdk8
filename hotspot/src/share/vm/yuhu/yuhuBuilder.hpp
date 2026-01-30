@@ -38,19 +38,32 @@
 #include "utilities/debug.hpp"
 #include "utilities/sizes.hpp"
 
+// Forward declarations
+class YuhuFunction;
+
 class YuhuBuilder : public llvm::IRBuilder<> {
   friend class YuhuCompileInvariants;
+  friend class YuhuFunction;
 
  public:
-  YuhuBuilder(YuhuCodeBuffer* code_buffer);
+  YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function);
 
   // The code buffer we are building into.
  private:
   YuhuCodeBuffer* _code_buffer;
+  YuhuFunction* _function;  // Current function being compiled
 
  protected:
   YuhuCodeBuffer* code_buffer() const {
     return _code_buffer;
+  }
+  YuhuFunction* function() const {
+    return _function;
+  }
+
+  // Set the function pointer (called by YuhuFunction during construction)
+  void set_function(YuhuFunction* function) {
+    _function = function;
   }
 
  public:

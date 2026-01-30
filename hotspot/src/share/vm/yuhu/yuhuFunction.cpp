@@ -24,12 +24,17 @@
  */
 
 #include "precompiled.hpp"
+#include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "ci/ciTypeFlow.hpp"
 #include "code/debugInfo.hpp"
 #include "code/location.hpp"
 #include "memory/allocation.hpp"
 #include "oops/method.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "utilities/debug.hpp"
+#ifdef TARGET_ARCH_aarch64
+#include "register_aarch64.hpp"
+#endif
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
@@ -70,6 +75,32 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
 }
 
 void YuhuFunction::initialize(const char *name) {
+  // Set the function pointer in builder so it can access deoptimization stub
+  builder()->set_function(this);
+
+  // Initialize member variables
+  _arg_base = NULL;
+  _arg_count = NULL;
+  _fp_offset_from_sp = 0;  // Will be analyzed on first return
+  _deoptimization_stub = NULL;  // Will be generated below
+
+  // Initialize deferred OopMap collections
+  _deferred_oopmaps = NULL;
+  _deferred_offsets = NULL;
+
+  // Initialize deferred frame collections
+  _deferred_frame_offsets = NULL;
+  _deferred_frame_targets = NULL;
+  _deferred_frame_bcis = NULL;
+  _deferred_frame_locals = NULL;
+  _deferred_frame_expressions = NULL;
+  _deferred_frame_monitors = NULL;
+
+  // Generate deoptimization stub FIRST
+  // This ensures deoptimized_entry_point() can find it during IR generation
+  // Must be called before IR generation starts (before do_entry() etc.)
+  generate_deoptimization_stub();
+
   // Create the function and add it to the Module immediately
   // This ensures the Function has a parent Module, which is required
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
@@ -79,7 +110,7 @@ void YuhuFunction::initialize(const char *name) {
   // Initialize deferred OopMap collections
   _deferred_oopmaps = NULL;
   _deferred_offsets = NULL;
-  
+
   // Initialize deferred frame collections
   _deferred_frame_offsets = NULL;
   _deferred_frame_targets = NULL;
@@ -534,18 +565,53 @@ void YuhuFunction::process_deferred_oopmaps() {
       // Build locals array for ScopeDesc
       // For deoptimization to work, we need to provide locals information
       int max_locals = target()->max_locals();
+      int num_params = target()->arg_size();  // Number of parameters (including 'this' for non-static methods)
+      ciSignature* sig = target()->signature();
       GrowableArray<ScopeValue*>* locals = new GrowableArray<ScopeValue*>(max_locals);
 
       // Create a LocationValue for each local variable
-      // Yuhu stores locals in an interpreter-compatible frame layout
-      // The locals are stored at positive offsets from FP
-      // Since Location doesn't support negative offsets, we use positive offsets
-      // The actual interpretation is handled by the deoptimization code
+      // Parameters (locals[0] to locals[num_params-1]) are in registers x0-x7
+      // Real local variables (locals[num_params] to locals[max_locals-1]) are on stack
       for (int i = 0; i < max_locals; i++) {
-        // Use positive offset for local[i]
-        // Local variables grow toward higher addresses from FP
-        int stack_offset = i * wordSize;
-        Location loc = Location::new_stk_loc(Location::normal, stack_offset);
+        Location loc;
+        if (i < num_params) {
+          // Determine parameter type to set correct Location::Type
+          ciType* param_type = NULL;
+          if (is_static()) {
+            // Static method: locals[0] = first parameter
+            param_type = sig->type_at(i);
+          } else {
+            // Non-static method: locals[0] = this, locals[1+] = parameters
+            if (i == 0) {
+              param_type = target()->holder();  // 'this' type
+            } else {
+              param_type = sig->type_at(i - 1);
+            }
+          }
+
+          // Determine Location::Type based on parameter type
+          Location::Type loc_type;
+          BasicType bt = param_type->basic_type();
+          if (bt == T_OBJECT || bt == T_ARRAY) {
+            loc_type = Location::oop;  // Object reference (needs GC scanning)
+          } else if (bt == T_LONG) {
+            loc_type = Location::lng;  // Long type
+          } else if (bt == T_DOUBLE) {
+            loc_type = Location::dbl;  // Double type
+          } else {
+            loc_type = Location::normal;  // int, float, short, byte, boolean, etc.
+          }
+
+          // Parameters are in registers x0, x1, x2, ...
+          // Use as_Register(i) to get the Register, then as_VMReg() to get VMReg
+          VMReg reg = as_Register(i)->as_VMReg();
+          loc = Location::new_reg_loc(loc_type, reg);
+        } else {
+          // Real local variables are on stack (spilled by LLVM/Yuhu)
+          // TODO: Should also determine type for real locals, but use 'normal' for now
+          int stack_offset = i * wordSize;
+          loc = Location::new_stk_loc(Location::normal, stack_offset);
+        }
         locals->append(new LocationValue(loc));
       }
 
@@ -569,6 +635,104 @@ void YuhuFunction::process_deferred_oopmaps() {
       }
     }
   }
+
+  // Note: Deoptimization stub is now generated in initialize()
+  // before IR generation starts, so deoptimized_entry_point() can find it
+}
+
+// Generate per-function deoptimization stub using YuhuMacroAssembler
+// Can be called multiple times - will only generate stub once
+void YuhuFunction::generate_deoptimization_stub() {
+  // Check if stub is already generated
+  if (_deoptimization_stub != NULL) {
+    tty->print_cr("Yuhu: Deoptimization stub already exists at %p, skipping regeneration", _deoptimization_stub);
+    return;
+  }
+
+  // Get the number of parameters for this method
+  int num_params = target()->arg_size();
+
+  // Limit to 8 parameters (AArch64 ABI uses x0-x7 for first 8 parameters)
+  if (num_params > 8) {
+    tty->print_cr("Yuhu: WARNING - Method has %d parameters, only restoring first 8", num_params);
+    num_params = 8;
+  }
+
+  BufferBlob* stub_blob = BufferBlob::create("yuhu_static_call_stub", 64);
+  if (stub_blob == NULL) {
+    fatal("CodeCache is full - cannot allocate static call stub");
+    return;
+  }
+  CodeBuffer buffer(stub_blob);
+  YuhuMacroAssembler masm(&buffer);
+
+  address start = masm.current_pc();
+
+  int header_words  = yuhu_frame_header_words;
+  int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
+  int stack_words   = max_stack();
+  int frame_words   = header_words + monitor_words + stack_words;
+  int extended_frame_words = frame_words + max_locals();
+  masm.write_inst("add %s, sp, #%d", YuhuMacroAssembler::x8, extended_frame_words * wordSize);
+
+  // Restore x0-x7 using ldp instructions
+  // Only restore up to num_params
+  if (num_params >= 2) {
+    masm.write_inst("ldp %s, %s, [%s, #%d]!",
+                         YuhuMacroAssembler::x1, YuhuMacroAssembler::x0,
+                         YuhuMacroAssembler::x8, -16);
+  } else if (num_params == 1) {
+    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x0, YuhuMacroAssembler::x8, -8);
+  }
+
+  if (num_params >= 4) {
+    masm.write_inst("ldp %s, %s, [%s, #%d]!",
+                         YuhuMacroAssembler::x3, YuhuMacroAssembler::x2,
+                         YuhuMacroAssembler::x8, -16);
+  } else if (num_params == 3) {
+    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x2, YuhuMacroAssembler::x8, -8);
+  }
+
+  if (num_params >= 6) {
+    masm.write_inst("ldp %s, %s, [%s, #%d]!",
+                         YuhuMacroAssembler::x5, YuhuMacroAssembler::x4,
+                         YuhuMacroAssembler::x8, -16);
+  } else if (num_params == 5) {
+    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x4, YuhuMacroAssembler::x8, -8);
+  }
+
+  if (num_params >= 8) {
+    masm.write_inst("ldp %s, %s, [%s, #%d]!",
+                         YuhuMacroAssembler::x7, YuhuMacroAssembler::x6,
+                         YuhuMacroAssembler::x8, -16);
+  } else if (num_params == 7) {
+    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x6, YuhuMacroAssembler::x8, -8);
+  }
+
+  tty->print_cr("Yuhu: Deoptimization stub - restored x0-x%d from locals area", num_params - 1);
+
+  // === Jump to standard deoptimization blob ===
+  // The standard deopt blob will:
+  //   - Save all registers (x0-x30, v0-v31)
+  //   - x0-x(num_params-1) now contain the restored parameter values
+  //   - Get thread from r28 (rthread register, callee-saved)
+  //   - Call fetch_unroll_info()
+  //   - Call unpack_frames()
+  //   - Restore execution in interpreter with correct parameter values
+  masm.write_insts_far_jump(SharedRuntime::deopt_blob()->unpack_with_reexecution());
+
+  // Flush the generated code
+  masm.flush();
+
+  address stub_end = masm.current_pc();
+  int stub_size = stub_end - start;
+
+  tty->print_cr("Yuhu: Deoptimization stub generated successfully");
+  tty->print_cr("     Address: %p", start);
+  tty->print_cr("     Size: %d bytes", stub_size);
+
+  // Store the stub address
+  _deoptimization_stub = start;
 }
 
 // Get or create the unified exit block for all return paths
