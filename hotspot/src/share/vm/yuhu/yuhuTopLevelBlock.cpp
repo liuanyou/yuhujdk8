@@ -1581,39 +1581,32 @@ void YuhuTopLevelBlock::do_call() {
     ciType* param_type = sig->type_at(i);
     param_types.push_back(YuhuType::to_stackType(param_type));
   }
-  
-  // Return type is always int
-  llvm::FunctionType* compiled_ftype = FunctionType::get(YuhuType::jint_type(), param_types, false);
-  
+
+  // Use the actual return type of the method being called
+  // This is critical: for methods returning objects (like array()), we need
+  // to use oop_type (64-bit), not jint_type (32-bit)
+  ciType* return_type = call_method->return_type();
+  llvm::Type* llvm_return_type = YuhuType::to_stackType(return_type);
+
+  // Create the correct function type with actual return type
+  llvm::FunctionType* compiled_ftype = FunctionType::get(llvm_return_type, param_types, false);
+
   Value *compiled_entry = builder()->CreateIntToPtr(
     from_compiled_entry,
     PointerType::getUnqual(compiled_ftype),
     "compiled_entry");
 
-  // Call the compiled entry
-  Value *deoptimized_frames = builder()->CreateCall(
+  // Call the compiled entry and get the actual return value
+  decache_for_Java_call(call_method);
+  Value* result = builder()->CreateCall(
     compiled_ftype, compiled_entry, call_args);
 
-  // If the callee got deoptimized then reexecute in the interpreter
-  BasicBlock *reexecute      = function()->CreateBlock("reexecute");
+  // NOTE: We do NOT check for deoptimization through return value like Shark does.
+  // Shark uses a special entry point that returns jint (deoptimization count),
+  // but Yuhu calls standard _from_compiled_entry which returns the actual method result.
+  // Deoptimization is detected through check_pending_exception() below.
   BasicBlock *call_completed = function()->CreateBlock("call_completed");
-  builder()->CreateCondBr(
-    builder()->CreateICmpNE(deoptimized_frames, LLVMValue::jint_constant(0)),
-    reexecute, call_completed);
-
-  builder()->SetInsertPoint(reexecute);
-  // LLVM 20+ requires FunctionType for CreateCall
-  // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "iT" -> "i"
-  Value* deopt_callee = builder()->deoptimized_entry_point();  // Rename to avoid conflict with outer callee
-  llvm::FunctionType* func_type = YuhuBuilder::make_ftype("iT", "i");
-  std::vector<Value*> args;
-  args.push_back(builder()->CreateSub(deoptimized_frames, LLVMValue::jint_constant(1)));
-  args.push_back(thread());
-  builder()->CreateCall(func_type, deopt_callee, args);  // Use deopt_callee instead of callee
   builder()->CreateBr(call_completed);
-
-  // Cache after the call
-  builder()->SetInsertPoint(call_completed);
 
   // IMPORTANT: Create another OopMap at the return point
   // The decache_for_Java_call() above created an OopMap at the call site,
