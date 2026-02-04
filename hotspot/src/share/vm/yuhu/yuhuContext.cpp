@@ -159,6 +159,11 @@ YuhuContext::YuhuContext(const char* name)
       _to_arrayType[i] = NULL;
       break;
 
+    case T_VOID:
+      _to_stackType[i] = void_type();
+      _to_arrayType[i] = NULL;
+      break;
+
     default:
       _to_stackType[i] = NULL;
       _to_arrayType[i] = NULL;

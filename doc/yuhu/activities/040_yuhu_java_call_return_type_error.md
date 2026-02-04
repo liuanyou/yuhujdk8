@@ -560,6 +560,136 @@ void YuhuTopLevelBlock::do_call() {
 
 ---
 
+**文档版本**: 1.1
+**最后更新**: 2026-02-01
+**状态**: 已修复 stack underrun 问题，待测试
+
+## 更新日志
+
+### v1.1 (2026-02-01)
+
+**修复的额外问题**：stack underrun 错误
+
+**问题**：
+```
+Internal Error (yuhuState.hpp:110)
+assert(stack_depth() > 0) failed: stack underrun
+
+调用栈：
+  YuhuState::pop()
+  └─ YuhuBlock::xpop()
+      └─ YuhuTopLevelBlock::decache_for_Java_call()
+          └─ YuhuTopLevelBlock::do_call()
+```
+
+**根本原因**：
+在第一次修改中，`decache_for_Java_call()` 被调用了两次：
+- 第 1566 行：原始调用
+- 第 1600 行：错误添加的重复调用
+
+第二次调用时，参数已经被第一次调用 pop 掉了，导致栈下溢。
+
+**修复**：
+移除第 1600 行的重复调用，保留原始的调用顺序：
+1. 收集参数到 `call_args`
+2. 调用 `decache_for_Java_call()`（pop 参数并创建 OopMap）
+3. 调用 `builder()->CreateCall()`（使用之前收集的 `call_args`）
+
+**正确的代码**：
+```cpp
+// 1. 收集参数（不 pop 栈）
+std::vector<Value*> call_args;
+for (int i = arg_slots - 1; i >= 0; i--) {
+  YuhuValue* v = xstack(i);  // xstack 只读取，不 pop
+  call_args.push_back(v->jint_value());
+}
+
+// 2. Decache（pop 栈上的参数，创建 OopMap）
+decache_for_Java_call(call_method);
+
+// 3. 调用方法（使用已收集的 call_args）
+Value* result = builder()->CreateCall(
+    compiled_ftype, compiled_entry, call_args);
+```
+
+---
+
 **文档版本**: 1.0
 **最后更新**: 2026-02-01
-**状态**: 已实现并待测试
+
+---
+
+## v1.2 (2026-02-01) - 修复 T_VOID 类型未处理错误
+
+**问题**：
+```
+Internal Error (yuhuContext.hpp:196)
+assert(result != NULL) failed: unhandled type
+
+调用栈：
+  YuhuTopLevelBlock::do_call()
+    └─ YuhuType::to_stackType(ciType*)
+        └─ YuhuType::to_stackType(BasicType)
+            └─ YuhuContext::to_stackType(BasicType)
+                └─ YuhuContext::map_type()  ← 断言失败
+```
+
+**根本原因**：
+`yuhuContext.cpp` 中的 `_to_stackType` 数组缺少对 **T_VOID** 类型的处理。
+
+从 BasicType 枚举定义：
+```cpp
+enum BasicType {
+  T_BOOLEAN  =  4,
+  ...
+  T_ARRAY    =  13,
+  T_VOID     =  14,  // ← 原始代码没有处理！
+  T_ADDRESS  =  15,
+  ...
+  T_CONFLICT =  19
+};
+```
+
+原始代码只处理了 T_BOOLEAN 到 T_ADDRESS，T_VOID (14) 被留在了 default 分支：
+```cpp
+default:
+  _to_stackType[i] = NULL;  // ← 导致断言失败
+  _to_arrayType[i] = NULL;
+}
+```
+
+当调用 `YuhuType::to_stackType(return_type)` 且返回类型为 void 时：
+1. `return_type->basic_type()` 返回 T_VOID (14)
+2. `to_stackType(T_VOID)` 查找 `_to_stackType[14]`
+3. 返回 NULL（因为 default 分支）
+4. `map_type()` 断言 `result != NULL` 失败
+
+**修复**：
+在 `yuhuContext.cpp` 的类型映射初始化循环中添加 T_VOID 处理：
+
+```cpp
+case T_VOID:
+  _to_stackType[i] = void_type();
+  _to_arrayType[i] = NULL;
+  break;
+```
+
+这样，当方法返回 void 时，`to_stackType()` 会返回正确的 LLVM void 类型。
+
+**修改的文件**：
+- `hotspot/src/share/vm/yuhu/yuhuContext.cpp` - 添加 T_VOID case
+
+**为什么会出现这个问题**：
+
+虽然 `encodeArrayLoop` 不返回 void，但在某些情况下可能会遇到 void 返回类型：
+1. 某些内联方法可能返回 void
+2. 特殊的 JVM 方法调用
+3. 测试代码或边界情况
+
+通过添加对 T_VOID 的处理，Yuhu 现在可以正确处理所有标准 Java 返回类型。
+
+---
+
+**文档版本**: 1.2
+**最后更新**: 2026-02-01
+**状态**: 已修复所有已知问题（返回类型、stack underrun、T_VOID），待完整测试

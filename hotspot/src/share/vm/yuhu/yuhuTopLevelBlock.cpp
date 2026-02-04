@@ -1597,16 +1597,16 @@ void YuhuTopLevelBlock::do_call() {
     "compiled_entry");
 
   // Call the compiled entry and get the actual return value
-  decache_for_Java_call(call_method);
-  Value* result = builder()->CreateCall(
+  // Note: decache_for_Java_call() was already called above (line 1566)
+  Value* call_result = builder()->CreateCall(
     compiled_ftype, compiled_entry, call_args);
 
-  // NOTE: We do NOT check for deoptimization through return value like Shark does.
+  // NOTE: Unlike Shark, we use the correct function return type instead of jint.
   // Shark uses a special entry point that returns jint (deoptimization count),
   // but Yuhu calls standard _from_compiled_entry which returns the actual method result.
-  // Deoptimization is detected through check_pending_exception() below.
-  BasicBlock *call_completed = function()->CreateBlock("call_completed");
-  builder()->CreateBr(call_completed);
+  // Therefore, call_result contains the actual return value (e.g., object reference for array()).
+  // Deoptimization is detected through check_pending_exception() below, not through the return value.
+  // We ignore call_result here - cache_after_Java_call() will handle return values based on signature.
 
   // IMPORTANT: Create another OopMap at the return point
   // The decache_for_Java_call() above created an OopMap at the call site,
