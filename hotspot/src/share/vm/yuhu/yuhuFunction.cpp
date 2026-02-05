@@ -58,7 +58,12 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
   if (is_static()) {
     params.push_back(YuhuType::intptr_type());  // void* null (x0)
   } else {
-    params.push_back(YuhuType::oop_type()); // for non-static methods, this is the first parameter
+    // Non-static: need dummy in x0 to align with Java calling convention
+    // x0 = dummy/return value slot (unused)
+    // x1 = this (first actual parameter)
+    // x2+ = other parameters
+    params.push_back(YuhuType::intptr_type());  // Dummy in x0
+    params.push_back(YuhuType::oop_type());     // this in x1
   }
   
   // Add Java method parameters

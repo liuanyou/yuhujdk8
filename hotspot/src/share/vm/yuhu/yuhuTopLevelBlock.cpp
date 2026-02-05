@@ -1491,13 +1491,21 @@ void YuhuTopLevelBlock::do_call() {
   // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
   // decache will pop all arguments from the stack via xpop(),
   // so we must collect them first.
+  //
+  // CRITICAL: Must match HotSpot's Java calling convention for AArch64
+  // x0 = dummy/return value slot (unused for input parameters)
+  // x1 = first parameter (NULL for static, receiver for non-static)
+  // x2+ = remaining parameters
+  // See: assembler_aarch64.hpp line 77-82
   std::vector<Value*> call_args;
   int arg_slots = call_method->arg_size();
 
+  // Add dummy value for x0 (unused input slot, used for return value)
+  call_args.push_back(LLVMValue::intptr_constant(0));
+
   if (is_static) {
-    // Static: first argument is NULL placeholder for receiver
-    call_args.push_back(LLVMValue::intptr_constant(0));
-    // Collect remaining Java arguments from stack in reverse order
+    // Static: x1 = first parameter, x2+ = remaining parameters
+    // Collect all Java arguments from stack in reverse order
     for (int i = arg_slots - 1; i >= 0; i--) {
       YuhuValue* v = xstack(i);
       switch (v->basic_type()) {
@@ -1526,11 +1534,11 @@ void YuhuTopLevelBlock::do_call() {
       }
     }
   } else {
-    // Non-static: receiver is at position arg_size-1
+    // Non-static: x1 = receiver
     YuhuValue* recv_val = xstack(arg_slots - 1);
     // Explicit null check for method call receiver
     check_null(recv_val);
-    call_args.push_back(recv_val->jobject_value());
+    call_args.push_back(recv_val->jobject_value());  // receiver in x1
     // Collect remaining Java arguments (excluding receiver)
     for (int i = arg_slots - 2; i >= 0; i--) {
       YuhuValue* v = xstack(i);
@@ -1570,10 +1578,16 @@ void YuhuTopLevelBlock::do_call() {
   std::vector<llvm::Type*> param_types;
   
   // First parameter: receiver (for non-static) or NULL (for static)
+  // CRITICAL: Must match HotSpot's Java calling convention for AArch64
+  // x0 = dummy/return value slot (unused for input)
+  // x1 = receiver (for non-static) or NULL (for static)
+  // x2+ = remaining parameters
   if (is_static) {
-    param_types.push_back(YuhuType::intptr_type());  // void* null
+    param_types.push_back(YuhuType::intptr_type());  // Dummy in x0 (unused)
+    // x1, x2, ... will be filled by actual parameters (no NULL placeholder needed)
   } else {
-    param_types.push_back(YuhuType::oop_type());  // receiver
+    param_types.push_back(YuhuType::intptr_type());  // Dummy in x0 (unused)
+    param_types.push_back(YuhuType::oop_type());     // receiver in x1
   }
   
   // Add Java method parameters

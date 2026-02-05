@@ -160,17 +160,17 @@ void YuhuDecacher::process_local_slot(int          index,
 }
 
 // Get function argument by local index
-// For static methods: local[i] = function_arg[i+1] (skip NULL at function_arg[0])
-// For non-static methods: local[i] = function_arg[i] (this is in function_arg[0])
+// For static methods: local[i] = function_arg[i+1] (skip dummy at function_arg[0])
+// For non-static methods: local[i] = function_arg[i+1] (skip dummy at function_arg[0], this is at function_arg[1])
 llvm::Argument* YuhuNormalEntryCacher::get_function_arg(int local_index) {
   llvm::Function* func = function()->function();
   llvm::Function::arg_iterator ai = func->arg_begin();
-  
-  if (is_static()) {
-    // Static methods: skip NULL at function_arg[0]
-    ai++;  // Skip NULL argument
-  }
-  
+
+  // Both static and non-static methods skip dummy at function_arg[0]
+  // Non-static: (dummy, this, arg0, ...)  → local[0] = this (arg 1)
+  // Static:     (dummy, arg0, arg1, ...)  → local[0] = arg0 (arg 1)
+  ai++;  // Skip dummy argument at arg 0
+
   // Advance to the requested local index
   for (int i = 0; i < local_index; i++) {
     ai++;
@@ -179,7 +179,7 @@ llvm::Argument* YuhuNormalEntryCacher::get_function_arg(int local_index) {
       return NULL;
     }
   }
-  
+
   return &*ai;  // Dereference iterator to get Argument*
 }
 
