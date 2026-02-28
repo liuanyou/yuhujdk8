@@ -1088,6 +1088,20 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
         // LLVM 20+ requires explicit type parameter for CreateLoad
         field_value = builder()->CreateLoad(field_type, addr);
       }
+      
+      // Handle compressed oops for object references
+      if (!field->type()->is_primitive_type() && field_type != stack_type) {
+        // For object references, we need to handle compressed oops
+        // If field_type is jint (compressed oop) and stack_type is pointer (full oop),
+        // we need to call decode_heap_oop to expand the compressed pointer
+        if (field_type == YuhuType::jint_type() && 
+            stack_type->isPointerTy() &&
+            UseCompressedOops) {
+          // Call decode_heap_oop to convert narrowOop to oop
+          field_value = builder()->CreateDecodeHeapOop(field_value);
+        }
+      }
+      
       if (field_type != stack_type) {
         field_value = builder()->CreateIntCast(
           field_value, stack_type, basic_type != T_CHAR);

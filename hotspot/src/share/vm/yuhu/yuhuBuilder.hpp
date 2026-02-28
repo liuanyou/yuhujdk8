@@ -221,6 +221,11 @@ class YuhuBuilder : public llvm::IRBuilder<> {
  public:
   void CreateUpdateBarrierSet(BarrierSet* bs, llvm::Value* field);
 
+  // Compressed oops helpers
+ public:
+  llvm::Value* CreateDecodeHeapOop(llvm::Value* compressed_oop);
+  llvm::Value* CreateEncodeHeapOop(llvm::Value* oop);
+
   // Helpers for accessing the code buffer.
  public:
   llvm::Value* code_buffer_address(int offset);

@@ -43,6 +43,8 @@
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
+#include "memory/universe.hpp"
+#include "oops/oop.inline.hpp"
 
 using namespace llvm;
 
@@ -1235,4 +1237,75 @@ void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t cod
 //  }
 
   tty->flush();
+}
+
+Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop) {
+  // Check if compressed oops are enabled
+  if (UseCompressedOops) {
+    // Create a call to the runtime function that handles compressed oop decoding
+    // We need to create intrinsic function that expands compressed oops
+    // This is a simplified version that mimics the AArch64 macro assembler approach
+    
+    // For AArch64 with compressed oops, we need to:
+    // 1. Cast the compressed oop (narrowOop, which is jint) to intptr
+    // 2. Shift left by narrow_oop_shift
+    // 3. Add the narrow_oop_base
+    
+    // Get the shift amount and base address from Universe
+    int shift = Universe::narrow_oop_shift();
+    address base = Universe::narrow_oop_base();
+    
+    // Convert compressed oop to intptr type
+    Value* compressed_as_int = CreateIntCast(compressed_oop, YuhuType::intptr_type(), false);
+    
+    // Shift left by the narrow oop shift
+    if (shift > 0) {
+      Value* shifted = CreateShl(compressed_as_int, LLVMValue::intptr_constant(shift));
+      // Add the base address
+      Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
+      Value* result_int = CreateAdd(base_as_int, shifted);
+      return CreateIntToPtr(result_int, YuhuType::oop_type());
+    } else {
+      // If shift is 0, just add to base
+      Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
+      Value* result_int = CreateAdd(base_as_int, compressed_as_int);
+      return CreateIntToPtr(result_int, YuhuType::oop_type());
+    }
+  } else {
+    // If compressed oops are not used, just return the value as-is (cast to oop*)
+    return CreateIntToPtr(CreateIntCast(compressed_oop, YuhuType::intptr_type(), false), 
+                         YuhuType::oop_type());
+  }
+}
+
+Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
+  // Check if compressed oops are enabled
+  if (UseCompressedOops) {
+    // Create a call to the runtime function that handles oop encoding
+    // For AArch64 with compressed oops, we need to:
+    // 1. Convert oop pointer to integer
+    // 2. Subtract the narrow_oop_base
+    // 3. Shift right by narrow_oop_shift
+    
+    address base = Universe::narrow_oop_base();
+    int shift = Universe::narrow_oop_shift();
+    
+    // Convert oop pointer to integer
+    Value* oop_as_int = CreatePtrToInt(oop, YuhuType::intptr_type());
+    Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
+    
+    // Subtract the base address
+    Value* delta = CreateSub(oop_as_int, base_as_int);
+    
+    // Shift right by the narrow oop shift
+    if (shift > 0) {
+      Value* shifted = CreateLShr(delta, LLVMValue::intptr_constant(shift));
+      return CreateIntCast(shifted, YuhuType::jint_type(), false);
+    } else {
+      return CreateIntCast(delta, YuhuType::jint_type(), false);
+    }
+  } else {
+    // If compressed oops are not used, just return the pointer value cast to appropriate type
+    return CreatePtrToInt(oop, YuhuType::intptr_type());
+  }
 }
