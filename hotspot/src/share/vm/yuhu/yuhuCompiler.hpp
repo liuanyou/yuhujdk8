@@ -75,6 +75,13 @@ class YuhuCompiler : public AbstractCompiler {
   // Compile a normal (bytecode) method and install it in the VM
   void compile_method(ciEnv* env, ciMethod* target, int entry_bci);
 
+  static int measure_exception_handler_size();
+  static int measure_deopt_handler_size();
+
+  // Exception and deoptimization handler generation
+  int generate_exception_handler(CodeBuffer& cb, int handler_size);
+  int generate_deopt_handler(CodeBuffer& cb, int handler_size);
+
   // Generate a wrapper for a native (JNI) method
   nmethod* generate_native_wrapper(MacroAssembler* masm,
                                    methodHandle    target,

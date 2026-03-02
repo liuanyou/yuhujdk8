@@ -49,6 +49,8 @@
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "code/codeCache.hpp"
 #include "oops/method.hpp"
+#include "c1/c1_Runtime1.hpp"
+#include "runtime/sharedRuntime.hpp"
 
 #include <fnmatch.h>
 #include <cstring>
@@ -623,8 +625,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   // Install the method into the VM
   CodeOffsets offsets;
-  offsets.set_value(CodeOffsets::Deopt, 0);
-  offsets.set_value(CodeOffsets::Exceptions, 0);
+  offsets.set_value(CodeOffsets::Deopt,       0);  // will be updated per path below
+  offsets.set_value(CodeOffsets::Exceptions,  0);  // will be updated per path below
 
   ExceptionHandlerTable handler_table;
   ImplicitExceptionTable inc_table;
@@ -657,16 +659,19 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                                                 /*llvm_entry*/ placeholder_entry);
     assert(adapter_size > 0 && adapter_size < kAdapterBufSize, "adapter size sanity");
 
-    size_t combined_size = adapter_size + llvm_code_size;
+      // Measure exception handler and deopt handler sizes first
+    int exc_handler_size  = measure_exception_handler_size();
+    int deopt_handler_size = measure_deopt_handler_size();
 
-    // Allocate new BufferBlob from CodeCache to hold adapter + llvm code.
-    BufferBlob* combined_blob = BufferBlob::create("yuhu-normal-combined", combined_size);
-    if (combined_blob == NULL) {
-      fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined BufferBlob (size=%zu)", combined_size));
+    size_t combined_size = adapter_size + llvm_code_size + exc_handler_size + deopt_handler_size;
+
+    // Create CodeBuffer that manages its own BufferBlob internally
+    CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, 0);
+    if (combined_cb.blob() == NULL) {
+      fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
     }
 
-    address combined_base = (address)combined_blob->content_begin();
-    CodeBuffer combined_cb(combined_base, (CodeBuffer::csize_t)combined_size);
+    address combined_base = combined_cb.insts_begin();
 
     // Emit adapter into combined buffer with correct addresses.
     // Use direct jump (pass NULL for llvm_label) to avoid patching complexity.
@@ -705,6 +710,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
+
+    generate_exception_handler(combined_cb, exc_handler_size);
+    generate_deopt_handler(combined_cb, deopt_handler_size);
+
     combined_cb.initialize_oop_recorder(env->oop_recorder());
     // The label should already be bound to the jump instruction location.
     // We need to patch the jump instruction to point to llvm_entry.
@@ -729,6 +738,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       offsets.set_value(CodeOffsets::Entry, 0);
       offsets.set_value(CodeOffsets::Verified_Entry, adapter_size);
     }
+    offsets.set_value(CodeOffsets::Exceptions, 0);
+    offsets.set_value(CodeOffsets::Deopt,      exc_handler_size);
 
     tty->print_cr("Yuhu: Registering method - combined_base=%p (disassemble this address, not entry->code_start()=%p)",
                   combined_base, entry->code_start());
@@ -1610,3 +1621,107 @@ void YuhuCompiler::patch_stubs_for_method(ciMethod* target_method, int x28_offse
   _stub_patch_addresses->remove_at(index);
 }
 
+
+// Measure exception handler size (without actually generating code).
+// Returns the exact byte size needed for the exception handler.
+int YuhuCompiler::measure_exception_handler_size() {
+  // Use a temporary buffer on the stack to measure
+  const int kTempBufSize = 256;
+  char temp_buf[kTempBufSize];
+  CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+  YuhuMacroAssembler masm(&temp_cb);
+  address start = masm.current_pc();
+
+  // nop to ensure the return address points into the code area (same reason as C1)
+  masm.write_inst("nop");
+
+  // Load the runtime entry address into a scratch register and call it.
+  // Runtime1::handle_exception_from_callee_id expects:
+  //   r0 = exception oop, r3 = throwing pc
+  address runtime_entry = Runtime1::entry_for(Runtime1::handle_exception_from_callee_id);
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
+  masm.write_inst_blr(YuhuMacroAssembler::x16);
+
+  address end = masm.current_pc();
+  return (int)(end - start);
+}
+
+int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
+  tty->print_cr("Yuhu: Generating exception handler stub");
+
+  YuhuMacroAssembler masm(&cb);
+
+  address handler_base = masm.start_a_stub(handler_size);
+  assert(handler_base != NULL, "Not enough space for exception handler");
+
+  // Record offset BEFORE the nop -- this is where the handler starts
+  address start = masm.current_pc();
+
+  // nop to ensure the return address points into the code area (same reason as C1)
+  masm.write_inst("nop");
+
+  // Load the runtime entry address into a scratch register and call it.
+  // Runtime1::handle_exception_from_callee_id expects:
+  //   r0 = exception oop, r3 = throwing pc
+  address runtime_entry = Runtime1::entry_for(Runtime1::handle_exception_from_callee_id);
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
+  masm.write_inst_blr(YuhuMacroAssembler::x16);
+
+  masm.end_a_stub();
+
+  address end = masm.current_pc();
+  return (int)(end - start);
+}
+
+// Measure deopt handler size (without actually generating code).
+// Returns the exact byte size needed for the deopt handler.
+int YuhuCompiler::measure_deopt_handler_size() {
+  // Use a temporary buffer on the stack to measure
+  const int kTempBufSize = 256;
+  char temp_buf[kTempBufSize];
+  CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+  YuhuMacroAssembler masm(&temp_cb);
+  address start = masm.current_pc();
+
+  // nop to ensure the return address points into the code area (same reason as C1)
+  masm.write_inst("nop");
+
+  // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
+  masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());
+
+  // Load deopt unpack address and jump
+  address deopt_unpack = SharedRuntime::deopt_blob()->unpack();
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)deopt_unpack);
+  masm.write_inst_br(YuhuMacroAssembler::x16);
+
+  address end = masm.current_pc();
+  return (int)(end - start);
+}
+
+int YuhuCompiler::generate_deopt_handler(CodeBuffer& cb, int handler_size) {
+  tty->print_cr("Yuhu: Generating deopt handler stub");
+
+  YuhuMacroAssembler masm(&cb);
+
+  address handler_base = masm.start_a_stub(handler_size);
+  assert(handler_base != NULL, "Not enough space for deopt handler");
+
+  // Record offset BEFORE the nop -- this is where the handler starts
+  address start = masm.current_pc();
+
+  // nop to ensure the return address points into the code area (same reason as C1)
+  masm.write_inst("nop");
+
+  // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
+  masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());
+
+  // Load deopt unpack address and jump
+  address deopt_unpack = SharedRuntime::deopt_blob()->unpack();
+  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)deopt_unpack);
+  masm.write_inst_br(YuhuMacroAssembler::x16);
+
+  masm.end_a_stub();
+
+  address end = masm.current_pc();
+  return (int)(end - start);
+}
