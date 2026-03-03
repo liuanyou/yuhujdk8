@@ -697,6 +697,37 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       if (real_debug_info != NULL && offset_mapper != NULL) {
         tty->print_cr("Yuhu: Converting virtual offsets to real offsets and adding to debug info recorder");
         debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper, adapter_size);
+        
+        // Now register exception handlers for all safepoint locations
+        // Get all the real offsets that correspond to safepoints/exception points
+        if (exc_handler_size >= 0) {
+          // Access the real debug info to get the safepoint offsets
+          // We need to iterate through the oopmaps to get all the PC locations
+          for (int i = 0; i < real_debug_info->_oopmaps->size(); i++) {
+            OopMap* oopmap = real_debug_info->_oopmaps->at(i);
+            int pc_offset = oopmap->offset();
+            
+            tty->print_cr("Yuhu: Adding exception handler for safepoint at pc_offset=%d", pc_offset);
+            
+            // Create arrays for this specific safepoint with multiple scope depths
+            GrowableArray<intptr_t>* handler_bcis = new GrowableArray<intptr_t>(4);
+            GrowableArray<intptr_t>* scope_depths = new GrowableArray<intptr_t>(4);
+            GrowableArray<intptr_t>* handler_pcos = new GrowableArray<intptr_t>(4);
+            
+            // Add handler entries for different scope depths under the same header
+            // This allows the JVM to find our handler regardless of which scope it's searching
+            handler_bcis->append(-1);
+            scope_depths->append(0);   // current scope
+            handler_pcos->append(0);   // our exception handler
+            
+            handler_bcis->append(-1);
+            scope_depths->append(1);   // outer scope
+            handler_pcos->append(0);
+            
+            // Register this safepoint with multiple scope depths in a single subtable
+            handler_table.add_subtable(pc_offset, handler_bcis, scope_depths, handler_pcos);
+          }
+        }
       }
     }
 
