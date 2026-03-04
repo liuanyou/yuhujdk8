@@ -111,6 +111,12 @@ bool nmethod::is_compiled_by_shark() const {
   return compiler()->is_shark();
 }
 
+bool nmethod::is_compiled_by_yuhu() const {
+  if (compiler() == NULL) {
+    return false;
+  }
+  return compiler()->is_yuhu();
+}
 
 
 //---------------------------------------------------------------------------------

@@ -663,13 +663,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
 
-    size_t combined_size = adapter_size + llvm_code_size + exc_handler_size + deopt_handler_size;
+    size_t combined_size = adapter_size + llvm_code_size;
 
     // Create CodeBuffer that manages its own BufferBlob internally
     CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, 0);
     if (combined_cb.blob() == NULL) {
       fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
     }
+    combined_cb.initialize_stubs_size(exc_handler_size + deopt_handler_size);
 
     address combined_base = combined_cb.insts_begin();
 
@@ -697,37 +698,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       if (real_debug_info != NULL && offset_mapper != NULL) {
         tty->print_cr("Yuhu: Converting virtual offsets to real offsets and adding to debug info recorder");
         debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper, adapter_size);
-        
-        // Now register exception handlers for all safepoint locations
-        // Get all the real offsets that correspond to safepoints/exception points
-        if (exc_handler_size >= 0) {
-          // Access the real debug info to get the safepoint offsets
-          // We need to iterate through the oopmaps to get all the PC locations
-          for (int i = 0; i < real_debug_info->_oopmaps->size(); i++) {
-            OopMap* oopmap = real_debug_info->_oopmaps->at(i);
-            int pc_offset = oopmap->offset();
-            
-            tty->print_cr("Yuhu: Adding exception handler for safepoint at pc_offset=%d", pc_offset);
-            
-            // Create arrays for this specific safepoint with multiple scope depths
-            GrowableArray<intptr_t>* handler_bcis = new GrowableArray<intptr_t>(4);
-            GrowableArray<intptr_t>* scope_depths = new GrowableArray<intptr_t>(4);
-            GrowableArray<intptr_t>* handler_pcos = new GrowableArray<intptr_t>(4);
-            
-            // Add handler entries for different scope depths under the same header
-            // This allows the JVM to find our handler regardless of which scope it's searching
-            handler_bcis->append(-1);
-            scope_depths->append(0);   // current scope
-            handler_pcos->append(0);   // our exception handler
-            
-            handler_bcis->append(-1);
-            scope_depths->append(1);   // outer scope
-            handler_pcos->append(0);
-            
-            // Register this safepoint with multiple scope depths in a single subtable
-            handler_table.add_subtable(pc_offset, handler_bcis, scope_depths, handler_pcos);
-          }
-        }
       }
     }
 
@@ -744,6 +714,33 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     generate_exception_handler(combined_cb, exc_handler_size);
     generate_deopt_handler(combined_cb, deopt_handler_size);
+
+      // Now register exception handlers for all safepoint locations
+      // Get all the real offsets that correspond to safepoints/exception points
+      if (exc_handler_size >= 0) {
+          // Access the real debug info to get the safepoint offsets
+          // We need to iterate through the oopmaps to get all the PC locations
+          for (int i = 0; i < env->debug_info()->_oopmaps->size(); i++) {
+              OopMap* oopmap = env->debug_info()->_oopmaps->at(i);
+              int pc_offset = oopmap->offset();
+
+              tty->print_cr("Yuhu: Adding exception handler for safepoint at pc_offset=%d", pc_offset);
+
+              // Create arrays for this specific safepoint - following C1's approach
+              GrowableArray<intptr_t>* handler_bcis = new GrowableArray<intptr_t>(2);
+              GrowableArray<intptr_t>* scope_depths = new GrowableArray<intptr_t>(2);
+              GrowableArray<intptr_t>* handler_pcos = new GrowableArray<intptr_t>(2);
+
+              // Add a wildcard handler entry at scope depth 0
+              // This allows JVM to find our handler when handler_bci=-1 and scope_depth=0
+              handler_bcis->append(-1);      // universal handler (wildcard)
+              scope_depths->append(0);       // top-level scope
+              handler_pcos->append(combined_cb.total_offset_of(combined_cb.stubs()));       // our exception handler at offset 0 in stubs section
+
+              // Register this safepoint with our exception handler
+              handler_table.add_subtable(pc_offset, handler_bcis, scope_depths, handler_pcos);
+          }
+      }
 
     combined_cb.initialize_oop_recorder(env->oop_recorder());
     // The label should already be bound to the jump instruction location.

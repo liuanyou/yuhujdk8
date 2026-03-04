@@ -689,7 +689,7 @@ address SharedRuntime::compute_compiled_exc_handler(nmethod* nm, address ret_pc,
 
   ExceptionHandlerTable table(nm);
   HandlerTableEntry *t = table.entry_for(catch_pco, handler_bci, scope_depth);
-  if (t == NULL && (nm->is_compiled_by_c1() || handler_bci != -1)) {
+  if (t == NULL && (nm->is_compiled_by_c1() || nm->is_compiled_by_yuhu() || handler_bci != -1)) {
     // Allow abbreviated catch tables.  The idea is to allow a method
     // to materialize its exceptions without committing to the exact
     // routing of exceptions.  In particular this is needed for adding
