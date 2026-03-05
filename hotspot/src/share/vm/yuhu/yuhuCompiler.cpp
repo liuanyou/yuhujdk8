@@ -383,11 +383,72 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
   return (int)(end - start);
 }
 
-static int generate_normal_adapter_into(CodeBuffer& cb,
-                                       Method* method,
-                                       address base_pc,  // Unused - kept for compatibility
-                                       YuhuLabel* llvm_label,
-                                       address llvm_entry) {
+// Helper function: Scan LLVM code from end to find actual code size (excluding trailing udf #0)
+// AArch64 'udf #0' encoding: 0x00000000 (all zeros)
+// Returns the number of bytes from code_start to the last non-udf instruction
+static size_t calculate_effective_code_size(address code_start, size_t total_size) {
+  if (total_size == 0) return 0;
+  
+  // Start from the end and scan backwards
+  address code_end = code_start + total_size;
+  address pc = code_end;
+  
+  // Scan backwards in 4-byte steps (AArch64 instructions are 4-byte aligned)
+  while (pc > code_start) {
+    pc -= 4;
+    uint32_t* inst_ptr = (uint32_t*)pc;
+    uint32_t inst = *inst_ptr;
+    
+    // Check for 'udf #0' (encoding: 0x00000000)
+    if (inst != 0x00000000) {
+      // Found the last non-udf instruction
+      // Return size including this instruction
+      return (pc + 4) - code_start;
+    }
+  }
+  
+  // All instructions are udf #0 (should not happen in practice)
+  return 0;
+}
+
+// Measure adapter size for normal (non-OSR) method compilation.
+// Returns the exact byte size needed for the parameter adapter stub.
+int YuhuCompiler::measure_normal_adapter_size() {
+    // First, measure adapter size using a temporary CodeBuffer.
+    // Use the same jump method (direct jump with NULL label) as actual generation
+    // to ensure size consistency.
+    // The b instruction size is fixed (4 bytes) as long as offset is within ±128MB range,
+    // so using a reasonable placeholder address is safe.
+    const int kAdapterBufSize = 512;
+    char adapter_buf[kAdapterBufSize];
+    CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
+    // Use a placeholder address that's within b instruction range (±128MB)
+    // The exact value doesn't matter as long as the offset is encodable (within ±128MB)
+    // Using adapter_buf + 80 assumes adapter is roughly 80 bytes, giving ~80 byte offset
+    address placeholder_entry = (address)adapter_buf + 80;
+
+    YuhuMacroAssembler masm(&temp_cb);
+    address start = masm.current_pc();
+
+    // CRITICAL: Adapter must NOT allocate any stack frame
+    // If adapter allocates stack frame, current_sp in LLVM function will be wrong
+    // This will cause incorrect stack frame traversal during safepoints
+
+    // Simply jump to LLVM function
+    // x0-x7 are already Java method parameters (from i2c adapter)
+    // For static methods, x0 is NULL (passed by i2c adapter)
+    // Method* (x12) and Thread* (x28) are HotSpot global registers, preserved by i2c adapter
+    // Stack arguments (> 8) are in caller's stack frame, accessible via x20 (esp)
+
+    // Use relative jump instead of absolute address
+    // b instruction range is ±128MB, which is sufficient for adapter_size
+    masm.write_inst_b(placeholder_entry);
+
+    address end = masm.current_pc();
+    return (int)(end - start);
+}
+
+int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address llvm_entry) {
   YuhuMacroAssembler masm(&cb);
   address start = masm.current_pc();
 
@@ -400,14 +461,10 @@ static int generate_normal_adapter_into(CodeBuffer& cb,
   // For static methods, x0 is NULL (passed by i2c adapter)
   // Method* (x12) and Thread* (x28) are HotSpot global registers, preserved by i2c adapter
   // Stack arguments (> 8) are in caller's stack frame, accessible via x20 (esp)
-  
-  if (llvm_label != NULL) {
-    masm.write_inst_b(*llvm_label);   // Placeholder, patched when label is bound
-  } else {
-    // Use relative jump instead of absolute address
-    // b instruction range is ±128MB, which is sufficient for adapter_size
-    masm.write_inst_b(llvm_entry);
-  }
+
+  // Use relative jump instead of absolute address
+  // b instruction range is ±128MB, which is sufficient for adapter_size
+  masm.write_inst_b(llvm_entry);
 
   address end = masm.current_pc();
   return (int)(end - start);
@@ -633,38 +690,29 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   // Wrap LLVM-emitted code (already in CodeCache via YuhuMemoryManager) into a CodeBuffer
   size_t llvm_code_size = (size_t)(entry->code_limit() - entry->code_start());
-  tty->print_cr("Yuhu: compile_method - entry_bci=%d, is_osr=%d, code_start=%p, code_limit=%p, llvm_code_size=%zu", 
-                entry_bci, is_osr, entry->code_start(), entry->code_limit(), llvm_code_size);
+  
+  // Calculate effective code size by scanning for trailing udf #0 instructions
+  size_t effective_code_size = calculate_effective_code_size(entry->code_start(), llvm_code_size);
+  
+  tty->print_cr("Yuhu: compile_method - entry_bci=%d, is_osr=%d, code_start=%p, code_limit=%p", 
+                entry_bci, is_osr, entry->code_start(), entry->code_limit());
+  tty->print_cr("Yuhu: LLVM code - total_size=%zu, effective_size=%zu, saved=%zu bytes (%.1f%%)",
+                llvm_code_size, effective_code_size, 
+                llvm_code_size - effective_code_size,
+                (llvm_code_size > 0) ? (100.0 * (llvm_code_size - effective_code_size) / llvm_code_size) : 0.0);
 
   if (!is_osr) {
     // Normal method: build adapter + LLVM code into a combined CodeCache blob.
     // The adapter rearranges parameters from i2c adapter format to Yuhu's expected format.
-
-    // First, measure adapter size using a temporary CodeBuffer.
-    // Use the same jump method (direct jump with NULL label) as actual generation
-    // to ensure size consistency.
-    // The b instruction size is fixed (4 bytes) as long as offset is within ±128MB range,
-    // so using a reasonable placeholder address is safe.
-    const int kAdapterBufSize = 512;
-    char adapter_buf[kAdapterBufSize];
-    CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
-    // Use a placeholder address that's within b instruction range (±128MB)
-    // The exact value doesn't matter as long as the offset is encodable (within ±128MB)
-    // Using adapter_buf + 80 assumes adapter is roughly 80 bytes, giving ~80 byte offset
-    address placeholder_entry = (address)adapter_buf + 80;
-    adapter_size = generate_normal_adapter_into(temp_cb,
-                                                target->get_Method(),
-                                                /*base_pc*/ (address)0,  // placeholder
-                                                /*llvm_label*/ NULL,     // Use NULL to match actual generation
-                                                /*llvm_entry*/ placeholder_entry);
-    assert(adapter_size > 0 && adapter_size < kAdapterBufSize, "adapter size sanity");
+    adapter_size = measure_normal_adapter_size();
+    assert(adapter_size > 0 && adapter_size < 512, "adapter size sanity");
 
       // Measure exception handler and deopt handler sizes first
     int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize);
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
 
-    size_t combined_size = adapter_size + llvm_code_size + unwind_handler_size;
+    size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
     // Create CodeBuffer that manages its own BufferBlob internally
     CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, 0);
@@ -680,17 +728,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     address llvm_entry = combined_base + adapter_size;
     tty->print_cr("Yuhu: Normal adapter - combined_base=%p, adapter_size=%d, llvm_entry=%p",
                   combined_base, adapter_size, llvm_entry);
-    int emitted_adapter = generate_normal_adapter_into(combined_cb,
-                                                       target->get_Method(),
-                                                       /*base_pc*/ combined_base,
-                                                       /*llvm_label*/ NULL,
-                                                       /*llvm_entry*/ llvm_entry);
+    int emitted_adapter = generate_normal_adapter_into(combined_cb, llvm_entry);
     assert(emitted_adapter == adapter_size, "adapter size mismatch");
     tty->print_cr("Yuhu: Normal adapter - emitted_adapter=%d, actual LLVM code starts at %p",
                   emitted_adapter, combined_base + emitted_adapter);
 
     // Copy LLVM code after adapter.
-    memcpy(combined_base + adapter_size, entry->code_start(), llvm_code_size);
+    // Only copy effective code (excluding trailing udf #0 padding)
+    memcpy(combined_base + adapter_size, entry->code_start(), effective_code_size);
 
     // Convert virtual offsets to real offsets and add to the debug information recorder
     if (debug_info_recorder != NULL) {
@@ -706,7 +751,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // This is different from exception handler - unwind handler propagates exceptions upward.
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
-      combined_cb.insts()->set_end(combined_base + adapter_size + llvm_code_size);
+      combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
       generate_unwind_handler(combined_cb, frame_size * wordSize);
 
     // adjust oopmaps offset
@@ -756,7 +801,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       offsets.set_value(CodeOffsets::Entry, 0);
       offsets.set_value(CodeOffsets::Verified_Entry, adapter_size);
     }
-    offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + llvm_code_size);
+    offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + effective_code_size);
     offsets.set_value(CodeOffsets::Exceptions, 0);
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
     // UnwindHandler is already set in generate_unwind_handler()
