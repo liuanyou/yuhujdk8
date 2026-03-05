@@ -547,6 +547,31 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr) {
+    char buffer[50];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wformat-nonliteral"
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::base_plus_offset_reg:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(addr.base()),
+                     reg_name(addr.index()), op_name(addr.ext().op()), MAX(addr.ext().shift(), 0));
+            break;
+        case YuhuAddress::pre:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::post:
+            snprintf(buffer, sizeof(buffer), assembly_format, reg_name(reg1), reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+    #pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr) {
     char buffer[50];
     #pragma clang diagnostic push
@@ -698,6 +723,22 @@ address YuhuMacroAssembler::write_inst_ldr(YuhuRegister reg, YuhuAddress addr) {
             return write_inst("ldr %s, [%s, #%d]!", reg, addr);
         case YuhuAddress::post:
             return write_inst("ldr %s, [%s], #%d", reg, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldp %s, %s, [%s, #%d]", reg1, reg2, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldp %s, %s, [%s, %s, %s #%d]", reg1, reg2, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldp %s, %s, [%s, #%d]!", reg1, reg2, addr);
+        case YuhuAddress::post:
+            return write_inst("ldp %s, %s, [%s], #%d", reg1, reg2, addr);
         default:
             ShouldNotReachHere();
     }
@@ -3776,6 +3817,24 @@ address YuhuMacroAssembler::write_insts_generate_stack_overflow_check( int frame
             bang_offset += page_size;
         }
     } // end (UseStackBanging)
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_remove_frame(int framesize) {
+    if (framesize == 0) {
+        write_inst_ldp(fp, lr, YuhuPost(sp, 2 * wordSize));
+    } else if (framesize < ((1 << 9) + 2 * wordSize)) {
+        write_inst_ldp(fp, lr, YuhuAddress(sp, framesize - 2 * wordSize));
+        write_inst("add sp, sp, #%d", framesize);
+    } else {
+        if (framesize < ((1 << 12) + 2 * wordSize))
+            write_inst("add sp, sp, #%d", framesize - 2 * wordSize);
+        else {
+            write_insts_mov_imm64(x8, framesize - 2 * wordSize);
+            write_inst_regs("add %s, %s, %s", sp, sp, x8);
+        }
+        write_inst_ldp(fp, lr, YuhuPost(sp, 2 * wordSize));
+    }
     return current_pc();
 }
 

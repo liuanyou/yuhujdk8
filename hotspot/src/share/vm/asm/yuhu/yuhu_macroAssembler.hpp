@@ -261,6 +261,8 @@ public:
 
     address write_inst(const char* assembly_format, YuhuRegister reg, YuhuAddress addr);
 
+    address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr);
+
     address write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1);
@@ -284,6 +286,8 @@ public:
     address write_inst_strb(YuhuRegister reg, YuhuAddress addr);
 
     address write_inst_ldr(YuhuRegister reg, YuhuAddress addr);
+
+    address write_inst_ldp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr);
 
     address write_inst_ldr(YuhuFloatRegister reg, YuhuAddress addr);
 
@@ -688,6 +692,8 @@ public:
     address write_insts_increment(YuhuAddress dst, int value = 1);
 
     address write_insts_generate_stack_overflow_check( int frame_size_in_bytes );
+
+    address write_insts_remove_frame(int framesize);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

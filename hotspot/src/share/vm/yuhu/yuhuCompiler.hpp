@@ -77,10 +77,12 @@ class YuhuCompiler : public AbstractCompiler {
 
   static int measure_exception_handler_size();
   static int measure_deopt_handler_size();
+  static int measure_unwind_handler_size(int frame_size_in_bytes);
 
   // Exception and deoptimization handler generation
   int generate_exception_handler(CodeBuffer& cb, int handler_size);
   int generate_deopt_handler(CodeBuffer& cb, int handler_size);
+  int generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes);
 
   // Generate a wrapper for a native (JNI) method
   nmethod* generate_native_wrapper(MacroAssembler* masm,

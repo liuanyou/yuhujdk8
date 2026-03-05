@@ -660,17 +660,18 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     assert(adapter_size > 0 && adapter_size < kAdapterBufSize, "adapter size sanity");
 
       // Measure exception handler and deopt handler sizes first
+    int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize);
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
 
-    size_t combined_size = adapter_size + llvm_code_size;
+    size_t combined_size = adapter_size + llvm_code_size + unwind_handler_size;
 
     // Create CodeBuffer that manages its own BufferBlob internally
     CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, 0);
     if (combined_cb.blob() == NULL) {
       fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
     }
-    combined_cb.initialize_stubs_size(exc_handler_size + deopt_handler_size);
+    combined_cb.initialize_stubs_size( exc_handler_size + deopt_handler_size);
 
     address combined_base = combined_cb.insts_begin();
 
@@ -701,6 +702,13 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       }
     }
 
+      // Generate unwind handler (always needed - JVM requires it for exception propagation)
+      // This is different from exception handler - unwind handler propagates exceptions upward.
+      // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
+      // before jumping to unwind_exception_id.
+      combined_cb.insts()->set_end(combined_base + adapter_size + llvm_code_size);
+      generate_unwind_handler(combined_cb, frame_size * wordSize);
+
     // adjust oopmaps offset
 //    builder.adjust_oopmaps_pc_offset(env, adapter_size);
 
@@ -712,35 +720,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
 
-    generate_exception_handler(combined_cb, exc_handler_size);
-    generate_deopt_handler(combined_cb, deopt_handler_size);
-
-      // Now register exception handlers for all safepoint locations
-      // Get all the real offsets that correspond to safepoints/exception points
+      // Generate exception handler stub only if there might be landing pads
+      // TODO: Check LLVM IR for landing pads instead of always generating
       if (exc_handler_size >= 0) {
-          // Access the real debug info to get the safepoint offsets
-          // We need to iterate through the oopmaps to get all the PC locations
-          for (int i = 0; i < env->debug_info()->_oopmaps->size(); i++) {
-              OopMap* oopmap = env->debug_info()->_oopmaps->at(i);
-              int pc_offset = oopmap->offset();
-
-              tty->print_cr("Yuhu: Adding exception handler for safepoint at pc_offset=%d", pc_offset);
-
-              // Create arrays for this specific safepoint - following C1's approach
-              GrowableArray<intptr_t>* handler_bcis = new GrowableArray<intptr_t>(2);
-              GrowableArray<intptr_t>* scope_depths = new GrowableArray<intptr_t>(2);
-              GrowableArray<intptr_t>* handler_pcos = new GrowableArray<intptr_t>(2);
-
-              // Add a wildcard handler entry at scope depth 0
-              // This allows JVM to find our handler when handler_bci=-1 and scope_depth=0
-              handler_bcis->append(-1);      // universal handler (wildcard)
-              scope_depths->append(0);       // top-level scope
-              handler_pcos->append(combined_cb.total_offset_of(combined_cb.stubs()));       // our exception handler at offset 0 in stubs section
-
-              // Register this safepoint with our exception handler
-              handler_table.add_subtable(pc_offset, handler_bcis, scope_depths, handler_pcos);
-          }
+          generate_exception_handler(combined_cb, exc_handler_size);
+          // TODO: Properly handle exception handlers for each landing pad
+          // For now, DO NOT register any exception handlers to avoid infinite loop
+          tty->print_cr("Yuhu: Skipping exception handler registration (not yet implemented for multiple landing pads)");
       }
+
+    // Generate deopt handler (always needed)
+    generate_deopt_handler(combined_cb, deopt_handler_size);
 
     combined_cb.initialize_oop_recorder(env->oop_recorder());
     // The label should already be bound to the jump instruction location.
@@ -766,8 +756,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       offsets.set_value(CodeOffsets::Entry, 0);
       offsets.set_value(CodeOffsets::Verified_Entry, adapter_size);
     }
+    offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + llvm_code_size);
     offsets.set_value(CodeOffsets::Exceptions, 0);
-    offsets.set_value(CodeOffsets::Deopt,      exc_handler_size);
+    offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
+    // UnwindHandler is already set in generate_unwind_handler()
 
     tty->print_cr("Yuhu: Registering method - combined_base=%p (disassemble this address, not entry->code_start()=%p)",
                   combined_base, entry->code_start());
@@ -1699,6 +1691,98 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
 
   address end = masm.current_pc();
   return (int)(end - start);
+}
+
+// Generate unwind handler for propagating exceptions to callers
+// This is required by JVM for all compiled methods, even those without try-catch
+int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
+    // Use a temporary buffer on the stack to measure.
+    // frame_offset_bytes is NOT known at measure time (it depends on the LLVM prologue of
+    // the specific method being compiled).  We use the worst-case SUB instruction here to
+    // ensure we reserve enough stub space; the actual value is patched at
+    // generate_unwind_handler() time.
+    //
+    // Synchronized methods: monitor exit requires C1-style MonitorExitStub infrastructure
+    // that yuhu does not yet implement.  Synchronized methods are therefore not supported
+    // through this path; they will fall back to the interpreter or trigger an assert at
+    // compile time before reaching this code.
+    const int kTempBufSize = 256;
+    char temp_buf[kTempBufSize];
+    CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+    YuhuMacroAssembler masm(&temp_cb);
+    address start = masm.current_pc();
+
+    // 1. Preserve exception oop in x19 across the frame teardown.
+    //    (x19 is a callee-saved register; the caller already saved it, so we can use it here.)
+    masm.write_inst("mov x19, x0");
+
+    // 2. Load exception oop from JavaThread and clear TLS fields.
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
+
+    // 3. Remove frame: restore SP
+    //    then pop x29/x30 (ldp, 4 bytes).
+    //    Actual imm is filled in by generate_unwind_handler().
+    masm.write_insts_remove_frame(frame_size_in_bytes);
+
+    // 4. Jump to Runtime1::unwind_exception_id.
+    //    At that point: r0 = exception oop, lr = caller's return address.
+    address runtime_entry = Runtime1::entry_for(Runtime1::unwind_exception_id);
+    masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
+    masm.write_inst_br(YuhuMacroAssembler::x16);
+
+    address end = masm.current_pc();
+    return (int)(end - start);
+}
+
+// Generate unwind handler for propagating exceptions to callers.
+// This is required by the JVM for all compiled methods, even those without try-catch.
+//
+// frame_size_in_bytes: the complete yuhu frame size in bytes (frame_size * wordSize).
+//
+// Register protocol on entry (set by exception_handler_for_pc or trap dispatch):
+//   x28 (rthread) = JavaThread* with exception_oop / exception_pc filled in
+//
+// Register protocol on exit to Runtime1::unwind_exception_id:
+//   x0 = exception oop, lr = caller's return address (used to find the caller's handler)
+int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes) {
+    tty->print_cr("Yuhu: Generating unwind handler (frame_size_in_bytes=%d)", frame_size_in_bytes);
+
+    YuhuMacroAssembler masm(&cb);
+
+    address start = masm.current_pc();
+
+    // 1. Preserve exception oop in x19 across the frame teardown.
+    //    x19 is callee-saved so it is safe to clobber here — the caller-saved copy
+    //    lives on the stack (the LLVM prologue spilled it), but we are about to drop the
+    //    frame anyway, so there is nothing left to restore.
+    masm.write_inst("mov x19, x0");
+
+    // 2. Load exception oop from JavaThread and clear TLS fields.
+    //    Runtime1::generate_unwind_exception asserts these are empty on entry.
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
+
+    // Synchronized methods: monitor exit (unlock_object) is not yet implemented in yuhu.
+    // Synchronized methods must not reach this handler; they are rejected by
+    // YuhuCompiler::can_compile_method() or will hit an assertion earlier.
+
+    // 3. Remove frame: mirror the LLVM epilogue sequence.
+    masm.write_insts_remove_frame(frame_size_in_bytes);
+
+    // 4. Jump to Runtime1::unwind_exception_id.
+    //    That stub uses lr to call SharedRuntime::exception_handler_for_return_address,
+    //    which walks the caller's frame to locate its exception handler.
+    //    On return it does: br <handler_addr>  with  x0=exception_oop, x3=throwing_pc.
+    address runtime_entry = Runtime1::entry_for(Runtime1::unwind_exception_id);
+    masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
+    masm.write_inst_br(YuhuMacroAssembler::x16);
+
+    address end = masm.current_pc();
+
+    return (int)(end - start);
 }
 
 // Measure deopt handler size (without actually generating code).

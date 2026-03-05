@@ -245,46 +245,46 @@ class Bytecodes: AllStatic {
     number_of_java_codes,
 
     // JVM bytecodes
-    _fast_agetfield       = number_of_java_codes,
-    _fast_bgetfield       ,
-    _fast_cgetfield       ,
-    _fast_dgetfield       ,
-    _fast_fgetfield       ,
-    _fast_igetfield       ,
-    _fast_lgetfield       ,
-    _fast_sgetfield       ,
+    _fast_agetfield       = number_of_java_codes, // 0xcb
+    _fast_bgetfield       , // 0xcc
+    _fast_cgetfield       , // 0xcd
+    _fast_dgetfield       , // 0xce
+    _fast_fgetfield       , // 0xcf
+    _fast_igetfield       , // 0xd0
+    _fast_lgetfield       , // 0xd1
+    _fast_sgetfield       , // 0xd2
 
-    _fast_aputfield       ,
-    _fast_bputfield       ,
+    _fast_aputfield       , // 0xd3
+    _fast_bputfield       , // 0xd4
 //    _fast_zputfield       ,
-    _fast_cputfield       ,
-    _fast_dputfield       ,
-    _fast_fputfield       ,
-    _fast_iputfield       ,
-    _fast_lputfield       ,
-    _fast_sputfield       ,
+    _fast_cputfield       , // 0xd5
+    _fast_dputfield       , // 0xd6
+    _fast_fputfield       , // 0xd7
+    _fast_iputfield       , // 0xd8
+    _fast_lputfield       , // 0xd9
+    _fast_sputfield       , // 0xda
 
-    _fast_aload_0         ,
-    _fast_iaccess_0       ,
-    _fast_aaccess_0       ,
-    _fast_faccess_0       ,
+    _fast_aload_0         , // 0xdb
+    _fast_iaccess_0       , // 0xdc
+    _fast_aaccess_0       , // 0xdd
+    _fast_faccess_0       , // 0xde
 
-    _fast_iload           ,
-    _fast_iload2          ,
-    _fast_icaload         ,
+    _fast_iload           , // 0xdf
+    _fast_iload2          , // 0xf0
+    _fast_icaload         , // 0xf1
 
-    _fast_invokevfinal    ,
-    _fast_linearswitch    ,
-    _fast_binaryswitch    ,
+    _fast_invokevfinal    , // 0xf2
+    _fast_linearswitch    , // 0xf3
+    _fast_binaryswitch    , // 0xf4
 
     // special handling of oop constants:
-    _fast_aldc            ,
-    _fast_aldc_w          ,
+    _fast_aldc            , // 0xf5
+    _fast_aldc_w          , // 0xf6
 
-    _return_register_finalizer    ,
+    _return_register_finalizer    , // 0xf7
 
     // special handling of signature-polymorphic methods:
-    _invokehandle         ,
+    _invokehandle         , // 0xf8
 
     _shouldnotreachhere,      // For debugging
 

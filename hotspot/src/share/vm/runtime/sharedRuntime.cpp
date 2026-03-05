@@ -705,6 +705,13 @@ address SharedRuntime::compute_compiled_exc_handler(nmethod* nm, address ret_pc,
     return nm->unwind_handler_begin();
   }
 #endif
+#ifdef YUHU
+    if (t == NULL && nm->is_compiled_by_yuhu()) {
+        assert(nm->unwind_handler_begin() != NULL, "");
+        return nm->unwind_handler_begin();
+    }
+#endif
+
 
   if (t == NULL) {
     tty->print_cr("MISSING EXCEPTION HANDLER for pc " INTPTR_FORMAT " and handler bci %d", ret_pc, handler_bci);
