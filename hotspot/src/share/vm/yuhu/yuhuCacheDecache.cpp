@@ -303,6 +303,13 @@ void YuhuCacher::process_stack_slot(int          index,
 
   // Read the value from the frame if necessary
   if (stack_slot_needs_read(index, value)) {
+    // If the value already has a valid LLVM value (e.g., a call return value
+    // set by cache_after_Java_call), keep it as-is — do NOT reload from frame.
+    // Reloading from frame would overwrite the actual call result with stale data.
+    if (value->generic_value() != NULL) {
+      // Already has a live LLVM value — no frame reload needed
+      return;
+    }
     *addr = YuhuValue::create_generic(
       value->type(),
       read_value_from_frame(
@@ -359,6 +366,12 @@ void YuhuCacher::process_local_slot(int          index,
 
   // Read the value from the frame if necessary
   if (local_slot_needs_read(index, value)) {
+    // If the value already has a valid LLVM value, keep it as-is — do NOT reload from frame.
+    // This prevents overwriting live values (e.g., call results or recently stored locals)
+    // with stale data from the frame.
+    if (value->generic_value() != NULL) {
+      return;
+    }
     *addr = YuhuValue::create_generic(
       value->type(),
       read_value_from_frame(

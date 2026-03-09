@@ -217,7 +217,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
   // Cache and decache
  private:
   void decache_for_Java_call(ciMethod* callee);
-  void cache_after_Java_call(ciMethod* callee);
+  void cache_after_Java_call(ciMethod* callee, llvm::Value* call_result);
   void decache_for_VM_call();
   void cache_after_VM_call();
   void decache_for_trap();

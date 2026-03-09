@@ -302,7 +302,7 @@ void YuhuTopLevelBlock::decache_for_Java_call(ciMethod *callee) {
     xpop();
 }
 
-void YuhuTopLevelBlock::cache_after_Java_call(ciMethod *callee) {
+void YuhuTopLevelBlock::cache_after_Java_call(ciMethod *callee, Value* call_result) {
   if (callee->return_type()->size()) {
     ciType *type;
     switch (callee->return_type()->basic_type()) {
@@ -317,7 +317,7 @@ void YuhuTopLevelBlock::cache_after_Java_call(ciMethod *callee) {
       type = callee->return_type();
     }
 
-    push(YuhuValue::create_generic(type, NULL, false));
+    push(YuhuValue::create_generic(type, call_result, false));  // ← Pass actual call result!
   }
   YuhuJavaCallCacher(function(), callee).scan(current_state());
 }
@@ -1620,7 +1620,7 @@ void YuhuTopLevelBlock::do_call() {
   // but Yuhu calls standard _from_compiled_entry which returns the actual method result.
   // Therefore, call_result contains the actual return value (e.g., object reference for array()).
   // Deoptimization is detected through check_pending_exception() below, not through the return value.
-  // We ignore call_result here - cache_after_Java_call() will handle return values based on signature.
+  // The call_result is passed to cache_after_Java_call() below to properly store return values.
 
   // IMPORTANT: Create another OopMap at the return point
   // The decache_for_Java_call() above created an OopMap at the call site,
@@ -1629,7 +1629,7 @@ void YuhuTopLevelBlock::do_call() {
   // We use YuhuJavaCallDecacher again to create an OopMap at this return point.
   YuhuJavaCallDecacher(function(), bci(), call_method).scan(current_state());
 
-  cache_after_Java_call(call_method);
+  cache_after_Java_call(call_method, call_result);  // ← Pass call_result here!
 
   // Check for pending exceptions
   check_pending_exception(EX_CHECK_FULL);
