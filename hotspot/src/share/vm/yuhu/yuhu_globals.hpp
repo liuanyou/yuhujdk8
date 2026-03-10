@@ -66,6 +66,12 @@
 // Yuhu frame layout constants
 const int yuhu_frame_header_words = 6;  // Frame header size in words
 
+// LLVM register spill reservation (AArch64)
+// Reserve space for all callee-saved registers (x19-x28 = 10 regs = 80 bytes)
+// This is the MAXIMUM LLVM could possibly need for register spills.
+// Both yuhuFunction.cpp (alloca) and yuhuStack.cpp (frame size) must use this value.
+const int yuhu_llvm_spill_slots = 10;  // 80 bytes - absolute maximum for AArch64
+
 YUHU_FLAGS(DECLARE_DEVELOPER_FLAG, DECLARE_PD_DEVELOPER_FLAG, DECLARE_PRODUCT_FLAG, DECLARE_PD_PRODUCT_FLAG, DECLARE_DIAGNOSTIC_FLAG, DECLARE_NOTPRODUCT_FLAG)
 
 #endif // SHARE_VM_YUHU_YUHU_GLOBALS_HPP

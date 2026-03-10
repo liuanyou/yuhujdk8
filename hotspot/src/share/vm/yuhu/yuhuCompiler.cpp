@@ -655,7 +655,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int locals_words = target->max_locals();
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
-  int frame_words = header_words + monitor_words + stack_words;
+  int frame_words = header_words + monitor_words + stack_words + yuhu_llvm_spill_slots;
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();
