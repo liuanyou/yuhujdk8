@@ -248,7 +248,7 @@ YuhuCompiler::YuhuCompiler()
     .setCPU(MCPU)
     .addFeatures(MAttrs);
 
-  JTMB.addFeatures({"+reserve-x28"});
+  JTMB.addFeatures({"+reserve-x28", "+reserve-x21"});
 
   // CRITICAL: Reserve x28 (Thread*) and x12 (Method*) registers
   // This prevents LLVM from using these registers in generated code
@@ -489,20 +489,20 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     env->record_failure("normal-only test mode: skipping OSR compilation");
     return;
   }
-  if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
-    && strcmp(target->name()->as_utf8(), "encodeArrayLoop") == 0
-    && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;") == 0) {
-      tty->print_cr("Yuhu: SKIPPING %s", methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()));
-      env->record_failure("normal-only test mode: skipping encodeArrayLoop compilation");
-      return;
-  }
-    if (strcmp(target->holder()->name()->as_utf8(), "java/nio/charset/CharsetEncoder") == 0
-        && strcmp(target->name()->as_utf8(), "encode") == 0
-        && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;") == 0) {
-        tty->print_cr("Yuhu: SKIPPING %s", methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()));
-        env->record_failure("normal-only test mode: skipping encode compilation");
-        return;
-    }
+//  if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
+//    && strcmp(target->name()->as_utf8(), "encodeArrayLoop") == 0
+//    && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;") == 0) {
+//      tty->print_cr("Yuhu: SKIPPING %s", methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()));
+//      env->record_failure("normal-only test mode: skipping encodeArrayLoop compilation");
+//      return;
+//  }
+//    if (strcmp(target->holder()->name()->as_utf8(), "java/nio/charset/CharsetEncoder") == 0
+//        && strcmp(target->name()->as_utf8(), "encode") == 0
+//        && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;") == 0) {
+//        tty->print_cr("Yuhu: SKIPPING %s", methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()));
+//        env->record_failure("normal-only test mode: skipping encode compilation");
+//        return;
+//    }
 //    if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/StreamEncoder") == 0
 //        && strcmp(target->name()->as_utf8(), "implWrite") == 0
 //        && strcmp(target->signature()->as_symbol()->as_utf8(), "([CII)V") == 0) {
