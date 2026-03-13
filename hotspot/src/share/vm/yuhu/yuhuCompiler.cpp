@@ -248,7 +248,7 @@ YuhuCompiler::YuhuCompiler()
     .setCPU(MCPU)
     .addFeatures(MAttrs);
 
-  JTMB.addFeatures({"+reserve-x28", "+reserve-x21"});
+  JTMB.addFeatures({"+reserve-x28", "+reserve-x21", "+reserve-x26", "+reserve-x22", "+reserve-x24"});
 
   // CRITICAL: Reserve x28 (Thread*) and x12 (Method*) registers
   // This prevents LLVM from using these registers in generated code
@@ -526,8 +526,18 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     flow = target->get_flow_analysis();
   else
     flow = target->get_osr_flow_analysis(entry_bci);
-  if (flow->failing())
-    return;
+  if (flow->failing()) {
+      env->record_failure("flow analysis has encountered an error");
+      return;
+  }
+  // Bail out if any block has a trap (unloaded class at compile time).
+  // Yuhu does not support deoptimization, so such methods cannot be compiled.
+  for (int i = 0; i < flow->block_count(); i++) {
+    if (flow->pre_order_at(i)->has_trap()) {
+      env->record_failure("block has trap (unloaded class)");
+      return;
+    }
+  }
   if (YuhuPrintTypeflowOf != NULL) {
     if (!fnmatch(YuhuPrintTypeflowOf, base_name, 0))
       flow->print_on(tty);
