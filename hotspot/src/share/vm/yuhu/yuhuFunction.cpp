@@ -225,17 +225,13 @@ void YuhuFunction::initialize(const char *name) {
 
       // CRITICAL: Create sp_storage alloca FIRST thing in entry block
       // This ensures LLVM puts it in the prologue, not in the middle of the function
-      
-      // Reserve space for ALL callee-saved registers (x19-x28 = 10 regs = 80 bytes)
-      // This is the MAXIMUM LLVM could possibly need for register spills.
-      // By creating this large alloca early, LLVM backend will allocate sufficient
-      // spill space in the prologue, preventing spills from corrupting Yuhu frame.
-      llvm::AllocaInst* spill_reservation = builder()->CreateAlloca(
-        llvm::ArrayType::get(YuhuType::intptr_type(), yuhu_llvm_spill_slots),
-        nullptr, "llvm_spill_reservation");
-      
       sp_storage_alloca = builder()->CreateAlloca(
         YuhuType::intptr_type(), 0, "sp_storage");
+
+      // CRITICAL: Save p7 from x0 to x22 (reserved register) immediately
+      // This must be done BEFORE any code that might use x0
+      // x22 is safe because it's reserved via JTMB (+reserve-x22)
+      builder()->CreateSaveX0ToX22();
 
       // Create thread_ptr in this entry block
       llvm::Value *thread_int = builder()->CreateReadThreadRegister();

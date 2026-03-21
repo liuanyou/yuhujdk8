@@ -187,17 +187,18 @@ llvm::Argument* YuhuNormalEntryCacher::get_function_arg(int local_index) {
 // Stack arguments are at [esp + (arg_index - 8) * 8] in caller's frame
 // arg_index is the argument index in AArch64 calling convention (0-based, including receiver for non-static)
 llvm::Value* YuhuNormalEntryCacher::read_stack_arg(int arg_index) {
-  // Read x20 (esp) register
-  llvm::Value* esp = builder()->CreateReadRegister("x20");
+  // Read x29 (frame pointer) register
+  llvm::Value* fp = builder()->CreateReadFramePointer();
   
-  // Calculate stack argument address: esp + (arg_index - 8) * 8
-  // In AArch64 calling convention, stack arguments start at [sp] in caller's frame
-  // arg_index 8 means the 9th argument (0-based), which is at [sp + 0]
-  // arg_index 9 means the 10th argument, which is at [sp + 8]
-  int stack_offset = (arg_index - 8) * wordSize;
+  // Calculate stack argument address: x29 + 16 + (arg_index - 8) * 8
+  // Parameters >= 8 are placed by interpreter at:
+  //   - 9th parameter (index=8): x29 + 16
+  //   - 10th parameter (index=9): x29 + 24
+  //   - nth parameter (index>=8): x29 + 16 + (index - 8) * 8
+  int stack_offset = 16 + (arg_index - 8) * wordSize;
   llvm::Value* stack_arg_addr = builder()->CreateGEP(
     YuhuType::intptr_type(),
-    builder()->CreateIntToPtr(esp, llvm::PointerType::getUnqual(YuhuType::intptr_type())),
+    builder()->CreateIntToPtr(fp, llvm::PointerType::getUnqual(YuhuType::intptr_type())),
     LLVMValue::intptr_constant(stack_offset / wordSize),
     "stack_arg_addr");
   
@@ -223,12 +224,18 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
     // - Parameters >= 8 are on the stack, read from x20 (esp)
     
     if (index < 8) {
-      // Parameters 0-7: read from function arguments
-      llvm::Argument* arg = get_function_arg(index);
-      assert(arg != NULL, "function argument should exist");
-      loaded = arg;
+      // Parameters 0-7: read from registers
+      if (index == 7) {
+        // Special handling for p7 (8th parameter): read from x22 register where it was saved
+        loaded = builder()->CreateReadX22Register();
+      } else {
+        // Parameters 0-6: read from function arguments (x1-x7)
+        llvm::Argument* arg = get_function_arg(index);
+        assert(arg != NULL, "function argument should exist");
+        loaded = arg;
+      }
       
-      // Ensure type matches exactly (may need conversion for integers)
+      // Ensure type matches exactly (may need conversion for integers or pointers)
       if (loaded->getType() != stack_ty) {
         // For integer types, use CreateIntCast; for pointers, use CreateBitCast
         if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
@@ -239,6 +246,12 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             "arg_typed");
         } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
           loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+        } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
+          // Convert i64 to ptr (for p7 when it's an oop)
+          loaded = builder()->CreateIntToPtr(loaded, stack_ty, "arg_typed");
+        } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
+          // Convert ptr to i64 (should not happen for p7, but handle for completeness)
+          loaded = builder()->CreatePtrToInt(loaded, stack_ty, "arg_typed");
         } else {
           // Fallback: try bitcast
           loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
@@ -269,10 +282,16 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             value->basic_type() != T_CHAR,  // signed unless char
             "stack_arg_typed");
         } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
-          loaded = builder()->CreateBitCast(loaded, stack_ty, "stack_arg_typed");
+            loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+        } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
+            // Convert i64 to ptr (for p8 when it's an oop)
+            loaded = builder()->CreateIntToPtr(loaded, stack_ty, "arg_typed");
+        } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
+            // Convert ptr to i64 (should not happen for p8, but handle for completeness)
+            loaded = builder()->CreatePtrToInt(loaded, stack_ty, "arg_typed");
         } else {
-          // Fallback: try bitcast
-          loaded = builder()->CreateBitCast(loaded, stack_ty, "stack_arg_typed");
+            // Fallback: try bitcast
+            loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
         }
       }
     }
