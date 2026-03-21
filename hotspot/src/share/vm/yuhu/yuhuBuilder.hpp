@@ -193,7 +193,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* cmpxchg_int();
   llvm::Value* cmpxchg_ptr();
   llvm::Value* frame_address();
-  llvm::Value* memset();
   llvm::Value* unimplemented();
   llvm::Value* should_not_reach_here();
   llvm::Value* dump();
@@ -206,6 +205,8 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadMethodRegister(); // Read rmethod register (x12) on AArch64
   llvm::CallInst* CreateReadThreadRegister(); // Read rthread register (x28) on AArch64
   llvm::CallInst* CreateReadCurrentPC(); // Read current pc on AArch64
+  void CreateSaveX0ToX22();  // Save x0 to x22 (reserved register) to preserve p7 parameter
+  llvm::CallInst* CreateReadX22Register();  // Read x22 register (holds saved p7 parameter)
   llvm::CallInst* CreateReadRegister(const char* reg_name); // Generic register reader
   void CreateWriteStackPointer(llvm::Value* new_sp); // Write SP register (x31) on AArch64 using inline assembly
   void CreateEpiloguePlaceholder(); // Placeholder for SP restore (replaced after compilation)

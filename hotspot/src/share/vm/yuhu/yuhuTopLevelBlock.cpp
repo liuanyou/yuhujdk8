@@ -1989,16 +1989,22 @@ void YuhuTopLevelBlock::do_new() {
 
     // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
 #if LLVM_VERSION_MAJOR >= 20
-    Value *check = builder()->CreateAtomicCmpXchg(
+    Value *cmpxchg_result = builder()->CreateAtomicCmpXchg(
       top_addr, old_top, new_top,
       llvm::MaybeAlign(HeapWordSize),  // Alignment
       llvm::AtomicOrdering::SequentiallyConsistent,  // Success ordering
       llvm::AtomicOrdering::SequentiallyConsistent);  // Failure ordering
+    // Extract the success flag from the result (second element of the struct)
+    Value *success = builder()->CreateExtractValue(cmpxchg_result, 1, "success");
 #else
     Value *check = builder()->CreateAtomicCmpXchg(top_addr, old_top, new_top, llvm::AtomicOrdering::SequentiallyConsistent);
 #endif
     builder()->CreateCondBr(
+#if LLVM_VERSION_MAJOR >= 20
+      success,
+#else
       builder()->CreateICmpEQ(old_top, check),
+#endif
       initialize, retry);
 
     // Initialize the object
@@ -2034,7 +2040,7 @@ void YuhuTopLevelBlock::do_new() {
     // Set the mark
     intptr_t mark;
     if (UseBiasedLocking) {
-      Unimplemented();
+      mark = (intptr_t) markOopDesc::biased_locking_prototype();
     }
     else {
       mark = (intptr_t) markOopDesc::prototype();

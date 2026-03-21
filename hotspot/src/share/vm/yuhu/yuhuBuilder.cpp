@@ -466,12 +466,6 @@ Value* YuhuBuilder::frame_address() {
 #endif
 }
 
-Value* YuhuBuilder::memset() {
-  // LLVM 2.8 added a fifth isVolatile field for memset
-  // introduced with LLVM r100304
-  return make_function("llvm.memset.p0i8.i32", "Cciii", "v");
-}
-
 Value* YuhuBuilder::unimplemented() {
   return make_function((address) report_unimplemented, "Ci", "v");
 }
@@ -561,6 +555,45 @@ CallInst* YuhuBuilder::CreateReadThreadRegister() {
   
   // LLVM 20+ requires FunctionType for CreateCall
   return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rthread");
+}
+
+void YuhuBuilder::CreateSaveX0ToX22() {
+  // Save x0 to x22 (reserved register) immediately at function entry
+  // This preserves p7 (8th parameter) before any code can pollute x0
+  // x22 is safe because it's reserved via JTMB (+reserve-x22)
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov x22, x0"
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::void_type(), false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov x22, x0",  // Move x0 to x22
+    "",             // No outputs
+    true,           // Has side effects
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+  
+  CreateCall(asm_type, asm_func);
+}
+
+CallInst* YuhuBuilder::CreateReadX22Register() {
+  // Read x22 register on AArch64 using inline assembly
+  // This is used for reading saved p7 (8th parameter) value
+  YuhuContext& ctx = YuhuContext::current();
+  
+  // Create inline assembly: "mov $0, x22"
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "mov $0, x22",  // Move x22 to output register
+    "=r",          // Output constraint: =r means output to a register
+    false,         // Has side effects: no
+    false,         // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+  
+  return CreateCall(asm_type, asm_func, std::vector<Value*>(), "p7_saved");
 }
 
 CallInst *YuhuBuilder::CreateReadCurrentPC() {
@@ -675,25 +708,33 @@ CallInst* YuhuBuilder::CreateMemset(Value* dst,
                                      Value* value,
                                      Value* len,
                                      Value* align) {
-  // LLVM 20+ uses opaque pointer types, so we reconstruct FunctionType from signature
-  // memset signature: "Cciii" -> "v" (void*, i8, i32, i32, i32 -> void)
-  llvm::FunctionType* func_type = llvm::FunctionType::get(
-    YuhuType::void_type(),
-    std::vector<llvm::Type*>{
-      PointerType::getUnqual(YuhuType::jbyte_type()),
-      YuhuType::jbyte_type(),
-      YuhuType::jint_type(),
-      YuhuType::jint_type(),
-      YuhuType::jint_type()
-    },
-    false);
-  std::vector<Value*> args;
-  args.push_back(dst);
-  args.push_back(value);
-  args.push_back(len);
-  args.push_back(align);
-  args.push_back(LLVMValue::jint_constant(0));
-  return CreateCall(func_type, memset(), args);
+  // Use LLVM's own intrinsic declaration to get the correct signature
+  // memset overloads by {ptr_type, len_type}
+  llvm::Module* mod = YuhuContext::current().module();
+  llvm::Function* memset_func = llvm::Intrinsic::getDeclaration(
+    mod,
+    llvm::Intrinsic::memset,
+    {dst->getType(), YuhuType::jlong_type()});
+  
+  // len must match the intrinsic's len type (i64 on 64-bit)
+  Value* len64 = CreateZExt(len, YuhuType::jlong_type());
+  
+  std::vector<Value*> args = {
+    dst,
+    value,
+    len64,
+    LLVMValue::bit_constant(0)  // isVolatile = false
+  };
+  
+  CallInst* call = CreateCall(memset_func, args);
+  
+  // Pass alignment via parameter attribute on dst (first argument)
+  if (llvm::isa<llvm::ConstantInt>(align)) {
+    unsigned align_value = llvm::cast<llvm::ConstantInt>(align)->getZExtValue();
+    call->addParamAttr(0, Attribute::getWithAlignment(getContext(), llvm::Align(align_value)));
+  }
+  
+  return call;
 }
 
 CallInst* YuhuBuilder::CreateUnimplemented(const char* file, int line) {
