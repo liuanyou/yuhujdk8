@@ -41,6 +41,7 @@ namespace llvm {
     class LLJIT;
   }
 }
+class YuhuBuilder;
 class YuhuContext;
 class YuhuMemoryManager;
 class YuhuEntry;
@@ -172,7 +173,8 @@ class YuhuCompiler : public AbstractCompiler {
   static const char* methodname(const char* klass, const char* method);
   void generate_native_code(YuhuEntry*     entry,
                             llvm::Function* function,
-                            const char*     name);
+                            const char*     name,
+                            YuhuBuilder*    builder);
   void free_queued_methods();
 };
 

@@ -38,6 +38,7 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
+#include <dlfcn.h>
 #include "yuhu/yuhuContext.hpp"
 #include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
@@ -844,14 +845,78 @@ Value* YuhuBuilder::code_buffer_address(int offset) {
     LLVMValue::intptr_constant(offset));
 }
 
+Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
+                                                   const char* name) {
+  // Static field resolution:
+  // At compile time, resolve the field's Method* and offset,
+  // then embed them as constants in IR. Runtime helper directly
+  // reads the value from klass mirror - no CP lookup needed.
+  //
+  // Generated IR pattern:
+  //   %fn = inttoptr i64 <helper_addr> to ptr
+  //   %method = inttoptr i64 <Method*> to ptr
+  //   %oop = call ptr %fn(ptr %method, i32 <field_offset>)
+  
+  llvm::Module* mod = GetInsertBlock()->getModule();
+  llvm::Type* i32_ty = llvm::Type::getInt32Ty(mod->getContext());
+  llvm::Type* ptr_ty = llvm::PointerType::get(mod->getContext(), 0);
+  llvm::Type* i64_ty = llvm::Type::getInt64Ty(mod->getContext());
+  
+  // Get the runtime helper address via dlsym
+  static void* helper_addr = NULL;
+  if (helper_addr == NULL) {
+    helper_addr = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_field");
+    assert(helper_addr != NULL, "yuhu_resolve_static_field must be resolvable via dlsym");
+  }
+  
+  // Embed helper address as inttoptr constant
+  llvm::Value* fn_ptr = CreateIntToPtr(
+    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)helper_addr),
+    ptr_ty);
+  
+  // Resolve the field at compile time to get Klass* and offset
+  // Use function()->target_method() which is the method being compiled
+  ciMethod* current_method = function()->target_method();
+  
+  // Get the field using ciEnv's API (uses GUARDED_VM_ENTRY internally)
+  ciInstanceKlass* accessor = current_method->holder();
+  ciField* field = function()->env()->get_field_by_index(accessor, cp_index);
+  
+  // Get the klass that holds the static field and the field offset
+  ciInstanceKlass* field_holder = field->holder();
+  int field_offset = field->offset();
+  
+  // Determine if this is an object reference field
+  bool is_object_field = !field->type()->is_primitive_type();
+  bool is_volatile = field->is_volatile();
+  
+  // Convert ciInstanceKlass* to Klass*
+  Klass* klass = field_holder->get_Klass();
+  
+  // Embed Klass* as inttoptr constant
+  llvm::Value* klass_ptr = CreateIntToPtr(
+    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
+    ptr_ty);
+  
+  // Create function type: jlong (Klass*, int, bool, bool)
+  llvm::Type* i1_ty = llvm::Type::getInt1Ty(mod->getContext());
+  llvm::FunctionType* func_ty = llvm::FunctionType::get(
+    YuhuType::jlong_type(), {ptr_ty, i32_ty, i1_ty, i1_ty}, false);
+  
+  return CreateCall(func_ty, fn_ptr,
+                    {klass_ptr, 
+                     llvm::ConstantInt::get(i32_ty, field_offset),
+                     llvm::ConstantInt::get(i1_ty, is_object_field ? 1 : 0),
+                     llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
+                    name ? name : "field_result");
+}
+
 Value* YuhuBuilder::CreateInlineOop(jobject object, const char* name) {
-  // LLVM 20+ requires explicit type parameter for CreateLoad
-  return CreateLoad(
-    YuhuType::oop_type(),
-    CreateIntToPtr(
-      code_buffer_address(code_buffer()->inline_oop(object)),
-      PointerType::getUnqual(YuhuType::oop_type())),
-    name);
+  // For ORC JIT: we can't embed absolute oop pointers in IR.
+  // This is a simplified implementation - just return null for now.
+  // TODO: Implement proper oop embedding via code buffer or global variable.
+  return llvm::ConstantPointerNull::get(
+    llvm::PointerType::get(YuhuType::oop_type()->getContext(), 0));
 }
 
 Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name) {

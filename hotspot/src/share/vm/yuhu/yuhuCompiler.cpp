@@ -256,6 +256,8 @@ YuhuCompiler::YuhuCompiler()
   llvm::TargetOptions Options;
   // TODO: Set Options to reserve specific registers if API is available
 
+  // Configure ORC JIT with process symbol resolution
+  // This allows the JIT to find runtime helper functions in libjvm.dylib
   auto JIT = llvm::orc::LLJITBuilder()
     .setJITTargetMachineBuilder(JTMB)
     .create();
@@ -270,6 +272,21 @@ YuhuCompiler::YuhuCompiler()
   
   _jit = std::move(*JIT);
   tty->print_cr("Yuhu: ORC JIT initialized successfully");
+  
+  // Add DynamicLibrarySearchGenerator so ORC JIT can resolve symbols from
+  // the current process (e.g. yuhu_resolve_static_field in libjvm.dylib)
+  auto &MainJD = _jit->getMainJITDylib();
+  auto DLSGOrErr = llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+      _jit->getDataLayout().getGlobalPrefix());
+  if (!DLSGOrErr) {
+    std::string ErrMsg;
+    llvm::handleAllErrors(DLSGOrErr.takeError(), [&](const llvm::ErrorInfoBase &EIB) {
+      ErrMsg = EIB.message();
+    });
+    fatal(err_msg("Failed to create DynamicLibrarySearchGenerator: %s", ErrMsg.c_str()));
+  }
+  MainJD.addGenerator(std::move(*DLSGOrErr));
+  tty->print_cr("Yuhu: DynamicLibrarySearchGenerator added");
   
   // Add normal module to JITDylib
   // Note: ORC JIT uses ThreadSafeModule, which requires ThreadSafeContext
@@ -629,7 +646,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Note: ORC JIT uses default memory management in stage 1
     // MemoryManager state will be available in stage 2 after CodeCache integration
     // Note: Compiler threads are already in WXWrite mode, so no need to manage WX state
-    generate_native_code(entry, function, func_name);
+    generate_native_code(entry, function, func_name, &builder);
 
     address code_start = entry->code_start();
     llvm_code_size = entry->code_limit() - code_start;
@@ -979,7 +996,7 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
     &builder, target, name, arg_types, return_type);
 
   // Generate native code
-  generate_native_code(entry, wrapper->function(), name);
+  generate_native_code(entry, wrapper->function(), name, &builder);
 
   // Return the nmethod for installation in the VM
   return nmethod::new_native_nmethod(target,
@@ -995,7 +1012,10 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
 
 void YuhuCompiler::generate_native_code(YuhuEntry* entry,
                                          Function*   function,
-                                         const char* name) {
+                                         const char* name,
+                                         YuhuBuilder* builder) {
+  // No need to set field table - runtime helper uses CP index directly.
+  
   // Print the LLVM bitcode, if requested
   if (YuhuPrintBitcodeOf != NULL) {
     if (!fnmatch(YuhuPrintBitcodeOf, name, 0)) {
@@ -1356,12 +1376,15 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       auto TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(
         std::make_unique<llvm::LLVMContext>());
       
+      // No need to patch anything - runtime helper will resolve fields dynamically.
+      
       auto TSM = llvm::orc::ThreadSafeModule(
         std::move(module_clone), *TSCtx);
       
       // Add to JITDylib
       auto &JD = jit()->getMainJITDylib();
       tty->print_cr("ORC JIT: Adding module to JITDylib (function: %s)", func_name.c_str());
+
       if (auto Err = jit()->addIRModule(JD, std::move(TSM))) {
         std::string ErrMsg;
         llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
@@ -1370,7 +1393,9 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
         fatal(err_msg("Failed to add IR module for function %s: %s", name, ErrMsg.c_str()));
       }
       tty->print_cr("ORC JIT: Module added successfully");
-      
+
+      // oop resolution already done above (before addIRModule).
+
       // Try lookup again
       Sym = jit()->lookup(func_name);
       if (!Sym) {

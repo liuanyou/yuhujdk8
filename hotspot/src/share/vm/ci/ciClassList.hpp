@@ -88,6 +88,7 @@ friend class ciField;                  \
 friend class ciConstant;               \
 friend class ciFlags;                  \
 friend class ciExceptionHandler;       \
+friend class YuhuBuilder;              \
 friend class ciCallProfile;            \
 friend class ciSignature;              \
 friend class ciBytecodeStream;         \

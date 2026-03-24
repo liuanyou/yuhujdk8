@@ -1053,33 +1053,69 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
     check_null(obj_value);
     object = obj_value->generic_value();
   }
+  
+  // Check if this is a constant static field
   if (is_get && field->is_constant() && field->is_static()) {
     YuhuConstant *constant = YuhuConstant::for_field(iter());
     if (constant->is_loaded())
       value = constant->value(builder());
   }
+  
+  // Perform the actual field access
   if (!is_get || value == NULL) {
     if (!is_field) {
-      object = builder()->CreateInlineOop(field->holder()->java_mirror());
-    }
-    BasicType   basic_type = field->type()->basic_type();
-    llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
-    llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
-    llvm::Type *type = field_type;
-    if (field->is_volatile()) {
-      if (field_type == YuhuType::jfloat_type()) {
-        type = YuhuType::jint_type();
-      } else if (field_type == YuhuType::jdouble_type()) {
-        type = YuhuType::jlong_type();
+      // === GETSTATIC: Call runtime helper to get static field value ===
+      int cp_index = iter()->get_field_index();
+      Value* field_result = builder()->CreateInlineOopForStaticField(cp_index);
+      
+      // yuhu_resolve_static_field returns jlong (64-bit container)
+      // We need to convert it to the actual field type
+      BasicType basic_type = field->type()->basic_type();
+      llvm::Type* field_type = YuhuType::to_arrayType(basic_type);
+      
+      Value* field_value;
+      if (basic_type == T_OBJECT || basic_type == T_ARRAY) {
+        // For static field object references, yuhu_resolve_static_field returns
+        // the decoded oop pointer directly (not compressed), so use oop_type()
+        field_value = builder()->CreateIntToPtr(field_result, YuhuType::oop_type());
+      } else if (basic_type == T_LONG || basic_type == T_DOUBLE) {
+        // Already jlong/jdouble (64-bit), may need bitcast for double
+        if (basic_type == T_DOUBLE) {
+          field_value = builder()->CreateBitCast(field_result, field_type);
+        } else {
+          field_value = field_result;
+        }
+      } else {
+        // Truncate jlong to smaller types (int, short, byte, char, boolean, float)
+        if (basic_type == T_FLOAT) {
+          field_value = builder()->CreateBitCast(
+            builder()->CreateTrunc(field_result, YuhuType::jint_type()), 
+            field_type);
+        } else {
+          field_value = builder()->CreateTrunc(field_result, field_type);
+        }
       }
-    }
-    Value *addr = builder()->CreateAddressOfStructEntry(
-      object, in_ByteSize(field->offset_in_bytes()),
-      PointerType::getUnqual(type),
-      "addr");
+      
+      value = YuhuValue::create_generic(field->type(), field_value, false);
+    } else {
+      // === GETFIELD: Access instance field from object ===
+      BasicType   basic_type = field->type()->basic_type();
+      llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
+      llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
+      llvm::Type *type = field_type;
+      if (field->is_volatile()) {
+        if (field_type == YuhuType::jfloat_type()) {
+          type = YuhuType::jint_type();
+        } else if (field_type == YuhuType::jdouble_type()) {
+          type = YuhuType::jlong_type();
+        }
+      }
+      Value *addr = builder()->CreateAddressOfStructEntry(
+        object, in_ByteSize(field->offset_in_bytes()),
+        PointerType::getUnqual(type),
+        "addr");
 
-    // Do the access
-    if (is_get) {
+      // Do the load
       Value* field_value;
       if (field->is_volatile()) {
         field_value = builder()->CreateAtomicLoad(addr);
@@ -1109,14 +1145,32 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
 
       value = YuhuValue::create_generic(field->type(), field_value, false);
     }
-    else {
+    
+    // === PUTFIELD: Store value into instance field ===
+    if (!is_get) {
       Value *field_value = value->generic_value();
-
+      BasicType   basic_type = field->type()->basic_type();
+      llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
+      llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
+      
       if (field_type != stack_type) {
         field_value = builder()->CreateIntCast(
           field_value, field_type, basic_type != T_CHAR);
       }
 
+      llvm::Type *type = field_type;
+      if (field->is_volatile()) {
+        if (field_type == YuhuType::jfloat_type()) {
+          type = YuhuType::jint_type();
+        } else if (field_type == YuhuType::jdouble_type()) {
+          type = YuhuType::jlong_type();
+        }
+      }
+      Value *addr = builder()->CreateAddressOfStructEntry(
+        object, in_ByteSize(field->offset_in_bytes()),
+        PointerType::getUnqual(type),
+        "addr");
+      
       if (field->is_volatile()) {
         field_value = builder()->CreateBitCast(field_value, type);
         builder()->CreateAtomicStore(field_value, addr);

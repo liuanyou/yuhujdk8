@@ -31,6 +31,9 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 
+// Runtime helper functions (defined in yuhuRuntime.cpp)
+extern "C" jlong yuhu_resolve_static_field(Klass* klass, int field_offset, bool is_object_field, bool is_volatile);
+
 class YuhuRuntime : public AllStatic {
   // VM calls
  public:

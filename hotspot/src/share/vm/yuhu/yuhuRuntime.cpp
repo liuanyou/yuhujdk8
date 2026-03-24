@@ -34,6 +34,10 @@
 #endif
 // Note: AArch64 uses standard stack management, no ZeroStack needed
 
+// Define _JNI_IMPLEMENTATION_ to get JNIEXPORT visibility (not JNIIMPORT)
+#define _JNI_IMPLEMENTATION_
+#include "prims/jni.h"
+
 using namespace llvm;
 
 JRT_ENTRY(int, YuhuRuntime::find_exception_handler(JavaThread* thread,
@@ -234,4 +238,42 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
                 (new_sp < min_stack) ? "YES - OVERFLOW!" : "NO - OK",
                 (unsigned long)new_sp, (unsigned long)min_stack);
   tty->print_cr("======================================");
+}
+
+// ============================================================================
+// Runtime field resolution for ORC JIT (Activity 055)
+// ============================================================================
+// Uses Constant Pool Cache approach: embed CP index in IR,
+// runtime helper resolves field via the current method's constant pool.
+// No global state or thread-local storage needed.
+
+// Resolve static field by Klass* and field offset
+// Called from LLVM IR generated code with embedded Klass* pointer
+// Returns the field value directly (oop for references, jlong for primitives)
+JNIEXPORT jlong JNICALL yuhu_resolve_static_field(Klass* klass, int field_offset, bool is_object_field, bool is_volatile) {
+  JavaThread* thread = JavaThread::current();
+  
+  // Transition from _thread_in_Java to _thread_in_vm for VM operations
+  ThreadInVMfromJava __tiv(thread);
+  
+  // Get the klass mirror (java mirror)
+  oop mirror = klass->java_mirror();
+  
+  // Read the field value based on its type and return as jlong (64-bit container)
+  if (is_object_field) {
+    // For object references: return the oop as jlong
+    if (is_volatile) {
+      return (jlong)(uintptr_t)mirror->obj_field_acquire(field_offset);
+    } else {
+      return (jlong)(uintptr_t)mirror->obj_field(field_offset);
+    }
+  } else {
+    // For primitive types: read the value and return as jlong
+    // The caller will bitcast/truncate to the correct type
+    if (is_volatile) {
+      return mirror->long_field_acquire(field_offset);
+    } else {
+      return mirror->long_field(field_offset);
+    }
+  }
 }

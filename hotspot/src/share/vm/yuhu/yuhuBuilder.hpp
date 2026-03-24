@@ -231,6 +231,10 @@ class YuhuBuilder : public llvm::IRBuilder<> {
  public:
   llvm::Value* code_buffer_address(int offset);
   llvm::Value* CreateInlineOop(jobject object, const char* name = "");
+
+  // Static field access using CP index (like C1)
+  llvm::Value* CreateInlineOopForStaticField(int cp_index,
+                                              const char* name = "oop");
   llvm::Value* CreateInlineOop(ciObject* object, const char* name = "") {
     return CreateInlineOop(object->constant_encoding(), name);
   }

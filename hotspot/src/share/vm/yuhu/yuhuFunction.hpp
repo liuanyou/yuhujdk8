@@ -103,6 +103,14 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::Function* function() const {
     return _function;
   }
+  // Expose target() for YuhuBuilder to access the method being compiled
+  ciMethod* target_method() const {
+    return target();
+  }
+  // Expose env() for YuhuBuilder to access ciEnv
+  ciEnv* env() const {
+    return YuhuTargetInvariants::env();
+  }
   int block_count() const {
     return flow()->block_count();
   }
