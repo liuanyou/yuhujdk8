@@ -46,7 +46,7 @@ class YuhuCodeBuffer : public StackObj {
   llvm::Value*        _base_pc;
   YuhuOffsetMapper    _offset_mapper;
 
- private:
+ public:
   YuhuMacroAssembler& masm() const {
     return _masm;
   }
@@ -138,15 +138,21 @@ class YuhuCodeBuffer : public StackObj {
   }
 
   // Inline a block of non-oop data into the buffer and return its offset.
+  // Data is placed in consts section for better separation from instructions.
  public:
   int inline_data(void *src, size_t size) const {
-    masm().align(BytesPerWord);
+    // Switch to consts section
+    address const_addr = masm().start_a_const(size, BytesPerWord);
     int offset = masm().offset();
-    void *dst = masm().pc();
-    // advance() is implemented by setting the end of the code section
-    masm().code_section()->set_end(masm().code_section()->end() + size);
-    tty->print_cr("Yuhu: after set_end: before=%d, after=%d, size=%d", offset, masm().offset(), size);
-    memcpy(dst, src, size);
+    
+    // Copy data to consts section
+    memcpy(const_addr, src, size);
+
+    masm().code_section()->set_end(const_addr + size);
+    
+    // Switch back to insts section
+    masm().end_a_const();
+    
     return offset;
   }
 };

@@ -99,10 +99,10 @@ void YuhuNativeWrapper::initialize(const char *name) {
 
   // For static methods, the second argument is the class
   if (is_static()) {
+    oop mirror_oop = target()->method_holder()->java_mirror();
+    ciObject* mirror_ci = CURRENT_ENV->get_object(mirror_oop);
     builder()->CreateStore(
-      builder()->CreateInlineOop(
-        JNIHandles::make_local(
-          target()->method_holder()->java_mirror())),
+      builder()->CreateInlineOop(mirror_ci),
       oop_tmp_slot());
 
     param_types.push_back(box_type);

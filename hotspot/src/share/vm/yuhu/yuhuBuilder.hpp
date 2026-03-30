@@ -230,14 +230,21 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Helpers for accessing the code buffer.
  public:
   llvm::Value* code_buffer_address(int offset);
-  llvm::Value* CreateInlineOop(jobject object, const char* name = "");
+  
+  // Pending oop management for deferred oop_index allocation
+  // See: Defer oop_index allocation to relocation phase using pending-oop registry
+ private:
+  GrowableArray<jobject>* _pending_oops;  // Indexed by oop_id
+  int _next_oop_id;                       // Next unique oop_id to assign
+  
+ public:
+  llvm::Value* CreateInlineOop(ciObject* object, const char* name = "");
+
+  public:
 
   // Static field access using CP index (like C1)
   llvm::Value* CreateInlineOopForStaticField(int cp_index,
                                               const char* name = "oop");
-  llvm::Value* CreateInlineOop(ciObject* object, const char* name = "") {
-    return CreateInlineOop(object->constant_encoding(), name);
-  }
 
   llvm::Value* CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name = "");
   llvm::Value* CreateInlineMetadata(ciMetadata* metadata, llvm::PointerType* type, const char* name = "") {
@@ -266,6 +273,9 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Prologue/Epilogue marker fixup support
  public:
   static void fixup_prologue_epilogue_markers(address code_start, size_t code_size);
+  
+  // Oop marker scanning and relocation generation
+  void scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size);
 
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.

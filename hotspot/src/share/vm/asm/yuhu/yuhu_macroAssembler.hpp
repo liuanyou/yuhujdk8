@@ -239,6 +239,32 @@ public:
         emit_address((address) md);
     }
 
+    // Consts section support - similar to AbstractAssembler::start_a_const/end_a_const
+    // Switch to consts section to embed data constants
+    address start_a_const(int required_space, int required_align = BytesPerWord) {
+      CodeBuffer*  cb = code();
+      CodeSection* cs = cb->consts();
+      assert(_code_section == cb->insts() || _code_section == cb->stubs(), "not in insts/stubs?");
+      address end = cs->end();
+      int pad = -(intptr_t)end & (required_align-1);
+      if (cs->maybe_expand_to_ensure_remaining(pad + required_space)) {
+        if (cb->blob() == NULL)  return NULL;
+        end = cs->end();  // refresh pointer
+      }
+      if (pad > 0) {
+        while (--pad >= 0) { *end++ = 0; }
+        cs->set_end(end);
+      }
+      set_code_section(cs);
+      return end;
+    }
+
+    // Switch back to insts section after embedding constants
+    void end_a_const() {
+      assert(_code_section == code()->consts(), "not in consts?");
+      set_code_section(code()->insts());
+    }
+
     address write_inst(uint32_t value);
 
     address current_pc();

@@ -52,6 +52,7 @@
 class ciObject : public ciBaseObject {
   CI_PACKAGE_ACCESS
   friend class ciEnv;
+  friend class YuhuBuilder;
 
 private:
   // A JNI handle referring to an oop in the VM.  This

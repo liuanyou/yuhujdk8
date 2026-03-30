@@ -46,13 +46,17 @@
 #include "utilities/debug.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
+#include "classfile/javaClasses.hpp"
+#include "oops/typeArrayOop.hpp"
 
 using namespace llvm;
 
 YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
   : IRBuilder<>(YuhuContext::current()),
     _code_buffer(code_buffer),
-    _function(function) {
+    _function(function),
+    _pending_oops(new GrowableArray<jobject>(100)),
+    _next_oop_id(0) {
 }
 
 // Helpers for accessing structures
@@ -911,12 +915,77 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
                     name ? name : "field_result");
 }
 
-Value* YuhuBuilder::CreateInlineOop(jobject object, const char* name) {
-  // For ORC JIT: we can't embed absolute oop pointers in IR.
-  // This is a simplified implementation - just return null for now.
-  // TODO: Implement proper oop embedding via code buffer or global variable.
-  return llvm::ConstantPointerNull::get(
-    llvm::PointerType::get(YuhuType::oop_type()->getContext(), 0));
+Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
+  if (object == NULL || object->is_null_object()) {
+    return llvm::ConstantPointerNull::get(
+      llvm::PointerType::get(YuhuType::oop_type()->getContext(), 0));
+  }
+
+  Module* mod = YuhuContext::current().module();
+  LLVMContext& ctx = mod->getContext();
+  llvm::Type* ptr_ty = llvm::PointerType::get(ctx, 0);
+  llvm::Type* i64_ty = llvm::Type::getInt64Ty(ctx);
+  llvm::Type* i32_ty = llvm::Type::getInt32Ty(ctx);
+  llvm::Type* i16_ty = llvm::Type::getInt16Ty(ctx);
+
+  // Non-String oop (e.g. klass mirror): lives in metaspace, not moved by GC
+  oop real_oop = object->get_oop();
+  if (real_oop != NULL && real_oop->klass() != SystemDictionary::String_klass()) {
+    uint64_t oop_addr = (uint64_t)(uintptr_t)real_oop;
+    return CreateIntToPtr(llvm::ConstantInt::get(i64_ty, oop_addr), ptr_ty);
+  }
+
+  // String oop: allocate unique oop_id and generate marker for deferred oop_index allocation
+  // Allocate jobject and assign unique oop_id (like C1 does, but deferred to relocation phase)
+  jobject jstring = JNIHandles::make_local(real_oop);
+  int oop_id = _next_oop_id++;
+  
+  // Record in pending_oops array indexed by oop_id
+  while (_pending_oops->length() <= oop_id) {
+    _pending_oops->append(NULL);
+  }
+  _pending_oops->at_put(oop_id, jstring);
+  
+  // Generate marker + placeholder using inline assembly
+  // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w20, #oop_id; nop; nop;
+  //          mov x0, #low16; movk x0, #mid-low16, lsl #16; movk x0, #mid-high16, lsl #32
+  // Total: 8 instructions (3 marker + 2 nops + 3 placeholder) - C1 compatible format
+  // Note: High 16 bits must be 0 (not 0xDEAF) because patch_oop only patches low 48 bits
+  // The oop_id in marker will be used to look up the real jobject during relocation phase
+  char asm_string[512];
+  uint64_t temp_placeholder = oop_id & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
+  snprintf(asm_string, sizeof(asm_string),
+           "mov w19, #0xCAFE\n"
+           "movk w19, #0xBABE, lsl #16\n"
+           "mov w20, #%d\n"                    // ← oop_id (not oop_index!)
+           "nop\n"
+           "nop\n"
+           "mov ${0:x}, #0x%04lx\n"
+           "movk ${0:x}, #0x%04lx, lsl #16\n"
+           "movk ${0:x}, #0x%04lx, lsl #32",
+           oop_id & 0xFFFF,  // oop_id for marker
+           (temp_placeholder >> 0) & 0xFFFF,   // low 16 bits
+           (temp_placeholder >> 16) & 0xFFFF,  // mid-low 16 bits
+           (temp_placeholder >> 32) & 0xFFFF); // mid-high 16 bits
+  
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getInt64Ty(ctx), {}, false);
+  
+  llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
+    asm_type,
+    asm_string,
+    "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+    true,            // Has side effects: yes (to prevent optimization)
+    false,           // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+  
+  // Emit the marker + placeholder assembly, return the pointer value
+  llvm::Value* str_oop = CreateIntToPtr(
+    CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
+    ptr_ty);
+  
+  return str_oop;
 }
 
 Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name) {
@@ -1342,6 +1411,143 @@ void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t cod
 //    tty->print_cr("Yuhu: ERROR - Failed to restore code segment protection!");
 //  }
 
+  tty->flush();
+}
+
+void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size) {
+  if (code_start == NULL || code_size == 0) {
+    tty->print_cr("Yuhu: scan_for_oop_markers_and_generate_relocation: code_start is NULL or code_size is 0, skipping");
+    return;
+  }
+  
+  tty->print_cr("Yuhu: Scanning for oop markers and generating relocation records...");
+  tty->flush();
+  
+  // Helper function to check if instruction sequence matches marker pattern
+  auto is_marker_pattern = [](uint32_t* instr) -> bool {
+    // Check instruction encoding (little-endian):
+    // [0] mov w19, #0xCAFE       → 0x52995FD3
+    // [1] movk w19, #0xBABE, lsl #16 → 0x72B757D3
+    // [2] mov w20, #imm16        → 0x528xxxxxB4 (bits 5-20 contain imm16)
+    // [3] nop                    → 0xD503201F
+    // [4] nop                    → 0xD503201F
+    
+    if (instr[0] == 0x52995FD3 &&  // mov w19, #0xCAFE
+        instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
+        (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop (allow low 4 bits variation)
+        (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
+      return true;
+    }
+    return false;
+  };
+  
+  // Helper function to extract oop_id from marker
+  auto extract_oop_id = [](uint32_t* instr) -> int {
+    // Extract imm16 from: mov w20, #imm16
+    // Encoding: 0x528xxxxxB4, where bits 5-20 contain imm16
+    uint32_t mov_instr = instr[2];
+    uint16_t imm16 = (mov_instr >> 5) & 0xFFFF;
+    return (int)imm16;
+  };
+  
+  // Helper function to check if 3 instructions form a mov/movk sequence
+  auto is_mov_movk_sequence = [](uint32_t* instr) -> bool {
+    // Check for mov/movk sequence (C1 compatible format):
+    // [0] mov xN, #imm16         → 0xD28xxxxx (bit 31-23 = 0b110100101)
+    // [1] movk xN, #imm16, lsl #16 → 0xF2Axxxxx (bit 31-23 = 0b1111001010)
+    // [2] movk xN, #imm16, lsl #32 → 0xF2Cxxxxx (bit 31-23 = 0b1111001011)
+    
+    // All must be AArch64 mov/movk immediate instructions
+    if ((instr[0] & 0xFF800000) != 0xD2800000 ||  // mov xN, #imm16
+        (instr[1] & 0xFFE00000) != 0xF2A00000 ||  // movk xN, #imm16, lsl #16
+        (instr[2] & 0xFFE00000) != 0xF2C00000) {  // movk xN, #imm16, lsl #32
+      return false;
+    }
+    
+    // Verify all 3 instructions use the same destination register
+    int rd0 = instr[0] & 0x1F;  // bits 4-0
+    int rd1 = instr[1] & 0x1F;
+    int rd2 = instr[2] & 0x1F;
+    
+    return (rd0 == rd1 && rd1 == rd2);
+  };
+  
+  // Helper function to extract 64-bit value from mov/movk sequence
+  auto extract_from_movk_sequence = [](uint32_t* instr) -> uint64_t {
+    uint16_t imm0 = (instr[0] >> 5) & 0xFFFF;   // bits [15:0]
+    uint16_t imm1 = (instr[1] >> 5) & 0xFFFF;   // bits [31:16]
+    uint16_t imm2 = (instr[2] >> 5) & 0xFFFF;   // bits [47:32]
+    
+    return ((uint64_t)imm2 << 32) | ((uint64_t)imm1 << 16) | (uint64_t)imm0;
+  };
+  
+  tty->print_cr("Yuhu: Scanning %zu bytes for oop markers...", code_size);
+  int marker_count = 0;
+  
+  // Scan machine code for marker pattern
+  for (size_t i = 0; i < code_size / 4; i++) {
+    uint32_t* instr = (uint32_t*)(code_start + i * 4);
+    
+    if (is_marker_pattern(instr)) {
+      // Extract oop_id from marker
+      int oop_id = extract_oop_id(instr);
+      tty->print_cr("  Found marker at offset %zu: oop_id=%d", i * 4, oop_id);
+      
+      // Look up the real jobject from pending_oops using oop_id
+      assert(oop_id >= 0 && oop_id < _pending_oops->length(), "oop_id out of range");
+      jobject jstring = _pending_oops->at(oop_id);
+      assert(jstring != NULL, "jstring must not be NULL");
+      
+      // Allocate real oop_index from the final OopRecorder (like C1 does)
+      int oop_index = cb->oop_recorder()->allocate_oop_index(jstring);
+      tty->print_cr("    Allocated real oop_index=%d from final OopRecorder", oop_index);
+      
+      // Placeholder is immediately after marker (5 instructions = 20 bytes)
+      // Check if the next 3 instructions are mov/movk sequence
+      uint32_t* placeholder_instrs = (uint32_t*)(code_start + (i + 5) * 4);
+      
+      if (is_mov_movk_sequence(placeholder_instrs)) {
+        uint64_t full_placeholder = extract_from_movk_sequence(placeholder_instrs);
+        int placeholder_oop_id = (int)(full_placeholder & 0xFFFFFFFFFFFFULL);
+        
+        tty->print_cr("    Found mov/movk sequence at offset %zu: oop_id=%d, value=0x%lx", 
+                     (i + 5) * 4, placeholder_oop_id, full_placeholder);
+        
+        if (placeholder_oop_id == oop_id) {
+          // Update marker: change w20 from oop_id to oop_index
+          uint32_t new_mov_w20 = 0x52800000 | ((oop_index & 0xFFFF) << 5) | (instr[2] & 0x1F);
+          instr[2] = new_mov_w20;
+          tty->print_cr("    Updated marker w20: oop_id=%d -> oop_index=%d", oop_id, oop_index);
+          
+          // Update placeholder with real oop_index (high 16 bits = 0)
+          uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
+          uint16_t imm0 = (real_placeholder >> 0) & 0xFFFF;
+          uint16_t imm1 = (real_placeholder >> 16) & 0xFFFF;
+          uint16_t imm2 = (real_placeholder >> 32) & 0xFFFF;
+          
+          // Patch the 3 mov/movk instructions
+          placeholder_instrs[0] = 0xD2800000 | (imm0 << 5) | (placeholder_instrs[0] & 0x1F);           // mov xN, #low16
+          placeholder_instrs[1] = 0xF2A00000 | (imm1 << 5) | (placeholder_instrs[1] & 0x1F);           // movk xN, #mid-low, lsl #16
+          placeholder_instrs[2] = 0xF2C00000 | (imm2 << 5) | (placeholder_instrs[2] & 0x1F);           // movk xN, #mid-high, lsl #32
+          tty->print_cr("    Updated placeholder to oop_index=%d", oop_index);
+          
+          // Generate HotSpot relocation record using CodeBuffer::relocate
+          RelocationHolder rspec = oop_Relocation::spec(oop_index);
+          cb->relocate((address)placeholder_instrs, rspec);
+          marker_count++;
+          tty->print_cr("    Generated oop_Relocation for index %d", oop_index);
+        } else {
+          tty->print_cr("    WARNING: placeholder oop_id mismatch! marker=%d, placeholder=%d", 
+                       oop_id, placeholder_oop_id);
+        }
+      } else {
+        tty->print_cr("    WARNING: No valid mov/movk sequence found after marker");
+      }
+    }
+  }
+  
+  tty->print_cr("Yuhu: Found %d markers and generated %d relocation records", 
+               marker_count, marker_count);
   tty->flush();
 }
 

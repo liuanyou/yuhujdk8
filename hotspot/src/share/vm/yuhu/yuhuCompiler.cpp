@@ -738,7 +738,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
     // Create CodeBuffer that manages its own BufferBlob internally
-    CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, 0);
+    CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size, (int)(combined_size * 0.15));
     if (combined_cb.blob() == NULL) {
       fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
     }
@@ -784,6 +784,13 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // This is needed to restore SP from x29 before returning from the function.
       // See doc/yuhu/activities/039_epilogue_sp_restoration.md for details.
       builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
+      
+      // Scan for oop markers and generate relocation records
+      // This must be done AFTER fixup_prologue_epilogue_markers because both operations
+      // scan the machine code and modify it. The oop marker scanning generates HotSpot
+      // relocation records that will be processed during register_method.
+      combined_cb.initialize_oop_recorder(env->oop_recorder());
+      builder.scan_for_oop_markers_and_generate_relocation(&combined_cb, combined_base, combined_size);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
@@ -800,7 +807,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Generate deopt handler (always needed)
     generate_deopt_handler(combined_cb, deopt_handler_size);
 
-    combined_cb.initialize_oop_recorder(env->oop_recorder());
     // The label should already be bound to the jump instruction location.
     // We need to patch the jump instruction to point to llvm_entry.
     // Since we used write_inst_b(*llvm_label), the label should be bound when we call pin_label.
