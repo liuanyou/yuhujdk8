@@ -277,6 +277,11 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Oop marker scanning and relocation generation
   void scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size);
 
+  // Callee-saved register preservation across Java method calls
+  public:
+  void CreateSaveCalleeSavedRegisters();  // Save x19, x20, x23, x25, x27 to [sp, #80]
+  void CreateRestoreCalleeSavedRegisters();  // Restore from [sp, #80]
+
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.
   // XXX these are hacky and should be removed.

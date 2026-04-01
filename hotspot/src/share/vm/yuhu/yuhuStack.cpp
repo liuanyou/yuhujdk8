@@ -48,14 +48,14 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   int header_words  = yuhu_frame_header_words;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
-  int frame_words   = header_words + monitor_words + stack_words;
+  int frame_words   = header_words + monitor_words + stack_words + yuhu_callee_saved_save_area + yuhu_llvm_spill_slots;
 
   // Reserve space for ALL callee-saved registers (x19-x28 = 10 regs = 80 bytes)
   // This is the MAXIMUM LLVM could possibly need for register spills.
   // Because when llvm spills registers, it always assumes it is manipulating stack top.
   // But obviously stack top is also yuhu frame area. Creating these spill slots, it
   // prevents spills from corrupting Yuhu frame.
-  _extended_frame_size = frame_words + locals_words + yuhu_llvm_spill_slots;
+  _extended_frame_size = frame_words + locals_words;
 
   // For AArch64, calculate the new stack pointer
   // Get actual stack pointer (SP register x31) using read_register intrinsic
@@ -113,7 +113,7 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
     "frame");
   int offset = 0;
 
-  offset += yuhu_llvm_spill_slots;
+  offset += yuhu_llvm_spill_slots + yuhu_callee_saved_save_area;
 
   // Expression stack
   _stack_slots_offset = offset;

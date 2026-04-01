@@ -1621,3 +1621,38 @@ Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
     return CreatePtrToInt(oop, YuhuType::intptr_type());
   }
 }
+
+// Callee-saved register preservation across Java method calls
+// Save area is at [sp, #80] (right after LLVM spill slots, 10 words = 80 bytes)
+// We save: x19, x20, x23, x25, x27 (5 registers = 40 bytes) + 8 bytes padding
+// Total: 6 words = 48 bytes, maintaining 16-byte SP alignment
+
+void YuhuBuilder::CreateSaveCalleeSavedRegisters() {
+  llvm::LLVMContext& ctx = getContext();
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getVoidTy(ctx), {}, false);
+  
+  llvm::InlineAsm* save_asm = llvm::InlineAsm::get(
+    asm_type,
+    "stp x19, x20, [sp, #80]\n\t"
+    "stp x23, x25, [sp, #96]\n\t"
+    "str x27, [sp, #112]",
+    "~{memory}", true, false, llvm::InlineAsm::AD_ATT);
+  
+  CreateCall(asm_type, save_asm, {});
+}
+
+void YuhuBuilder::CreateRestoreCalleeSavedRegisters() {
+  llvm::LLVMContext& ctx = getContext();
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getVoidTy(ctx), {}, false);
+  
+  llvm::InlineAsm* restore_asm = llvm::InlineAsm::get(
+    asm_type,
+    "ldr x27, [sp, #112]\n\t"
+    "ldp x23, x25, [sp, #96]\n\t"
+    "ldp x19, x20, [sp, #80]",
+    "~{memory}", true, false, llvm::InlineAsm::AD_ATT);
+  
+  CreateCall(asm_type, restore_asm, {});
+}

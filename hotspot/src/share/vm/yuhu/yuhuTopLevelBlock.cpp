@@ -1573,6 +1573,9 @@ void YuhuTopLevelBlock::do_call() {
   // This creates an OopMap at the call site
   decache_for_Java_call(call_method);
 
+  // Save callee-saved registers that Yuhu uses but interpreter may corrupt
+  builder()->CreateSaveCalleeSavedRegisters();
+
   // Cast from_compiled_entry to a function pointer matching the callee's signature
   // We need to construct the callee's FunctionType based on its Java signature
   std::vector<llvm::Type*> param_types;
@@ -1614,6 +1617,9 @@ void YuhuTopLevelBlock::do_call() {
   // Note: decache_for_Java_call() was already called above (line 1566)
   Value* call_result = builder()->CreateCall(
     compiled_ftype, compiled_entry, call_args);
+
+  // Restore callee-saved registers from save area at [sp, #80]
+  builder()->CreateRestoreCalleeSavedRegisters();
 
   // NOTE: Unlike Shark, we use the correct function return type instead of jint.
   // Shark uses a special entry point that returns jint (deoptimization count),

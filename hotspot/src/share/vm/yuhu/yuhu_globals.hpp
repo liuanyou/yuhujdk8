@@ -72,6 +72,12 @@ const int yuhu_frame_header_words = 6;  // Frame header size in words
 // Both yuhuFunction.cpp (alloca) and yuhuStack.cpp (frame size) must use this value.
 const int yuhu_llvm_spill_slots = 10;  // 80 bytes - absolute maximum for AArch64
 
+// Callee-saved register save area (AArch64)
+// Reserve 6 words (48 bytes) right after LLVM spill slots for saving callee-saved registers
+// across Java method calls. Location: [sp, #80] (fixed offset after 80-byte spill area).
+// Saves: x19, x20, x23, x25, x27 (5 regs = 40 bytes) + 8 bytes padding for 16-byte alignment.
+const int yuhu_callee_saved_save_area = 6;  // 48 bytes
+
 YUHU_FLAGS(DECLARE_DEVELOPER_FLAG, DECLARE_PD_DEVELOPER_FLAG, DECLARE_PRODUCT_FLAG, DECLARE_PD_PRODUCT_FLAG, DECLARE_DIAGNOSTIC_FLAG, DECLARE_NOTPRODUCT_FLAG)
 
 #endif // SHARE_VM_YUHU_YUHU_GLOBALS_HPP
