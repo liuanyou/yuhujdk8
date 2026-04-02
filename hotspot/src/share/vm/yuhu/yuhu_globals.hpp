@@ -62,6 +62,12 @@
                                                                               \
   develop(ccstr, YuhuVerifyFunction, NULL,                                   \
           "Runs LLVM verify over LLVM IR")                                    \
+                                                                              \
+  diagnostic(bool, YuhuDumpIRToFile, false,                                   \
+          "Dump LLVM IR to /tmp/yuhu_ir_*.ll files for debugging")            \
+                                                                              \
+  diagnostic(bool, YuhuTraceOsrCompilation, false,                            \
+          "Trace osr compilation")                                            \
 
 // Yuhu frame layout constants
 const int yuhu_frame_header_words = 6;  // Frame header size in words

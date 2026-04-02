@@ -197,13 +197,16 @@ develop(bool, YuhuTraceBytecodes, false, ...)            // Trace bytecode compi
 diagnostic(bool, YuhuTraceInstalls, false, ...)          // Trace method installation
 diagnostic(bool, YuhuPerformanceWarnings, false, ...)    // Performance warnings
 develop(ccstr, YuhuVerifyFunction, NULL, ...)            // Verify specific function
+
+// New flag (added 2026-03-19)
+diagnostic(bool, YuhuDumpIRToFile, false, ...)           // Dump IR to /tmp/yuhu_ir_*.ll files
 ```
 
 **Gaps Identified**:
-1. No flag for JIT symbol lookup tracing
-2. No flag for frame layout tracing
-3. No flag for offset mapping tracing
-4. `YuhuPrintBitcodeOf` not consistently used (line 632 bypasses it)
+1. ~~No flag for JIT symbol lookup tracing~~ **Partially addressed**: Can use existing flags for targeted debugging
+2. ~~No flag for frame layout tracing~~ **Future work**: Add `YuhuTraceFrameLayout` if needed
+3. ~~No flag for offset mapping tracing~~ **Future work**: Add `YuhuTraceOffsetMapping` if needed
+4. ✅ **Fixed**: `YuhuDumpIRToFile` added to control IR file output (previously unconditional)
 
 ---
 
@@ -222,10 +225,40 @@ Remove these unconditionally executing debug statements:
 
 **Impact**: Reduces ~40+ lines of debug output to ~5 critical error messages
 
-### Phase 2: Enhanced Flag Control (Optional Future Work)
+### Phase 2: Enhanced Flag Control (Completed 2026-03-19)
 
-Add new diagnostic flags:
+**Implemented**: Added `YuhuDumpIRToFile` flag to control IR file output
 
+```cpp
+diagnostic(bool, YuhuDumpIRToFile, false, ...)
+  "Dump LLVM IR to /tmp/yuhu_ir_*.ll files for debugging"
+```
+
+**Location**: `hotspot/src/share/vm/yuhu/yuhu_globals.hpp` (lines 63-64)
+**Usage**: Controls IR file dumping in `yuhuCompiler.cpp` (lines 1185-1215)
+**Default**: `false` (no files dumped)
+**Enable**: `-XX:+UnlockDiagnosticVMOptions -XX:YuhuDumpIRToFile=true`
+
+**Before** (unconditional file output on every compilation):
+```cpp
+// Output IR to file for analysis (before verification)
+std::string ir_filename = std::string("/tmp/yuhu_ir_") + std::string(name) + ".ll";
+llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
+// ... always writes file, filling /tmp with .ll files ...
+tty->print_cr("Yuhu: IR written to %s ...", ir_filename.c_str());
+```
+
+**After** (flag-controlled):
+```cpp
+if (YuhuDumpIRToFile) {
+  std::string ir_filename = std::string("/tmp/yuhu_ir_") + std::string(name) + ".ll";
+  llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
+  // ... only writes file when explicitly requested ...
+  tty->print_cr("Yuhu: IR written to %s ...", ir_filename.c_str());
+}
+```
+
+**Future Work** (optional enhancements):
 ```cpp
 diagnostic(bool, YuhuTraceJITLookup, false, ...)         
   "Trace JIT symbol lookup and module loading"
@@ -267,7 +300,7 @@ java -XX:+UnlockDiagnosticVMOptions \
 5. ✅ Simplify lines 1245-1251 (keep only failures)
 
 ### Medium Priority (Consider Later)
-6. Add new diagnostic flags from Phase 2
+6. ✅ **Completed**: Added `YuhuDumpIRToFile` flag for IR file control
 7. Wrap remaining conditional diagnostics with appropriate flags
 8. Document all flags in user-facing documentation
 
@@ -279,13 +312,13 @@ java -XX:+UnlockDiagnosticVMOptions \
 
 ## Expected Benefits
 
-### After Phase 1 Implementation:
+### After Phase 1 Implementation (Completed):
 
-**Before**: Typical compilation produces 50-100 lines of output
+**Before**: Typical compilation produces 50-100 lines of output + IR file in /tmp
 ```
-Yuhu: Setting DataLayout: e-m:e-p:64:64-i64:64-i128:128-n32:64-S128
-Yuhu: Normal module DataLayout verified: e-m:e-p:64:64-i64:64-i128:128-n32:64-S128
-Yuhu: Native module DataLayout verified: e-m:e-p:64:64-i64:64-i128:128-n32:64-S128
+Yuhu: Setting DataLayout: e-m:e-p:64:64-i64:64-i128-n32:64-S128
+Yuhu: Normal module DataLayout verified: e-m:e-p:64:64-i64:64-i128-n32:64-S128
+Yuhu: Native module DataLayout verified: e-m:e-p:64:64-i64:64-i128-n32:64-S128
 Yuhu: ORC JIT initialized successfully
 Yuhu: DynamicLibrarySearchGenerator added
 === Yuhu: LLVM IR for _Z14helperMultiplyiii (after build, before verification) ===
@@ -310,11 +343,24 @@ Yuhu: Module state check:
 ORC JIT: Looking up function: _Z14helperMultiplyiii (linkage=4)
 ORC JIT: Mangled name: __Z14helperMultiplyiii
 ...
+Yuhu: IR written to /tmp/yuhu_ir__Z14helperMultiplyiii.ll (file created on every compile)
 ```
 
-**After**: Silent operation (only errors shown)
+**After Phase 1**: Silent operation (only errors shown)
 ```
 (no output unless compilation fails)
+```
+
+**After Phase 2**: Optional IR file dumping with flag control
+```bash
+# Default: No files dumped
+java -XX:+UseYuhuCompiler YourClass
+
+# Enable IR file dumping for debugging
+java -XX:+UnlockDiagnosticVMOptions -XX:YuhuDumpIRToFile=true \
+     -XX:+UseYuhuCompiler YourClass
+# Output: Yuhu: IR written to /tmp/yuhu_ir_YourMethod.ll
+# File: /tmp/yuhu_ir_YourMethod.ll (created only when requested)
 ```
 
 **With Flags Enabled**: Targeted debugging information

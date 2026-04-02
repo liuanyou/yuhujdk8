@@ -501,9 +501,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // 调用 record_failure 来标记编译失败，这样 compileBroker 就不会
     // 调用 record_method_not_compilable，从而避免断言失败。
     // 注意：record_failure 不会标记方法为不可编译，只是记录失败原因。
-    tty->print_cr("Yuhu: SKIPPING OSR compilation for %s (entry_bci=%d) - normal-only test mode",
-                  methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
-                  entry_bci);
+    if (YuhuTraceOsrCompilation) {
+        tty->print_cr("Yuhu: SKIPPING OSR compilation for %s (entry_bci=%d) - normal-only test mode",
+                      methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
+                      entry_bci);
+    }
     env->record_failure("normal-only test mode: skipping OSR compilation");
     return;
   }
@@ -673,9 +675,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   address llvm_code_start = entry->code_start();
   int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start);
   int actual_prologue_words = (actual_prologue_bytes + wordSize - 1) / wordSize;  // Round up
-  
-  tty->print_cr("Yuhu: Prologue analysis - code_start=%p, prologue_bytes=%d, prologue_words=%d",
-                llvm_code_start, actual_prologue_bytes, actual_prologue_words);
 
   // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = frame_words + locals_words + actual_prologue_words;
@@ -690,13 +689,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   ExceptionHandlerTable handler_table;
   ImplicitExceptionTable inc_table;
-  
-  tty->print_cr("Yuhu: compile_method - entry_bci=%d, is_osr=%d, code_start=%p, code_limit=%p", 
-                entry_bci, is_osr, entry->code_start(), entry->code_limit());
-  tty->print_cr("Yuhu: LLVM code - total_size=%zu, effective_size=%zu, saved=%zu bytes (%.1f%%)",
-                llvm_code_size, effective_code_size, 
-                llvm_code_size - effective_code_size,
-                (llvm_code_size > 0) ? (100.0 * (llvm_code_size - effective_code_size) / llvm_code_size) : 0.0);
 
   if (!is_osr) {
     // Normal method: build adapter + LLVM code into a combined CodeCache blob.
@@ -723,12 +715,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Emit adapter into combined buffer with correct addresses.
     // Use direct jump (pass NULL for llvm_label) to avoid patching complexity.
     address llvm_entry = combined_base + adapter_size;
-    tty->print_cr("Yuhu: Normal adapter - combined_base=%p, adapter_size=%d, llvm_entry=%p",
-                  combined_base, adapter_size, llvm_entry);
     int emitted_adapter = generate_normal_adapter_into(combined_cb, llvm_entry);
     assert(emitted_adapter == adapter_size, "adapter size mismatch");
-    tty->print_cr("Yuhu: Normal adapter - emitted_adapter=%d, actual LLVM code starts at %p",
-                  emitted_adapter, combined_base + emitted_adapter);
 
     // Copy LLVM code after adapter.
     // Only copy effective code (excluding trailing udf #0 padding)
@@ -739,7 +727,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       DebugInformationRecorder* real_debug_info = env->debug_info();
       YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
       if (real_debug_info != NULL && offset_mapper != NULL) {
-        tty->print_cr("Yuhu: Converting virtual offsets to real offsets and adding to debug info recorder");
         debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper, adapter_size);
       }
     }
@@ -775,7 +762,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
           generate_exception_handler(combined_cb, exc_handler_size);
           // TODO: Properly handle exception handlers for each landing pad
           // For now, DO NOT register any exception handlers to avoid infinite loop
-          tty->print_cr("Yuhu: Skipping exception handler registration (not yet implemented for multiple landing pads)");
       }
 
     // Generate deopt handler (always needed)
@@ -807,23 +793,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + effective_code_size);
     offsets.set_value(CodeOffsets::Exceptions, 0);
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
-    // UnwindHandler is already set in generate_unwind_handler()
-
-    tty->print_cr("Yuhu: Registering method - combined_base=%p (disassemble this address, not entry->code_start()=%p)",
-                  combined_base, entry->code_start());
-    tty->print_cr("Yuhu: frame_size=%d words (header=%d, monitor=%d, stack=%d, extra_locals=%d)",
-                  frame_size, header_words, monitor_words, stack_words, extra_locals);
-    tty->print_cr("Yuhu: CodeBuffer range: code_begin=%p, code_end=%p, size=%zu",
-                  combined_cb.insts()->start(), combined_cb.insts()->end(),
-                  combined_cb.insts()->end() - combined_cb.insts()->start());
-    
-    // Generate minimal scope descriptor for deoptimization support
-    // This allows the VM to handle deoptimization when called methods deopt
-    DebugInformationRecorder* debug_info = env->debug_info();
-    if (debug_info != NULL) {
-      tty->print_cr("Yuhu: Generating minimal scope descriptor for deoptimization support");
-//      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
-    }
     
     env->register_method(target,
                          entry_bci,
@@ -842,13 +811,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Verify nmethod was installed correctly
     address test_pc = combined_base + adapter_size + 16;  // Some PC in LLVM code
     CodeBlob* found_blob = CodeCache::find_blob(test_pc);
-    tty->print_cr("Yuhu: Post-registration check - test_pc=%p, found_blob=%p",
-                  test_pc, found_blob);
-    if (found_blob != NULL) {
-      tty->print_cr("Yuhu: Found blob - code_begin=%p, code_end=%p",
-                    found_blob->code_begin(), found_blob->code_end());
-    } else {
-      tty->print_cr("Yuhu: WARNING - CodeCache::find_blob returned NULL!");
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Post-registration check - test_pc=%p, found_blob=%p",
+                      test_pc, found_blob);
+        if (found_blob != NULL) {
+            tty->print_cr("Yuhu: Found blob - code_begin=%p, code_end=%p",
+                          found_blob->code_begin(), found_blob->code_end());
+        } else {
+            tty->print_cr("Yuhu: WARNING - CodeCache::find_blob returned NULL!");
+        }
     }
   } else {
     // OSR method: build adapter + LLVM code into a combined CodeCache blob.
@@ -1018,11 +989,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
 
   // Compile to native code
   address code = NULL;
-  
-  // ========== Debug: Verify Function and Module state (from 006_getpointertofunction_returns_null.md) ==========
-  // Debug 1-2, 4: 锁外的检查（不需要 execution_engine()）
-  tty->print_cr("=== Yuhu: generate_native_code for %s ===", name);
-  
+
   // Check Module function count before add_function
   llvm::Module* mod_before = function->getParent();
   int func_count_before = 0;
@@ -1030,7 +997,6 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     for (llvm::Module::iterator I = mod_before->begin(), E = mod_before->end(); I != E; ++I) {
       func_count_before++;
     }
-    tty->print_cr("Yuhu: Module function count BEFORE add_function: %d", func_count_before);
   }
   
   // Try explicit add_function call (even though Function is already in Module)
@@ -1045,13 +1011,6 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     for (llvm::Module::iterator I = mod_after->begin(), E = mod_after->end(); I != E; ++I) {
       func_count_after++;
     }
-    tty->print_cr("Yuhu: Module function count AFTER add_function: %d", func_count_after);
-    if (func_count_after > func_count_before) {
-      tty->print_cr("Yuhu: WARNING - Function may have been added twice! (before=%d, after=%d)", 
-                    func_count_before, func_count_after);
-    } else if (func_count_after == func_count_before) {
-      tty->print_cr("Yuhu: Function count unchanged - LLVM may have ignored duplicate add");
-    }
   }
   
   // Debug 1: Verify Function is in Module
@@ -1059,28 +1018,12 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   if (func_mod == NULL) {
     fatal(err_msg("Function %s has no parent Module!", name));
   }
-  tty->print_cr("Function name: %s, address: %p", function->getName().str().c_str(), function);
-  tty->print_cr("Function's Module: %p, name: %s", func_mod, func_mod->getName().str().c_str());
-  tty->print_cr("Module TargetTriple: %s", func_mod->getTargetTriple().c_str());
-  tty->print_cr("Module DataLayout: %s", func_mod->getDataLayout().getStringRepresentation().c_str());
   
   // Debug 2: Verify Module pointer validity
   llvm::Module* normal_mod = _normal_context->module();
   llvm::Module* native_mod = _native_context->module();
-  tty->print_cr("_normal_context->module(): %p", normal_mod);
-  tty->print_cr("_native_context->module(): %p", native_mod);
-  if (func_mod != normal_mod && func_mod != native_mod) {
-    tty->print_cr("WARNING: Function's Module is neither normal nor native context!");
-    tty->print_cr("  Function Module: %p", func_mod);
-    tty->print_cr("  Normal Module: %p", normal_mod);
-    tty->print_cr("  Native Module: %p", native_mod);
-  } else {
-    tty->print_cr("Function's Module matches context: %s", 
-                   (func_mod == normal_mod) ? "normal" : "native");
-  }
   
   // Debug: Collect all instructions and verify they are in basic blocks
-  tty->print_cr("=== Yuhu: Collecting all instructions in function %s ===", name);
   std::set<llvm::Instruction*> all_instructions_in_blocks;
   int total_instructions = 0;
   int total_basic_blocks = 0;
@@ -1094,10 +1037,6 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     }
   }
   
-  tty->print_cr("  Total basic blocks: %d", total_basic_blocks);
-  tty->print_cr("  Total instructions in blocks: %d", total_instructions);
-  tty->flush();
-  
   // Check for orphaned instructions (instructions not in any basic block)
   // This is done by checking all values in the function and seeing if they are instructions
   // without a parent basic block
@@ -1109,24 +1048,8 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       // Check if instruction has a valid parent
       llvm::BasicBlock* parent = inst->getParent();
       if (parent == NULL) {
-        tty->print_cr("  ERROR: Instruction %p has NULL parent!", inst);
-        tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
-        if (inst->hasName()) {
-          tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
-        }
         orphaned_count++;
         continue;
-      }
-      
-      // Check if instruction's parent matches the basic block we're iterating
-      if (parent != &*BB) {
-        tty->print_cr("  WARNING: Instruction %p parent mismatch!", inst);
-        tty->print_cr("    Expected parent: %p (%s)", &*BB, BB->getName().str().c_str());
-        tty->print_cr("    Actual parent: %p (%s)", parent, parent->getName().str().c_str());
-        tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
-        if (inst->hasName()) {
-          tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
-        }
       }
       
       // Check if instruction's getFunction() returns valid value
@@ -1136,22 +1059,8 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
         // So if parent is valid, we can safely call getFunction()
         llvm::Function* func = parent->getParent();
         if (func == NULL) {
-          tty->print_cr("  ERROR: Instruction %p parent's getParent() returns NULL!", inst);
-          tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
-          if (inst->hasName()) {
-            tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
-          }
-          tty->print_cr("    Parent basic block: %p (%s)", parent, parent->getName().str().c_str());
           orphaned_count++;
         } else if (func != function) {
-          tty->print_cr("  ERROR: Instruction %p parent's getParent() returns wrong function!", inst);
-          tty->print_cr("    Expected function: %p (%s)", function, function->getName().str().c_str());
-          tty->print_cr("    Actual function: %p (%s)", func, func->getName().str().c_str());
-          tty->print_cr("    Instruction type: %s", inst->getOpcodeName());
-          if (inst->hasName()) {
-            tty->print_cr("    Instruction name: %s", inst->getName().str().c_str());
-          }
-          tty->print_cr("    Parent basic block: %p (%s)", parent, parent->getName().str().c_str());
           orphaned_count++;
         } else {
           // Also try calling inst->getFunction() directly to see if it matches
@@ -1162,7 +1071,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
           // If it crashes, we'll see it in the crash log
           direct_func = inst->getFunction();
           getFunction_succeeded = true;
-          if (direct_func != function) {
+          if (direct_func != function && YuhuTraceInstalls) {
             tty->print_cr("  WARNING: Instruction %p getFunction() returns different value!", inst);
             tty->print_cr("    Via parent: %p (%s)", func, func->getName().str().c_str());
             tty->print_cr("    Direct: %p (%s)", direct_func, direct_func ? direct_func->getName().str().c_str() : "NULL");
@@ -1173,11 +1082,11 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     }
   }
   
-  if (orphaned_count > 0) {
+  if (orphaned_count > 0 && YuhuTraceInstalls) {
     tty->print_cr("  ERROR: Found %d orphaned or invalid instructions!", orphaned_count);
     tty->flush();
     // Don't fatal here, let verifyFunction catch it
-  } else {
+  } else if (YuhuTraceInstalls) {
     tty->print_cr("  All instructions are properly in basic blocks");
   }
   tty->flush();
@@ -1185,33 +1094,35 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   // Output IR to file for analysis (before verification)
   // This allows using LLVM tools like 'opt -verify' to analyze the IR
   std::string ir_filename = std::string("/tmp/yuhu_ir_") + std::string(name) + ".ll";
-  // Replace invalid filename characters
-  for (size_t i = 0; i < ir_filename.length(); i++) {
-    if (ir_filename[i] == ':' || ir_filename[i] == '/' || ir_filename[i] == ' ') {
-      ir_filename[i] = '_';
+  if (YuhuDumpIRToFile) {
+    // Replace invalid filename characters
+    for (size_t i = 0; i < ir_filename.length(); i++) {
+      if (ir_filename[i] == ':' || ir_filename[i] == '/' || ir_filename[i] == ' ') {
+        ir_filename[i] = '_';
+      }
     }
-  }
-  
-  std::error_code EC;
-  llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
-  if (!EC) {
-    // Print the entire module (not just the function) to include metadata definitions
-    // This ensures metadata nodes used by llvm.read_register are properly serialized
-    llvm::Module* mod = function->getParent();
-    if (mod != NULL) {
-      mod->print(ir_file, nullptr);
+    
+    std::error_code EC;
+    llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
+    if (!EC) {
+      // Print the entire module (not just the function) to include metadata definitions
+      // This ensures metadata nodes used by llvm.read_register are properly serialized
+      llvm::Module* mod = function->getParent();
+      if (mod != NULL) {
+        mod->print(ir_file, nullptr);
+      } else {
+        // Fallback: print just the function if module is not available
+        function->print(ir_file);
+      }
+      ir_file.flush();
+      tty->print_cr("Yuhu: IR written to %s (use 'opt -verify %s' to analyze)", 
+                    ir_filename.c_str(), ir_filename.c_str());
+      tty->flush();
     } else {
-      // Fallback: print just the function if module is not available
-      function->print(ir_file);
+      tty->print_cr("Yuhu: Failed to write IR to %s: %s", 
+                    ir_filename.c_str(), EC.message().c_str());
+      tty->flush();
     }
-    ir_file.flush();
-    tty->print_cr("Yuhu: IR written to %s (use 'opt -verify %s' to analyze)", 
-                  ir_filename.c_str(), ir_filename.c_str());
-    tty->flush();
-  } else {
-    tty->print_cr("Yuhu: Failed to write IR to %s: %s", 
-                  ir_filename.c_str(), EC.message().c_str());
-    tty->flush();
   }
   
   // Debug 4: Verify IR correctness (不需要锁)
@@ -1354,18 +1265,20 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   // ORC JIT: For stage 1, we use default memory management
   // mm_base and mm_size are NULL/0, so we use code address directly
   // TODO: In stage 2, integrate CodeCache via MemoryMapper
-  tty->print_cr("Yuhu: setting entry code range - mm_base=%p, mm_size=%lu, code=%p", 
-                mm_base, (unsigned long)mm_size, code);
   if (mm_base != NULL && mm_size > 0) {
     entry->set_entry_point((address)mm_base);
     entry->set_code_limit((address)(mm_base + mm_size));
-    tty->print_cr("ORC JIT: using MemoryManager range: code_start=%p, code_limit=%p, size=%lu", 
-                  (address)mm_base, (address)(mm_base + mm_size), (unsigned long)mm_size);
+    if (YuhuTraceInstalls) {
+        tty->print_cr("ORC JIT: using MemoryManager range: code_start=%p, code_limit=%p, size=%lu",
+                      (address) mm_base, (address) (mm_base + mm_size), (unsigned long) mm_size);
+    }
   } else {
     // For ORC JIT stage 1, we don't have CodeCache integration yet
     // Use code address directly (will be fixed in stage 2)
-    tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
-    tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
+    if (YuhuTraceInstalls) {
+        tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
+        tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
+    }
     entry->set_entry_point(code);
     
     // Estimate code size based on function structure (temporary solution for stage 1)
@@ -1414,7 +1327,6 @@ void YuhuCompiler::release_last_code_blob_unlocked() {
     // Note: ORC JIT uses default memory management in stage 1
     // MemoryManager integration will be added in stage 2
     // For now, this is a no-op
-    tty->print_cr("Yuhu: release_last_code_blob_unlocked - ORC JIT stage 1 (no-op)");
 }
 
 void YuhuCompiler::free_queued_methods() {
@@ -1593,7 +1505,9 @@ int YuhuCompiler::measure_exception_handler_size() {
 }
 
 int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
-  tty->print_cr("Yuhu: Generating exception handler stub");
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Generating exception handler stub");
+    }
 
   YuhuMacroAssembler masm(&cb);
 
@@ -1673,7 +1587,9 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
 // Register protocol on exit to Runtime1::unwind_exception_id:
 //   x0 = exception oop, lr = caller's return address (used to find the caller's handler)
 int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes) {
-    tty->print_cr("Yuhu: Generating unwind handler (frame_size_in_bytes=%d)", frame_size_in_bytes);
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Generating unwind handler (frame_size_in_bytes=%d)", frame_size_in_bytes);
+    }
 
     YuhuMacroAssembler masm(&cb);
 
@@ -1737,7 +1653,9 @@ int YuhuCompiler::measure_deopt_handler_size() {
 }
 
 int YuhuCompiler::generate_deopt_handler(CodeBuffer& cb, int handler_size) {
-  tty->print_cr("Yuhu: Generating deopt handler stub");
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Generating deopt handler stub");
+    }
 
   YuhuMacroAssembler masm(&cb);
 
