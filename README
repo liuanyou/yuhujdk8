@@ -1,40 +1,59 @@
-README:
-  This file should be located at the top of the OpenJDK Mercurial root
-  repository. A full OpenJDK repository set (forest) should also include
-  the following 6 nested repositories:
-    "jdk", "hotspot", "langtools", "corba", "jaxws"  and "jaxp".
+yuhujdk8 - Enhanced OpenJDK 8 with Yuhu Interpreter and Compiler
+========================================================================
 
-  The root repository can be obtained with something like:
-    hg clone http://hg.openjdk.java.net/jdk8/jdk8 openjdk8
+Overview:
+  yuhujdk8 is an enhanced OpenJDK 8 distribution that integrates Amazon Corretto 8 
+  aarch64 source code and introduces the innovative Yuhu interpreter and Yuhu compiler.
+  This project provides full support for the ARM64 (AArch64) architecture while 
+  maintaining compatibility with existing OpenJDK 8 features.
+
+Key Features:
+  * Based on OpenJDK 8 - Maintains full compatibility with standard OpenJDK 8
+  * Corretto 8 Integration - Incorporates Amazon's proven aarch64 improvements
+  * Yuhu Interpreter - Advanced interpretation engine for AArch64 platform
+  * Yuhu Compiler - Native compilation capabilities for AArch64 platform
+  * AArch64 Support - Fully optimized for ARM64 architecture
+
+Platform Requirements:
+  * Architecture: AArch64 (ARM64) only - Yuhu interpreter and compiler are currently
+    optimized exclusively for AArch64 architecture
+  * Compiler: Clang compiler required for building Yuhu components
+
+Repository Structure:
+  This repository contains the complete OpenJDK forest with the following 
+  nested repositories:
+    "jdk", "hotspot", "langtools", "corba", "jaxws", "jaxp"
+
+Build Instructions:
   
-  You can run the get_source.sh script located in the root repository to get
-  the other needed repositories:
-    cd openjdk8 && sh ./get_source.sh
-
-  People unfamiliar with Mercurial should read the first few chapters of
-  the Mercurial book: http://hgbook.red-bean.com/read/
-
-  See http://openjdk.java.net/ for more information about OpenJDK.
-
-Simple Build Instructions:
+  Prerequisites:
+    - GNU make 3.81 or newer
+    - JDK 7u7 or newer for bootstrapping
+    - Clang compiler (required for Yuhu components)
+    - Standard development tools for AArch64 platform
   
-  0. Get the necessary system software/packages installed on your system, see
-     http://hg.openjdk.java.net/jdk8/jdk8/raw-file/tip/README-builds.html
-
-  1. If you don't have a jdk7u7 or newer jdk, download and install it from
-     http://java.sun.com/javase/downloads/index.jsp
-     Add the /bin directory of this installation to your PATH environment
-     variable.
-
+  1. Clone the repository:
+       git clone git@github.com:liuanyou/yuhujdk8.git yuhujdk8
+       cd yuhujdk8
+  
   2. Configure the build:
-       bash ./configure
+       ./configure \
+         --with-freetype-include=/opt/homebrew/Cellar/freetype/2.13.3/include/freetype2 \
+         --with-freetype-lib=/opt/homebrew/Cellar/freetype/2.13.3/lib \
+         --with-debug-level=slowdebug \
+         --enable-yuhu-compiler=yes \
+         --with-llvm=/opt/homebrew/Cellar/llvm/20.1.5 \
+         --with-zstd-lib=/opt/homebrew/Cellar/zstd/1.5.7/lib \
+         --with-boot-jdk=/Library/Java/JavaVirtualMachines/amazon-corretto-8.jdk/Contents/Home
   
-  3. Build the OpenJDK:
-       make all
-     The resulting JDK image should be found in build/*/images/j2sdk-image
+  3. Build yuhujdk8:
+       make images
+     
+     The resulting JDK image will be in build/*/images/j2sdk-image
 
-where make is GNU make 3.81 or newer, /usr/bin/make on Linux usually
-is 3.81 or newer. Note that on Solaris, GNU make is called "gmake".
+  License:
+  yuhujdk8 is licensed under the same terms as OpenJDK (GPL v2 with Classpath Exception).
+  See LICENSE and THIRD_PARTY_README files for details.
 
-Complete details are available in the file:
-     http://hg.openjdk.java.net/jdk8/jdk8/raw-file/tip/README-builds.html
+Contact:
+  Repository: https://github.com/liuanyou/yuhujdk8
