@@ -215,9 +215,6 @@ YuhuCompiler::YuhuCompiler()
       const llvm::DataLayout& DL = TM->createDataLayout();
       std::string DLStr = DL.getStringRepresentation();
       
-      // DEBUG: Print DataLayout string
-      tty->print_cr("Yuhu: Setting DataLayout: %s", DLStr.c_str());
-      
       // Set DataLayout for both modules BEFORE creating ExecutionEngine
       _normal_context->module()->setDataLayout(DLStr);
       _native_context->module()->setDataLayout(DLStr);
@@ -225,8 +222,6 @@ YuhuCompiler::YuhuCompiler()
       // DEBUG: Verify DataLayout was set
       std::string verify1 = _normal_context->module()->getDataLayout().getStringRepresentation();
       std::string verify2 = _native_context->module()->getDataLayout().getStringRepresentation();
-      tty->print_cr("Yuhu: Normal module DataLayout verified: %s", verify1.c_str());
-      tty->print_cr("Yuhu: Native module DataLayout verified: %s", verify2.c_str());
       if (verify1 != DLStr || verify2 != DLStr) {
         fatal(err_msg("DataLayout mismatch! Expected: %s, Got normal: %s, Got native: %s", 
                       DLStr.c_str(), verify1.c_str(), verify2.c_str()));
@@ -271,7 +266,6 @@ YuhuCompiler::YuhuCompiler()
   }
   
   _jit = std::move(*JIT);
-  tty->print_cr("Yuhu: ORC JIT initialized successfully");
   
   // Add DynamicLibrarySearchGenerator so ORC JIT can resolve symbols from
   // the current process (e.g. yuhu_resolve_static_field in libjvm.dylib)
@@ -286,7 +280,6 @@ YuhuCompiler::YuhuCompiler()
     fatal(err_msg("Failed to create DynamicLibrarySearchGenerator: %s", ErrMsg.c_str()));
   }
   MainJD.addGenerator(std::move(*DLSGOrErr));
-  tty->print_cr("Yuhu: DynamicLibrarySearchGenerator added");
   
   // Add normal module to JITDylib
   // Note: ORC JIT uses ThreadSafeModule, which requires ThreadSafeContext
@@ -628,24 +621,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     return;
   }
 
-  // Output LLVM IR immediately after build for debugging PHI node type mismatch
-  tty->print_cr("=== Yuhu: LLVM IR for %s (after build, before verification) ===", func_name);
-  llvm::raw_ostream &OS = llvm::errs();
-  function->print(OS);
-  OS.flush();
-  tty->print_cr("=== End of LLVM IR for %s ===", func_name);
-  tty->flush();
-
   // Generate native code.  It's unpleasant that we have to drop into
   // the VM to do this -- it blocks safepoints -- but I can't see any
   // other way to handle the locking.
   {
     ThreadInVMfromNative tiv(JavaThread::current());
-    // Diagnostic: Check state before generate_native_code
-    tty->print_cr("Yuhu: Before generate_native_code for %s (entry_bci=%d)", func_name, entry_bci);
-    // Note: ORC JIT uses default memory management in stage 1
-    // MemoryManager state will be available in stage 2 after CodeCache integration
-    // Note: Compiler threads are already in WXWrite mode, so no need to manage WX state
     generate_native_code(entry, function, func_name, &builder);
 
     address code_start = entry->code_start();
@@ -657,14 +637,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // and update the offset mapper with the actual PC offsets
     YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
     if (offset_mapper != NULL) {
-      tty->print_cr("Yuhu: Scanning generated code for offset markers...");
       builder.scan_and_update_offset_markers(code_start, effective_code_size, offset_mapper);
-
-      // After scanning and updating the mapper, relocate OopMaps
-//      builder.relocate_oopmaps(offset_mapper, env);
-//      tty->print_cr("Yuhu: OopMap relocation completed with %d mappings", offset_mapper->num_mappings());
-    } else {
-      tty->print_cr("Yuhu: WARNING - No offset mapper available for OopMap relocation");
     }
   }
 
@@ -1242,31 +1215,12 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   }
   
   // Debug 4: Verify IR correctness (不需要锁)
-  tty->print_cr("Verifying Function IR...");
   if (llvm::verifyFunction(*function, &llvm::errs())) {
     tty->print_cr("Yuhu: IR verification failed! See %s for the IR", ir_filename.c_str());
     tty->print_cr("Yuhu: Run 'opt -verify %s' to get detailed error messages", ir_filename.c_str());
     fatal(err_msg("Function %s failed IR verification!", name));
   }
-  tty->print_cr("IR verification passed");
   
-  // Check if Function is in Module's function list (不需要锁)
-  bool found_in_module = false;
-  for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
-    if (&*I == function) {
-      found_in_module = true;
-      break;
-    }
-  }
-  tty->print_cr("Function found in Module function list: %s", found_in_module ? "YES" : "NO");
-  
-  // Print Function details (不需要锁)
-  tty->print_cr("Function linkage: %d", (int)function->getLinkage());
-  tty->print_cr("Function isDeclaration: %s", function->isDeclaration() ? "YES" : "NO");
-  tty->print_cr("Function hasBody: %s", function->empty() ? "NO" : "YES");
-  if (!function->empty()) {
-    tty->print_cr("Function basic blocks: %d", (int)function->size());
-  }
   // ========== End of 锁外调试代码 ==========
   
   // Declare variables outside the lock for use after lock is released
@@ -1281,29 +1235,9 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     if (!jit()) {
       fatal(err_msg("ORC JIT is NULL!"));
     }
-    tty->print_cr("ORC JIT: %p", jit());
     
     // Diagnostic: ORC JIT uses default memory management (stage 1)
     // MemoryManager state will be available in stage 2 after CodeCache integration
-    
-    // Diagnostic: Check Module state
-    llvm::Module* func_mod = function->getParent();
-    if (func_mod != NULL) {
-      tty->print_cr("Yuhu: Module state check:");
-      tty->print_cr("  Module pointer: %p", func_mod);
-      tty->print_cr("  Module name: %s", func_mod->getName().str().c_str());
-      // Count functions in module
-      int func_count = 0;
-      for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
-        func_count++;
-      }
-      tty->print_cr("  Total functions in Module: %d", func_count);
-      // List all function names
-      tty->print_cr("  Functions in Module:");
-      for (llvm::Module::iterator I = func_mod->begin(), E = func_mod->end(); I != E; ++I) {
-        tty->print_cr("    - %s (ptr=%p)", I->getName().str().c_str(), &*I);
-      }
-    }
     // ========== End of 锁内调试代码 ==========
     
     free_queued_methods();
@@ -1339,18 +1273,14 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     // For now, we'll try lookup first, and if it fails, we'll add the module
     
     std::string func_name = function->getName().str();
-    tty->print_cr("ORC JIT: Looking up function: %s (linkage=%d)", 
-                   func_name.c_str(), (int)function->getLinkage());
     
     // Debug: Try to get mangled name
     auto MangledName = jit()->mangle(func_name);
-    tty->print_cr("ORC JIT: Mangled name: %s", MangledName.c_str());
     
     // Try to lookup the function
     auto Sym = jit()->lookup(func_name);
     if (!Sym) {
       // Function not found - may need to add module
-      tty->print_cr("ORC JIT: Function not found, adding module to JITDylib...");
       
       // Create ThreadSafeModule from the module containing this function
       // CRITICAL: Use the SAME LLVMContext as the original module to preserve metadata
@@ -1367,11 +1297,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       // Debug: Check if cloned module contains the function
       llvm::Function* cloned_func = module_clone->getFunction(func_name);
       if (cloned_func == NULL) {
-        tty->print_cr("ERROR: Cloned module does not contain function %s!", func_name.c_str());
         fatal(err_msg("Cloned module missing function %s", name));
-      } else {
-        tty->print_cr("Cloned module contains function: %s (linkage=%d)", 
-                     func_name.c_str(), (int)cloned_func->getLinkage());
       }
       
       // CRITICAL: Create ThreadSafeContext using the SAME LLVMContext as the original module
@@ -1390,7 +1316,6 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
       
       // Add to JITDylib
       auto &JD = jit()->getMainJITDylib();
-      tty->print_cr("ORC JIT: Adding module to JITDylib (function: %s)", func_name.c_str());
 
       if (auto Err = jit()->addIRModule(JD, std::move(TSM))) {
         std::string ErrMsg;
@@ -1399,7 +1324,6 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
         });
         fatal(err_msg("Failed to add IR module for function %s: %s", name, ErrMsg.c_str()));
       }
-      tty->print_cr("ORC JIT: Module added successfully");
 
       // oop resolution already done above (before addIRModule).
 
@@ -1417,13 +1341,11 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     // In LLVM 20, lookup returns Expected<ExecutorAddr>
     // ExecutorAddr can be directly converted to address (it's essentially uint64_t)
     code = (address) Sym->getValue();
-    tty->print_cr("ORC JIT: lookup returned: %p", code);
     
     // For ORC JIT, we don't have YuhuMemoryManager yet (stage 1: use default memory management)
     // So we'll set mm_base and mm_size to NULL/0 for now
     mm_base = NULL;
     mm_size = 0;
-    tty->print_cr("ORC JIT: Using default memory management (mm_base=NULL, mm_size=0)");
   }
   
   if (code == NULL) {
