@@ -264,15 +264,12 @@ int YuhuPrologueAnalyzer::extract_add_x29_sp_imm(address code_start) {
 
     if (is_add_x29_sp_imm(inst)) {
       int imm = extract_add_immediate(inst);
-      tty->print_cr("YuhuPrologueAnalyzer: Found add x29, sp, #%d (0x%x) at offset %d",
-                    imm, imm, i * 4);
       return imm;  // Found it!
     }
 
     pc += 4;  // AArch64 instructions are 4 bytes
   }
 
-  tty->print_cr("YuhuPrologueAnalyzer: WARNING - add x29, sp, #imm not found in prologue!");
   return 0;  // Not found, return 0 as fallback
 }
 

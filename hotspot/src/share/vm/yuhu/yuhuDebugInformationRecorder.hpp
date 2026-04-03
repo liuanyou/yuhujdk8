@@ -6,6 +6,7 @@
 #include "ci/ciMethod.hpp"
 #include "code/scopeDesc.hpp"
 #include "yuhu/yuhuOffsetMapper.hpp"
+#include "yuhu/yuhu_globals.hpp"
 
 // YuhuDebugInformationRecorder: 用于收集虚拟 PC offset 的 OopMap 信息
 // 在 LLVM IR 生成期间收集信息，在机器码生成后转换为真实 PC offset
@@ -40,7 +41,6 @@ public:
   void add_safepoint(int virtual_pc_offset, OopMap* oopmap) {
     _virtual_offsets->append(virtual_pc_offset);
     _oopmaps->append(oopmap);
-    tty->print_cr("Yuhu: Added safepoint at virtual offset=%d", virtual_pc_offset);
   }
 
   // 描述虚拟 PC offset 的作用域信息
@@ -60,13 +60,11 @@ public:
     _frame_locals->append(locals);
     _frame_expressions->append(expressions);
     _frame_monitors->append(monitors);
-    tty->print_cr("Yuhu: Described scope at virtual offset=%d", virtual_pc_offset);
   }
 
   // 结束虚拟 PC offset 的 safepoint 记录
   void end_safepoint(int virtual_pc_offset) {
     // 实际上不需要做任何事情，因为我们已经记录了所需的所有信息
-    tty->print_cr("Yuhu: Ended safepoint at virtual offset=%d", virtual_pc_offset);
   }
 
   // 获取虚拟 PC offset 数组
@@ -114,8 +112,6 @@ public:
                                        ciMethod* method,
                                        YuhuOffsetMapper* offset_mapper,
                                        int plus_offset) {
-    tty->print_cr("Yuhu: Converting %d virtual offsets to real offsets", _virtual_offsets->length());
-
     // 按照真实的pc offset排序virtual offset
     if (_virtual_offsets->length() > 1) {
         quick_sort_by_actual_offset(0, _virtual_offsets->length() - 1, offset_mapper);
@@ -132,9 +128,10 @@ public:
       int real_offset = offset_mapper->get_actual_offset(virtual_offset) + plus_offset;
       
       if (real_offset != -1) {  // -1 表示未找到映射
-        tty->print_cr("Yuhu: Converted virtual offset=%d to real offset=%d", virtual_offset, real_offset);
+          if (YuhuTraceInstalls) {
+              tty->print_cr("Yuhu: Converted virtual offset=%d to real offset=%d", virtual_offset, real_offset);
+          }
         if (last_real_offset == real_offset) {
-            tty->print_cr("Yuhu: Skip duplicate real offset offset=%d to real offset=%d", virtual_offset, real_offset);
             continue;
         }
         
@@ -167,7 +164,6 @@ public:
           }
         }
       } else {
-        tty->print_cr("Yuhu: WARNING - No real offset found for virtual offset=%d", virtual_offset);
       }
     }
   }

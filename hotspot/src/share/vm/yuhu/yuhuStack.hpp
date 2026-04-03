@@ -129,8 +129,6 @@ class YuhuStack : public YuhuCompileInvariants {
       // This should not happen if sp_storage_alloca was passed correctly
       // Fallback: create a new alloca (warning: this will be in the middle of the function!)
       _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
-      tty->print_cr("WARNING: sp_storage fallback alloca created in middle of function!");
-      tty->flush();
     }
     return builder()->CreateStore(value, _sp_storage);
   }

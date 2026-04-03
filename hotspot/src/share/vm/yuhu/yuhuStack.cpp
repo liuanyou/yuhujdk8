@@ -95,8 +95,6 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
     // Native wrapper case: create alloca here (in middle of function)
     // This is less ideal but acceptable for native wrappers
     initialize_stack_pointers(stack_pointer, NULL);
-    tty->print_cr("Yuhu: WARNING - sp_storage alloca created in middle of function for native wrapper");
-    tty->flush();
   } else {
     // Normal entry case: use alloca from entry block
     initialize_stack_pointers(stack_pointer, sp_storage_alloca);
@@ -232,10 +230,6 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   store_pc_args.push_back(pc_addr_i64);
   store_pc_args.push_back(current_pc);
   builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
-  
-  // DEBUG: Print confirmation
-  tty->print_cr("YuhuStack::initialize: Created inline assembly stores for last_Java_sp, last_Java_fp, last_Java_pc");
-  tty->flush();
 }
 
 // Stack overflow check for AArch64

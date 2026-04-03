@@ -229,29 +229,16 @@ YuhuState* YuhuTopLevelBlock::entry_state() {
 
 void YuhuTopLevelBlock::add_incoming(YuhuState* incoming_state) {
   BasicBlock* predecessor = builder()->GetInsertBlock();
-  tty->print_cr("=== Yuhu: add_incoming to block %d (bci=%d) ===", index(), start());
-  tty->print_cr("  Predecessor block: %s", predecessor ? predecessor->getName().str().c_str() : "NULL");
-  tty->print_cr("  Needs PHIs: %d", needs_phis());
-  tty->flush();
   
   if (needs_phis()) {
-    tty->print_cr("  Using YuhuPHIState::add_incoming");
-    tty->flush();
     ((YuhuPHIState *) entry_state())->add_incoming(incoming_state);
   }
   else if (_entry_state == NULL) {
-    tty->print_cr("  Setting entry_state directly (first incoming)");
-    tty->flush();
     _entry_state = incoming_state;
   }
   else {
-    tty->print_cr("  Verifying entry_state equality");
-    tty->flush();
     assert(entry_state()->equal_to(incoming_state), "should be");
   }
-  
-  tty->print_cr("=== Yuhu: Finished add_incoming to block %d ===", index());
-  tty->flush();
 }
 
 void YuhuTopLevelBlock::enter(YuhuTopLevelBlock* predecessor,
@@ -1123,19 +1110,8 @@ void YuhuTopLevelBlock::do_if_helper(ICmpInst::Predicate p,
     builder()->CreateICmp(p, a, b),
     if_taken->entry_block(), not_taken->entry_block());
 
-  // Debug: Print state info before add_incoming
-  tty->print_cr("=== Yuhu: do_if_helper - adding incoming states ===");
-  tty->print_cr("if_taken block: bci=%d, needs_phis=%d", 
-                if_taken->start(), if_taken->needs_phis());
-  tty->print_cr("not_taken block: bci=%d, needs_phis=%d", 
-                not_taken->start(), not_taken->needs_phis());
-  tty->flush();
-
   if_taken->add_incoming(if_taken_state);
   not_taken->add_incoming(not_taken_state);
-  
-  tty->print_cr("=== Yuhu: do_if_helper - finished adding incoming states ===");
-  tty->flush();
 }
 
 void YuhuTopLevelBlock::do_switch() {

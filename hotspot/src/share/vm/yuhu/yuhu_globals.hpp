@@ -68,6 +68,9 @@
                                                                               \
   diagnostic(bool, YuhuTraceOsrCompilation, false,                            \
           "Trace osr compilation")                                            \
+                                                                              \
+  diagnostic(bool, YuhuTracePHI, false,                                       \
+          "Trace phi state")                                                  \
 
 // Yuhu frame layout constants
 const int yuhu_frame_header_words = 6;  // Frame header size in words

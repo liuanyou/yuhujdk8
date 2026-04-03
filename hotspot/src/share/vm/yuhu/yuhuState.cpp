@@ -33,6 +33,7 @@
 #include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhuType.hpp"
 #include "yuhu/yuhuValue.hpp"
+#include "yuhu/yuhu_globals.hpp"
 
 using namespace llvm;
 
@@ -290,9 +291,11 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
   builder()->SetInsertPoint(block->entry_block());
   char name[18];
 
-  tty->print_cr("=== Yuhu: Creating YuhuPHIState for block %d (bci=%d) ===", 
-                block->index(), block->start());
-  tty->flush();
+  if (YuhuTracePHI) {
+      tty->print_cr("=== Yuhu: Creating YuhuPHIState for block %d (bci=%d) ===",
+                    block->index(), block->start());
+      tty->flush();
+  }
 
   // Method
   set_method(builder()->CreatePHI(YuhuType::Method_type(), 0, "method"));
@@ -317,11 +320,13 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
       llvm::Type* llvm_type = YuhuType::to_stackType(type);
       value = YuhuValue::create_phi(
         type, builder()->CreatePHI(llvm_type, 0, name));
-      tty->print_cr("  Created PHI for local[%d]: ciType=%s, basic_type=%s, llvm_type=%s",
-                    i,
-                    type->name(),
-                    type2name(type->basic_type()),
-                    llvm_type->isPointerTy() ? "ptr" : (llvm_type->isIntegerTy() ? "int" : "other"));
+      if (YuhuTracePHI) {
+          tty->print_cr("  Created PHI for local[%d]: ciType=%s, basic_type=%s, llvm_type=%s",
+                        i,
+                        type->name(),
+                        type2name(type->basic_type()),
+                        llvm_type->isPointerTy() ? "ptr" : (llvm_type->isIntegerTy() ? "int" : "other"));
+      }
       break;
     }
 
@@ -341,9 +346,11 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
     }
     set_local(i, value);
   }
-  
-  tty->print_cr("=== Yuhu: Finished creating YuhuPHIState for block %d ===", block->index());
-  tty->flush();
+
+  if (YuhuTracePHI) {
+      tty->print_cr("=== Yuhu: Finished creating YuhuPHIState for block %d ===", block->index());
+      tty->flush();
+  }
 
   // Expression stack
   for (int i = 0; i < block->stack_depth_at_entry(); i++) {
@@ -389,28 +396,31 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
 void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
   BasicBlock *predecessor = builder()->GetInsertBlock();
 
-  tty->print_cr("=== Yuhu: YuhuPHIState::add_incoming ===");
-  tty->print_cr("  Block: %d (bci=%d)", _block->index(), _block->start());
-  tty->print_cr("  Predecessor: %s", predecessor ? predecessor->getName().str().c_str() : "NULL");
-  tty->flush();
+  if (YuhuTracePHI) {
+      tty->print_cr("=== Yuhu: YuhuPHIState::add_incoming ===");
+      tty->print_cr("  Block: %d (bci=%d)", _block->index(), _block->start());
+      tty->print_cr("  Predecessor: %s", predecessor ? predecessor->getName().str().c_str() : "NULL");
+      tty->flush();
+  }
 
   // Method
   llvm::PHINode* method_phi = (llvm::PHINode *) method();
   llvm::Value* incoming_method = incoming_state->method();
   llvm::Type* method_phi_type = method_phi->getType();
   llvm::Type* incoming_method_type = incoming_method->getType();
-  
-  tty->print_cr("  Method PHI: phi_type=%s (ID=%d), incoming_type=%s (ID=%d), match=%d",
-                method_phi_type->isPointerTy() ? "ptr" : (method_phi_type->isIntegerTy() ? "int" : "other"),
-                method_phi_type->getTypeID(),
-                incoming_method_type->isPointerTy() ? "ptr" : (incoming_method_type->isIntegerTy() ? "int" : "other"),
-                incoming_method_type->getTypeID(),
-                method_phi_type == incoming_method_type);
-  tty->flush();
+
+  if (YuhuTracePHI) {
+      tty->print_cr("  Method PHI: phi_type=%s (ID=%d), incoming_type=%s (ID=%d), match=%d",
+                    method_phi_type->isPointerTy() ? "ptr" : (method_phi_type->isIntegerTy() ? "int" : "other"),
+                    method_phi_type->getTypeID(),
+                    incoming_method_type->isPointerTy() ? "ptr" : (incoming_method_type->isIntegerTy() ? "int"
+                                                                                                       : "other"),
+                    incoming_method_type->getTypeID(),
+                    method_phi_type == incoming_method_type);
+      tty->flush();
+  }
   
   if (method_phi_type != incoming_method_type) {
-    tty->print_cr("  Method PHI type mismatch! Converting...");
-    tty->flush();
     if (method_phi_type->isPointerTy() && incoming_method_type->isPointerTy()) {
       incoming_method = builder()->CreateBitCast(incoming_method, method_phi_type, "method_cast");
     } else if (method_phi_type->isPointerTy() && incoming_method_type->isIntegerTy()) {
@@ -425,11 +435,6 @@ void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
       ShouldNotReachHere();
     }
     llvm::Type* converted_type = incoming_method->getType();
-    tty->print_cr("  Converted type: %s (ID=%d), matches PHI: %d",
-                  converted_type->isPointerTy() ? "ptr" : (converted_type->isIntegerTy() ? "int" : "other"),
-                  converted_type->getTypeID(),
-                  converted_type == method_phi_type);
-    tty->flush();
   }
   
   method_phi->addIncoming(incoming_method, predecessor);
@@ -447,19 +452,18 @@ void YuhuPHIState::add_incoming(YuhuState* incoming_state) {
       
       llvm::Type* phi_type = phi_value->generic_value()->getType();
       llvm::Type* incoming_type = incoming_value->generic_value()->getType();
-      
-      tty->print_cr("  local[%d]: phi_type=%s, incoming_type=%s, match=%d",
-                    i,
-                    phi_type->isPointerTy() ? "ptr" : (phi_type->isIntegerTy() ? "int" : "other"),
-                    incoming_type->isPointerTy() ? "ptr" : (incoming_type->isIntegerTy() ? "int" : "other"),
-                    phi_type == incoming_type);
-      tty->print_cr("  Calling local(%d)->addIncoming...", i);
-      tty->flush();
+
+      if (YuhuTracePHI) {
+          tty->print_cr("  local[%d]: phi_type=%s, incoming_type=%s, match=%d",
+                        i,
+                        phi_type->isPointerTy() ? "ptr" : (phi_type->isIntegerTy() ? "int" : "other"),
+                        incoming_type->isPointerTy() ? "ptr" : (incoming_type->isIntegerTy() ? "int" : "other"),
+                        phi_type == incoming_type);
+          tty->print_cr("  Calling local(%d)->addIncoming...", i);
+          tty->flush();
+      }
       
       local(i)->addIncoming(incoming_value, predecessor, builder());
-      
-      tty->print_cr("  Successfully called local(%d)->addIncoming", i);
-      tty->flush();
     }
   }
 

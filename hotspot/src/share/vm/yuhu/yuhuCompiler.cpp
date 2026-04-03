@@ -1290,8 +1290,10 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     if (estimated_size > 65536) estimated_size = 65536;  // Maximum 64KB (safety limit)
 
     entry->set_code_limit((address)(code + estimated_size));
-    tty->print_cr("ORC JIT: Estimated code size: %zu bytes (%zu basic blocks)", 
-                  estimated_size, bb_count);
+    if (YuhuTraceInstalls) {
+        tty->print_cr("ORC JIT: Estimated code size: %zu bytes (%zu basic blocks)",
+                      estimated_size, bb_count);
+    }
   }
   entry->set_function(function);
   entry->set_context(context());

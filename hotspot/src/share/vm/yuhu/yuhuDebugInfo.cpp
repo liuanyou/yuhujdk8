@@ -14,8 +14,6 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
   assert(recorder != NULL, "recorder must not be null");
   assert(method != NULL, "method must not be null");
   
-  tty->print_cr("Yuhu: generate_minimal_debug_info called for method %s", method->name()->as_utf8());
-  
   // If function is provided, process deferred OopMaps and frames
   // These were collected during IR generation with virtual PC offsets
   // After machine code generation, we now have the actual PC offsets from offset markers
@@ -31,7 +29,6 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
     
     if (deferred_offsets != NULL && deferred_oopmaps != NULL) {
       int num_deferred = deferred_offsets->length();
-      tty->print_cr("Yuhu: Processing %d deferred OopMaps with actual PC offsets", num_deferred);
       
       // Create pairs of (offset, index) for sorting
       // We need to sort by offset to ensure proper ordering
@@ -61,11 +58,8 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
         
         // Skip duplicate offsets
         if (pc_offset <= last_recorded_offset) {
-          tty->print_cr("Yuhu: Skipping duplicate pc_offset=%d (was %d)", pc_offset, last_recorded_offset);
           continue;
         }
-        
-        tty->print_cr("Yuhu: Recording safepoint at actual pc_offset=%d", pc_offset);
         
         // Now call add_safepoint with the actual PC offset
         recorder->add_safepoint(pc_offset, oopmap);
@@ -89,8 +83,6 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
           GrowableArray<ScopeValue*>* expressions = deferred_frame_expressions->at(frame_idx);
           GrowableArray<MonitorValue*>* monitors = deferred_frame_monitors->at(frame_idx);
           
-          tty->print_cr("Yuhu: Describing scope for target=%s, bci=%d", target->name()->as_utf8(), bci);
-          
           recorder->describe_scope(
             pc_offset,
             target,
@@ -103,7 +95,6 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
             recorder->create_monitor_values(monitors));
         } else {
           // No frame information, use minimal scope
-          tty->print_cr("Yuhu: No frame info for offset=%d, using minimal scope", pc_offset);
           
           recorder->describe_scope(
             pc_offset,
@@ -124,19 +115,16 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
       }
       
       delete sorted_indices;
-      tty->print_cr("Yuhu: Completed processing deferred OopMaps and frames");
       return;
     }
   }
   
   // The OopMap information should already be in the recorder from the YuhuDebugInformationRecorder conversion
   // during machine code generation. At this point, the recorder should contain properly mapped OopMap info.
-  tty->print_cr("Yuhu: OopMap information should already be in recorder from YuhuDebugInformationRecorder conversion");
   
   // Check if there are any OopMaps in the recorder
   OopMapSet* oopmaps = recorder->_oopmaps;
   if (oopmaps != NULL && oopmaps->size() > 0) {
-    tty->print_cr("Yuhu: Found %d OopMaps already in recorder", oopmaps->size());
     // Process existing OopMaps that are already in the recorder
     // Create temporary array to sort OopMaps by offset
     GrowableArray<OopMap*>* sorted_maps = new GrowableArray<OopMap*>(oopmaps->size());
@@ -170,12 +158,9 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
       
       // Skip duplicate offsets
       if (pc_offset <= last_recorded_offset) {
-        tty->print_cr("Yuhu: Skipping duplicate or non-increasing pc_offset=%d (was %d)", 
-                     pc_offset, last_recorded_offset);
         continue;
       }
-      
-      tty->print_cr("Yuhu: Recording scope for OopMap %d at pc_offset=%d", i, pc_offset);
+
       record_scope_for_oopmap(recorder, method, pc_offset, oopmap);
       last_recorded_offset = pc_offset;
     }
@@ -183,7 +168,6 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
     // Clean up temporary array
     delete sorted_maps;
   } else {
-    tty->print_cr("Yuhu: No OopMaps found in recorder - this may indicate an issue with the conversion process");
   }
 }
 
@@ -197,12 +181,8 @@ void YuhuDebugInfo::record_scope_for_oopmap(DebugInformationRecorder* recorder,
   // 这里只需为已存在的 OopMap 创建对应的 scope descriptor
   // 使用 add_non_safepoint 避免重复添加 OopMap
   
-  tty->print_cr("Yuhu: Adding non-safepoint for pc_offset=%d", pc_offset);
-  
   // 添加非 safepoint PC 描述符（不会重复添加 OopMap，仅添加 PC 信息）
   recorder->add_non_safepoint(pc_offset);
-  
-  tty->print_cr("Yuhu: Describing scope for pc_offset=%d", pc_offset);
   
   // 描述 scope（为 deoptimization 提供必要的帧信息）
   int bci = 0;  // BCI=0 表示方法入口点
@@ -227,9 +207,6 @@ void YuhuDebugInfo::record_scope_for_oopmap(DebugInformationRecorder* recorder,
                            locals,
                            expressions,
                            monitors);
-  
-  tty->print_cr("Yuhu: Completed describing scope for pc_offset=%d", pc_offset);
-  
   // 结束非 safepoint 记录
   recorder->end_non_safepoint(pc_offset);
 }

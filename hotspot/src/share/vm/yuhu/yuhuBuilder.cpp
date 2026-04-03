@@ -43,6 +43,7 @@
 #include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
+#include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
@@ -92,7 +93,6 @@ LoadInst* YuhuBuilder::CreateValueOfStructEntry(Value*      base,
           // Directly access DataLayout - this might crash if DataLayout is invalid
           const llvm::DataLayout& dl = mod->getDataLayout();
           std::string dlStr = dl.getStringRepresentation();
-          tty->print_cr("Yuhu: CreateLoad - Module DataLayout available: %s", dlStr.c_str());
           debug_printed = true;
         } else {
           tty->print_cr("Yuhu: ERROR - Function has no parent Module!");
@@ -431,17 +431,9 @@ Value* YuhuBuilder::deoptimized_entry_point() {
 
   if (yuhu_stub != NULL) {
     // Use per-function Yuhu deoptimization stub
-    tty->print_cr("Yuhu: Using per-function deoptimization stub at %p", yuhu_stub);
     return make_function(yuhu_stub, "iT", "v");
   } else {
     // Fallback to standard deopt blob (may not work correctly due to missing x0-x7)
-    if (_function != NULL) {
-      tty->print_cr("Yuhu: WARNING - No per-function deopt stub, using standard deopt blob");
-    } else {
-      tty->print_cr("Yuhu: WARNING - No function context, using standard deopt blob");
-    }
-    tty->print_cr("Yuhu: WARNING - Parameter restoration may fail for methods with parameters in x0-x7");
-
     DeoptimizationBlob* deopt_blob = SharedRuntime::deopt_blob();
     assert(deopt_blob != NULL, "deoptimization blob must have been created");
 
@@ -1130,12 +1122,8 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
   // We scan forward from the marker to find the 'adr' instruction and use its offset.
   
   if (mapper == NULL) {
-    tty->print_cr("Yuhu: scan_and_update_offset_markers - mapper is NULL");
     return;
   }
-  
-  tty->print_cr("Yuhu: Scanning machine code for offset markers: code_start=%p, code_size=%zu", 
-                code_start, code_size);
   
   // AArch64 instruction encodings (little-endian)
   const uint32_t NOP_INSTRUCTION = 0xD503201F;  // nop instruction
@@ -1172,9 +1160,11 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
         if (is_mov_w20) {
           int virtual_offset = (inst2 >> 5) & 0xFFFF;  // Extract 16-bit immediate
           int marker_offset = offset;  // Marker position
-          
-          tty->print_cr("Yuhu: Found offset marker at offset %d: virtual_offset=%d", 
-                        marker_offset, virtual_offset);
+
+          if (YuhuTraceInstalls) {
+              tty->print_cr("Yuhu: Found offset marker at offset %d: virtual_offset=%d",
+                            marker_offset, virtual_offset);
+          }
           
           // CRITICAL: Scan forward from the marker to find the 'adr' instruction
           // that records the actual PC for last_java_pc
@@ -1191,14 +1181,18 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
             if ((inst & ADR_MASK) == ADR_PATTERN) {
               actual_offset = scan_offset;
               found_adr = true;
-              tty->print_cr("Yuhu: Found ADR instruction at offset %d for virtual_offset=%d", 
-                            actual_offset, virtual_offset);
+              if (YuhuTraceInstalls) {
+                  tty->print_cr("Yuhu: Found ADR instruction at offset %d for virtual_offset=%d",
+                                actual_offset, virtual_offset);
+              }
               break;
             }
           }
           
           if (!found_adr) {
-            tty->print_cr("Yuhu: WARNING - No ADR instruction found after marker, using marker offset");
+              if (YuhuTraceInstalls) {
+                  tty->print_cr("Yuhu: WARNING - No ADR instruction found after marker, using marker offset");
+              }
           }
           
           // Update the mapper with the actual offset
@@ -1206,7 +1200,9 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
             mapper->add_mapping(virtual_offset, actual_offset);
             markers_found++;
           } else {
-            tty->print_cr("Yuhu: WARNING - Found marker for unknown virtual_offset=%d", virtual_offset);
+              if (YuhuTraceInstalls) {
+                  tty->print_cr("Yuhu: WARNING - Found marker for unknown virtual_offset=%d", virtual_offset);
+              }
           }
           
           // Skip past this marker to avoid re-scanning
@@ -1215,11 +1211,13 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
       }
     }
   }
-  
-  tty->print_cr("Yuhu: Finished scanning, found %d offset markers", markers_found);
+
+  if (YuhuTraceInstalls) {
+      tty->print_cr("Yuhu: Finished scanning, found %d offset markers", markers_found);
+  }
   
   // Print the updated mappings
-  if (markers_found > 0) {
+  if (markers_found > 0 && YuhuTraceInstalls) {
     mapper->print_mappings();
   }
 }
@@ -1319,38 +1317,11 @@ void YuhuBuilder::adjust_oopmaps_pc_offset(ciEnv* env, int plus_offset) {
 
 void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t code_size) {
   if (code_start == NULL || code_size == 0) {
-    tty->print_cr("Yuhu: fixup_prologue_epilogue_markers: code_start is NULL or code_size is 0, skipping");
     return;
   }
 
-  tty->print_cr("Yuhu: Fixing up epilogue SP restoration markers (0xcafebabe)...");
-  tty->flush();
-
-//  // Step 1: Make code segment writable using mprotect
-//  // CodeCache is r-x by default, need to make it rwx temporarily
-//  size_t page_size = os::vm_page_size();
-//  address aligned_start = (address)align_down((intptr_t)code_start, page_size);
-//  size_t aligned_size = align_up(code_size + (code_start - aligned_start), page_size);
-//
-//  tty->print_cr("Yuhu: Making code segment writable: addr=%p, size=%zu pages",
-//                aligned_start, aligned_size / page_size);
-//
-//  if (!os::protect_memory((char*)aligned_start, aligned_size,
-//                          os::MEM_PROT_RWX)) {
-//    tty->print_cr("Yuhu: ERROR - Failed to make code segment writable!");
-//    return;
-//  }
-
   // Step 2: Use YuhuPrologueAnalyzer to extract the frame offset from "add x29, sp, #imm"
   int frame_offset_bytes = YuhuPrologueAnalyzer::extract_add_x29_sp_imm(code_start);
-
-  if (frame_offset_bytes == 0) {
-    tty->print_cr("Yuhu: WARNING - Could not find 'add x29, sp, #imm' in prologue!");
-    tty->print_cr("Yuhu: Using default offset of 0 (add sp, x29, #0)");
-  } else {
-    tty->print_cr("Yuhu: Found prologue offset: %d bytes", frame_offset_bytes);
-  }
-  tty->flush();
 
   // Step 2: Generate the correct SP restore instruction
   // We need to restore SP from x29 by subtracting the frame offset
@@ -1361,7 +1332,6 @@ void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t cod
     // No offset needed, use "add sp, x29, #0"
     // Encoding: [31]=1(SF), [30:29]=00(op), [28:24]=10000(ADD), [23:22]=00, [21:10]=0, [9:5]=29(x29), [4:0]=31(sp)
     restore_sp_instruction = 0x91003D9F;
-    tty->print_cr("Yuhu: Generating 'add sp, x29, #0' (0x%08x)", restore_sp_instruction);
   } else {
     // Use SUB instruction to subtract the frame offset (64-bit version)
     // AArch64 SUB immediate (64-bit) encoding:
@@ -1374,9 +1344,6 @@ void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t cod
     // Encode: sub sp, x29, #frame_offset_bytes (64-bit version)
     // [31]=1, [30:24]=0b1010010, [23:22]=00, [21:10]=frame_offset_bytes, [9:5]=29(x29), [4:0]=31(sp)
     restore_sp_instruction = (0xD1 << 24) | ((frame_offset_bytes & 0xFFF) << 10) | (29 << 5) | 31;
-
-    tty->print_cr("Yuhu: Generating 'sub sp, x29, #%d' (imm=%d/0x%x, inst=0x%08x)",
-                  frame_offset_bytes, frame_offset_bytes, frame_offset_bytes, restore_sp_instruction);
   }
 
   // Step 3: Find and replace the marker
@@ -1397,31 +1364,12 @@ void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t cod
       replaced_count++;
     }
   }
-
-  if (replaced_count == 0) {
-    tty->print_cr("Yuhu: WARNING - No epilogue markers found!");
-  } else {
-    tty->print_cr("Yuhu: Replaced %d epilogue markers with SP restore instruction", replaced_count);
-  }
-
-  // Step 4: Restore code segment protection (r-x)
-  tty->print_cr("Yuhu: Restoring code segment protection to r-x");
-//  if (!os::protect_memory((char*)aligned_start, aligned_size,
-//                          os::MEM_PROT_READ)) {
-//    tty->print_cr("Yuhu: ERROR - Failed to restore code segment protection!");
-//  }
-
-  tty->flush();
 }
 
 void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size) {
   if (code_start == NULL || code_size == 0) {
-    tty->print_cr("Yuhu: scan_for_oop_markers_and_generate_relocation: code_start is NULL or code_size is 0, skipping");
     return;
   }
-  
-  tty->print_cr("Yuhu: Scanning for oop markers and generating relocation records...");
-  tty->flush();
   
   // Helper function to check if instruction sequence matches marker pattern
   auto is_marker_pattern = [](uint32_t* instr) -> bool {
@@ -1480,8 +1428,7 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
     
     return ((uint64_t)imm2 << 32) | ((uint64_t)imm1 << 16) | (uint64_t)imm0;
   };
-  
-  tty->print_cr("Yuhu: Scanning %zu bytes for oop markers...", code_size);
+
   int marker_count = 0;
   
   // Scan machine code for marker pattern
@@ -1491,7 +1438,6 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
     if (is_marker_pattern(instr)) {
       // Extract oop_id from marker
       int oop_id = extract_oop_id(instr);
-      tty->print_cr("  Found marker at offset %zu: oop_id=%d", i * 4, oop_id);
       
       // Look up the real jobject from pending_oops using oop_id
       assert(oop_id >= 0 && oop_id < _pending_oops->length(), "oop_id out of range");
@@ -1500,7 +1446,6 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
       
       // Allocate real oop_index from the final OopRecorder (like C1 does)
       int oop_index = cb->oop_recorder()->allocate_oop_index(jstring);
-      tty->print_cr("    Allocated real oop_index=%d from final OopRecorder", oop_index);
       
       // Placeholder is immediately after marker (5 instructions = 20 bytes)
       // Check if the next 3 instructions are mov/movk sequence
@@ -1510,14 +1455,10 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
         uint64_t full_placeholder = extract_from_movk_sequence(placeholder_instrs);
         int placeholder_oop_id = (int)(full_placeholder & 0xFFFFFFFFFFFFULL);
         
-        tty->print_cr("    Found mov/movk sequence at offset %zu: oop_id=%d, value=0x%lx", 
-                     (i + 5) * 4, placeholder_oop_id, full_placeholder);
-        
         if (placeholder_oop_id == oop_id) {
           // Update marker: change w20 from oop_id to oop_index
           uint32_t new_mov_w20 = 0x52800000 | ((oop_index & 0xFFFF) << 5) | (instr[2] & 0x1F);
           instr[2] = new_mov_w20;
-          tty->print_cr("    Updated marker w20: oop_id=%d -> oop_index=%d", oop_id, oop_index);
           
           // Update placeholder with real oop_index (high 16 bits = 0)
           uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
@@ -1529,26 +1470,23 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
           placeholder_instrs[0] = 0xD2800000 | (imm0 << 5) | (placeholder_instrs[0] & 0x1F);           // mov xN, #low16
           placeholder_instrs[1] = 0xF2A00000 | (imm1 << 5) | (placeholder_instrs[1] & 0x1F);           // movk xN, #mid-low, lsl #16
           placeholder_instrs[2] = 0xF2C00000 | (imm2 << 5) | (placeholder_instrs[2] & 0x1F);           // movk xN, #mid-high, lsl #32
-          tty->print_cr("    Updated placeholder to oop_index=%d", oop_index);
           
           // Generate HotSpot relocation record using CodeBuffer::relocate
           RelocationHolder rspec = oop_Relocation::spec(oop_index);
           cb->relocate((address)placeholder_instrs, rspec);
           marker_count++;
-          tty->print_cr("    Generated oop_Relocation for index %d", oop_index);
         } else {
-          tty->print_cr("    WARNING: placeholder oop_id mismatch! marker=%d, placeholder=%d", 
-                       oop_id, placeholder_oop_id);
         }
       } else {
-        tty->print_cr("    WARNING: No valid mov/movk sequence found after marker");
       }
     }
   }
-  
-  tty->print_cr("Yuhu: Found %d markers and generated %d relocation records", 
-               marker_count, marker_count);
-  tty->flush();
+
+  if (YuhuTraceInstalls) {
+      tty->print_cr("Yuhu: Found %d markers and generated %d relocation records",
+                    marker_count, marker_count);
+      tty->flush();
+  }
 }
 
 Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop) {

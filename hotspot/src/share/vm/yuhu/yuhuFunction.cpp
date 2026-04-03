@@ -247,14 +247,9 @@ void YuhuFunction::initialize(const char *name) {
         method_int,
         YuhuType::Method_type(),
         "method_ptr");
-
-      tty->print_cr("Yuhu: Created method_ptr and thread_ptr in early entry basic block (before creating blocks)");
-      tty->flush();
     } else {
       // Function already has basic blocks (should not happen for normal entry)
       // But if it does, try to set thread from existing blocks
-      tty->print_cr("Yuhu: WARNING - Function already has basic blocks for normal entry!");
-      tty->flush();
       method = NULL;
     }
     
@@ -295,13 +290,9 @@ void YuhuFunction::initialize(const char *name) {
     if (orig_insert_block) {
       builder()->SetInsertPoint(orig_insert_block);
     }
-
-    tty->print_cr("Yuhu: Created unified exit block at %p", _unified_exit_block);
-    tty->flush();
   }
 
   // Create the list of blocks
-  tty->print_cr("=== Yuhu: Creating %d blocks ===", block_count());
   set_block_insertion_point(NULL);
   _blocks = NEW_RESOURCE_ARRAY(YuhuTopLevelBlock*, block_count());
   for (int i = 0; i < block_count(); i++) {
@@ -312,10 +303,7 @@ void YuhuFunction::initialize(const char *name) {
     // this line could simply be:
     // _blocks[i] = new YuhuTopLevelBlock(this, b);
     _blocks[b->pre_order()] = new YuhuTopLevelBlock(this, b);
-    tty->print_cr("  Block %d: bci=%d-%d, pre_order=%d", 
-                  i, b->start(), b->limit(), b->pre_order());
   }
-  tty->flush();
 
   // Walk the tree from the start block to determine which
   // blocks are entered and which blocks require phis
@@ -325,23 +313,15 @@ void YuhuFunction::initialize(const char *name) {
     return;
   }
   assert(start_block->start() == flow()->start_bci(), "blocks out of order");
-  
-  tty->print_cr("=== Yuhu: Traversing blocks from start_block %d (bci=%d) ===", 
-                start_block->index(), start_block->start());
-  tty->flush();
+
   start_block->enter();
 
   // Initialize all entered blocks
-  tty->print_cr("=== Yuhu: Initializing entered blocks ===");
   for (int i = 0; i < block_count(); i++) {
     if (block(i)->entered()) {
       block(i)->initialize();
-      tty->print_cr("  Block %d (bci=%d): needs_phis=%d, entry_block=%s", 
-                    i, block(i)->start(), block(i)->needs_phis(),
-                    block(i)->entry_block() ? block(i)->entry_block()->getName().str().c_str() : "NULL");
     }
   }
-  tty->flush();
 
   // Create and push our stack frame
   // For normal entry, method_ptr and thread_ptr should already be created in early_entry_block (line 141-165)
@@ -354,8 +334,6 @@ void YuhuFunction::initialize(const char *name) {
     stack_frame_block = &function()->front();
     builder()->SetInsertPoint(stack_frame_block);
     set_block_insertion_point(NULL);
-    tty->print_cr("Yuhu: Reusing early entry basic block for stack frame");
-    tty->flush();
   } else {
     // Create a new entry basic block (for OSR or if early entry block doesn't exist)
     if (function()->empty()) {
@@ -401,8 +379,6 @@ void YuhuFunction::initialize(const char *name) {
             "thread_ptr");
           set_thread(thread);
         }
-        tty->print_cr("Yuhu: Created method_ptr and thread_ptr in fallback entry basic block");
-        tty->flush();
       }
     }
   }
@@ -434,30 +410,7 @@ void YuhuFunction::initialize(const char *name) {
 #endif
   }
   else {
-    tty->print_cr("=== Yuhu: Creating YuhuNormalEntryState ===");
-    tty->print_cr("  Method: %s", target()->name()->as_utf8());
-    tty->print_cr("  Signature: %s", target()->signature()->as_symbol()->as_utf8());
-    tty->print_cr("  Max locals: %d, arg_size: %d", target()->max_locals(), target()->arg_size());
-    tty->flush();
-    
     entry_state = new YuhuNormalEntryState(start_block, method);
-    
-    // Print entry state local variable types
-    tty->print_cr("  Entry state local variable types (max_locals=%d, arg_size=%d):", 
-                  target()->max_locals(), target()->arg_size());
-    for (int i = 0; i < target()->max_locals(); i++) {
-      ciType* type = start_block->local_type_at_entry(i);
-      YuhuValue* value = entry_state->local(i);
-      tty->print_cr("    local[%d]: type=%s, basic_type=%s, value=%s, llvm_type=%s",
-                    i,
-                    type ? type->name() : "NULL",
-                    type ? type2name(type->basic_type()) : "NULL",
-                    value ? "non-NULL" : "NULL",
-                    value && value->generic_value() ? 
-                      (value->generic_value()->getType()->getTypeID() == llvm::Type::PointerTyID ? "ptr" : 
-                       value->generic_value()->getType()->getTypeID() == llvm::Type::IntegerTyID ? "int" : "other") : "N/A");
-    }
-    tty->flush();
 
     // Lock if necessary
     if (is_synchronized()) {
@@ -473,8 +426,6 @@ void YuhuFunction::initialize(const char *name) {
   }
 
   // Transition into the method proper
-  tty->print_cr("=== Yuhu: Connecting entry_state to start_block %d ===", start_block->index());
-  tty->flush();
   start_block->add_incoming(entry_state);
   builder()->CreateBr(start_block->entry_block());
 
@@ -488,15 +439,7 @@ void YuhuFunction::initialize(const char *name) {
     else
       set_block_insertion_point(NULL);
 
-    // Debug: Print block info before emitting IR
-    tty->print_cr("=== Yuhu: Emitting IR for block %d (bci=%d) ===", 
-                  i, block(i)->start());
-    tty->flush();
-    
     block(i)->emit_IR();
-    
-    tty->print_cr("=== Yuhu: Finished emitting IR for block %d ===", i);
-    tty->flush();
   }
   do_deferred_zero_checks();
 }
@@ -569,8 +512,6 @@ void YuhuFunction::process_deferred_oopmaps() {
   // This allows us to handle virtual offsets that will be converted to real offsets later
   if (_deferred_oopmaps != NULL && _deferred_offsets != NULL) {
     if (_debug_info_recorder != NULL) {
-      tty->print_cr("Yuhu: Processing %d deferred OopMaps from YuhuFunction before destruction", _deferred_oopmaps->length());
-
       // Build locals array for ScopeDesc
       // For deoptimization to work, we need to provide locals information
       int max_locals = target()->max_locals();
@@ -640,7 +581,6 @@ void YuhuFunction::process_deferred_oopmaps() {
           (GrowableArray<ScopeValue*>*)NULL,
           (GrowableArray<MonitorValue*>*)NULL);
         _debug_info_recorder->end_safepoint(pc_offset);
-        tty->print_cr("Yuhu: Added OopMap to YuhuDebugInformationRecorder at virtual pc_offset=%d with %d locals", pc_offset, max_locals);
       }
     }
   }
@@ -654,7 +594,6 @@ void YuhuFunction::process_deferred_oopmaps() {
 void YuhuFunction::generate_deoptimization_stub() {
   // Check if stub is already generated
   if (_deoptimization_stub != NULL) {
-    tty->print_cr("Yuhu: Deoptimization stub already exists at %p, skipping regeneration", _deoptimization_stub);
     return;
   }
 
@@ -663,7 +602,6 @@ void YuhuFunction::generate_deoptimization_stub() {
 
   // Limit to 8 parameters (AArch64 ABI uses x0-x7 for first 8 parameters)
   if (num_params > 8) {
-    tty->print_cr("Yuhu: WARNING - Method has %d parameters, only restoring first 8", num_params);
     num_params = 8;
   }
 
@@ -718,8 +656,6 @@ void YuhuFunction::generate_deoptimization_stub() {
     masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x6, YuhuMacroAssembler::x8, -8);
   }
 
-  tty->print_cr("Yuhu: Deoptimization stub - restored x0-x%d from locals area", num_params - 1);
-
   // === Jump to standard deoptimization blob ===
   // The standard deopt blob will:
   //   - Save all registers (x0-x30, v0-v31)
@@ -734,11 +670,6 @@ void YuhuFunction::generate_deoptimization_stub() {
   masm.flush();
 
   address stub_end = masm.current_pc();
-  int stub_size = stub_end - start;
-
-  tty->print_cr("Yuhu: Deoptimization stub generated successfully");
-  tty->print_cr("     Address: %p", start);
-  tty->print_cr("     Size: %d bytes", stub_size);
 
   // Store the stub address
   _deoptimization_stub = start;
@@ -767,13 +698,8 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
     if (orig_insert_block) {
       builder()->SetInsertPoint(orig_insert_block);
     }
-
-    tty->print_cr("Yuhu: Created unified exit block at %p (lazy)", _unified_exit_block);
-    tty->flush();
   } else {
     // Already created in initialize(), just return it
-    tty->print_cr("Yuhu: Reusing existing unified exit block at %p", _unified_exit_block);
-    tty->flush();
   }
 
   return _unified_exit_block;
