@@ -147,7 +147,7 @@ void YuhuFunction::initialize(const char *name) {
   // Debug: Print linkage value to verify it's set correctly
   // In LLVM, ExternalLinkage should be 6, InternalLinkage should be 0
   int linkage_value = (int)_function->getLinkage();
-  if (YuhuTraceInstalls) {
+  if (YuhuTraceFunction) {
     tty->print_cr("YuhuFunction: Created function %s with linkage %d (ExternalLinkage expected: 6)", 
                    name, linkage_value);
   }
@@ -157,7 +157,7 @@ void YuhuFunction::initialize(const char *name) {
   if (_function->getLinkage() != Function::ExternalLinkage) {
     // If linkage is not ExternalLinkage, explicitly set it
     _function->setLinkage(Function::ExternalLinkage);
-    if (YuhuTraceInstalls) {
+    if (YuhuTraceFunction) {
       tty->print_cr("YuhuFunction: Linkage was %d, explicitly set to ExternalLinkage (%d)", 
                      linkage_value, (int)_function->getLinkage());
     }

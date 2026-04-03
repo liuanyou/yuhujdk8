@@ -71,6 +71,12 @@
                                                                               \
   diagnostic(bool, YuhuTracePHI, false,                                       \
           "Trace phi state")                                                  \
+                                                                              \
+  diagnostic(bool, YuhuTraceFunction, false,                                  \
+          "Trace function")                                                   \
+                                                                              \
+  diagnostic(bool, YuhuTraceOffset, false,                                    \
+          "Trace offset")                                                     \
 
 // Yuhu frame layout constants
 const int yuhu_frame_header_words = 6;  // Frame header size in words

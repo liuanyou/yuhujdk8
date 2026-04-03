@@ -807,19 +807,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                          env->comp_level(),
                          false,
                          false);
-    
-    // Verify nmethod was installed correctly
-    address test_pc = combined_base + adapter_size + 16;  // Some PC in LLVM code
-    CodeBlob* found_blob = CodeCache::find_blob(test_pc);
+
     if (YuhuTraceInstalls) {
-        tty->print_cr("Yuhu: Post-registration check - test_pc=%p, found_blob=%p",
-                      test_pc, found_blob);
-        if (found_blob != NULL) {
-            tty->print_cr("Yuhu: Found blob - code_begin=%p, code_end=%p",
-                          found_blob->code_begin(), found_blob->code_end());
-        } else {
-            tty->print_cr("Yuhu: WARNING - CodeCache::find_blob returned NULL!");
-        }
+        tty->print_cr("Yuhu: Register method %s successfully, nmethod: code_begin=%p, code_end=%p", func_name,
+                      target->get_Method()->code()->code_begin(), target->get_Method()->code()->code_end());
     }
   } else {
     // OSR method: build adapter + LLVM code into a combined CodeCache blob.
@@ -1070,8 +1061,7 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
           // We can't use try-catch for LLVM internal methods, so we'll just call it
           // If it crashes, we'll see it in the crash log
           direct_func = inst->getFunction();
-          getFunction_succeeded = true;
-          if (direct_func != function && YuhuTraceInstalls) {
+          if (direct_func != function && YuhuTraceFunction) {
             tty->print_cr("  WARNING: Instruction %p getFunction() returns different value!", inst);
             tty->print_cr("    Via parent: %p (%s)", func, func->getName().str().c_str());
             tty->print_cr("    Direct: %p (%s)", direct_func, direct_func ? direct_func->getName().str().c_str() : "NULL");

@@ -128,7 +128,7 @@ public:
       int real_offset = offset_mapper->get_actual_offset(virtual_offset) + plus_offset;
       
       if (real_offset != -1) {  // -1 表示未找到映射
-          if (YuhuTraceInstalls) {
+          if (YuhuTraceOffset) {
               tty->print_cr("Yuhu: Converted virtual offset=%d to real offset=%d", virtual_offset, real_offset);
           }
         if (last_real_offset == real_offset) {

@@ -1161,7 +1161,7 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
           int virtual_offset = (inst2 >> 5) & 0xFFFF;  // Extract 16-bit immediate
           int marker_offset = offset;  // Marker position
 
-          if (YuhuTraceInstalls) {
+          if (YuhuTraceOffset) {
               tty->print_cr("Yuhu: Found offset marker at offset %d: virtual_offset=%d",
                             marker_offset, virtual_offset);
           }
@@ -1181,7 +1181,7 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
             if ((inst & ADR_MASK) == ADR_PATTERN) {
               actual_offset = scan_offset;
               found_adr = true;
-              if (YuhuTraceInstalls) {
+              if (YuhuTraceOffset) {
                   tty->print_cr("Yuhu: Found ADR instruction at offset %d for virtual_offset=%d",
                                 actual_offset, virtual_offset);
               }
@@ -1190,7 +1190,7 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
           }
           
           if (!found_adr) {
-              if (YuhuTraceInstalls) {
+              if (YuhuTraceOffset) {
                   tty->print_cr("Yuhu: WARNING - No ADR instruction found after marker, using marker offset");
               }
           }
@@ -1200,7 +1200,7 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
             mapper->add_mapping(virtual_offset, actual_offset);
             markers_found++;
           } else {
-              if (YuhuTraceInstalls) {
+              if (YuhuTraceOffset) {
                   tty->print_cr("Yuhu: WARNING - Found marker for unknown virtual_offset=%d", virtual_offset);
               }
           }
@@ -1212,12 +1212,12 @@ void YuhuBuilder::scan_and_update_offset_markers(address code_start, size_t code
     }
   }
 
-  if (YuhuTraceInstalls) {
+  if (YuhuTraceOffset) {
       tty->print_cr("Yuhu: Finished scanning, found %d offset markers", markers_found);
   }
   
   // Print the updated mappings
-  if (markers_found > 0 && YuhuTraceInstalls) {
+  if (markers_found > 0 && YuhuTraceOffset) {
     mapper->print_mappings();
   }
 }
@@ -1482,7 +1482,7 @@ void YuhuBuilder::scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, a
     }
   }
 
-  if (YuhuTraceInstalls) {
+  if (YuhuTraceOffset) {
       tty->print_cr("Yuhu: Found %d markers and generated %d relocation records",
                     marker_count, marker_count);
       tty->flush();
