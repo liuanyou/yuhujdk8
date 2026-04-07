@@ -34,6 +34,8 @@
 #include "compiler/oopMap.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include <functional>  // For std::function used in unique_ptr deleter
+#include "yuhu/yuhuORCPlugins.hpp"
+#include "yuhu/yuhuTracingIRCompiler.hpp"
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuCodeBuffer.hpp"
 #include "yuhu/yuhuCompiler.hpp"
@@ -251,10 +253,33 @@ YuhuCompiler::YuhuCompiler()
   llvm::TargetOptions Options;
   // TODO: Set Options to reserve specific registers if API is available
 
-  // Configure ORC JIT with process symbol resolution
-  // This allows the JIT to find runtime helper functions in libjvm.dylib
+  // Create custom ObjectLinkingLayer with MachineCodePrinterPlugin
+  auto CreateObjectLinkingLayer = [&](orc::ExecutionSession &ES, const llvm::Triple &TT) {
+    auto MemMgr = std::make_unique<jitlink::InProcessMemoryManager>(sysconf(_SC_PAGESIZE));
+    auto Layer = std::make_unique<orc::ObjectLinkingLayer>(ES, std::move(MemMgr));
+    
+    // Add MachineCodePrinterPlugin to trace generated machine code
+    Layer->addPlugin(std::make_unique<MachineCodePrinterPlugin>());
+    
+    return Layer;
+  };
+
+  // Configure ORC JIT with custom ObjectLinkingLayer and TracingIRCompiler
   auto JIT = llvm::orc::LLJITBuilder()
     .setJITTargetMachineBuilder(JTMB)
+    .setObjectLinkingLayerCreator(CreateObjectLinkingLayer)
+    .setCompileFunctionCreator(
+        [](llvm::orc::JITTargetMachineBuilder JTMB)
+            -> llvm::Expected<std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
+          // 获取 mangling options
+          auto MO = llvm::orc::irManglingOptionsFromTargetOptions(JTMB.getOptions());
+
+          // 1. 创建默认的 ConcurrentIRCompiler
+          auto DefaultCompiler = std::make_unique<llvm::orc::ConcurrentIRCompiler>(std::move(JTMB));
+
+          // 2. 用 TracingIRCompiler 包装它
+          return std::make_unique<TracingIRCompiler>(std::move(DefaultCompiler), std::move(MO));
+        })
     .create();
   
   if (!JIT) {
