@@ -983,12 +983,12 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
 Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name) {
   assert(metadata != NULL, "inlined metadata must not be NULL");
   assert(metadata->is_metaspace_object(), "sanity check");
-  // LLVM 20+ requires explicit type parameter for CreateLoad
-  return CreateLoad(
+  
+  // Directly embed metadata pointer as immediate constant
+  // Metadata is in Metaspace, address is fixed and won't change
+  return CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)metadata),
     type,
-    CreateIntToPtr(
-      code_buffer_address(code_buffer()->inline_Metadata(metadata)),
-      PointerType::getUnqual(type)),
     name);
 }
 
