@@ -51,6 +51,12 @@
   diagnostic(ccstr, YuhuPrintAsmOf, NULL,                                    \
           "Print the asm of the specified method")                            \
                                                                               \
+  diagnostic(bool, YuhuTraceMachineCode, false,                               \
+          "Trace machine code generation from LinkGraph (AArch64 disassembly)") \
+                                                                              \
+  diagnostic(bool, YuhuTraceIRCompilation, false,                             \
+          "Trace IR to object file compilation (print IR and disassemble object file)") \
+                                                                              \
   develop(bool, YuhuTraceBytecodes, false,                                   \
           "Trace bytecode compilation")                                       \
                                                                               \

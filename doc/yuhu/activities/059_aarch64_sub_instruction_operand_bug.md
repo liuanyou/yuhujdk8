@@ -2,8 +2,12 @@
 
 **Date**: 2026-03-19  
 **Author**: AI Assistant  
-**Status**: Analysis Complete - Pending Investigation  
-**Related Files**: `hotspot/src/share/vm/yuhu/yuhuStack.cpp`, `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp`  
+**Status**: Debug Infrastructure Added - Ready for Testing  
+**Related Files**: 
+- `hotspot/src/share/vm/yuhu/yuhuStack.cpp`, `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp` (Original bug)
+- `hotspot/src/share/vm/yuhu/yuhuTracingIRCompiler.cpp` (NEW - IR to object file tracing)
+- `hotspot/src/share/vm/yuhu/yuhuORCPlugins.cpp` (NEW - Object linking layer tracing)
+- `test_yuhu/test_yuhu_orc_jit.cpp` (Standalone test program)  
 **Related Issue**: Stack overflow check generating incorrect `sub` instruction in AArch64 assembly
 
 ---
@@ -127,10 +131,11 @@ java -XX:+UnlockDiagnosticVMOptions \
 
 ### Phase 2: Enable Machine Code Printing
 
-**Option A**: Use existing `YuhuPrintAsmOf` flag
+**Option A**: Use dedicated tracing flags (implemented)
 ```bash
 java -XX:+UnlockDiagnosticVMOptions \
-     -XX:YuhuPrintAsmOf=com.example.Test \
+     -XX:+YuhuTraceIRCompilation \
+     -XX:+YuhuTraceMachineCode \
      -XX:+UseYuhuCompiler \
      com.example.Test
 ```
@@ -520,6 +525,115 @@ cd test_yuhu
 2. **Short-term**: Develop PrintMachinePass for detailed tracing
 3. **Medium-term**: File LLVM bug report with complete evidence
 4. **Long-term**: Either LLVM fixes upstream or Yuhu implements workaround
+
+---
+
+## Debug Infrastructure Added (2026-03-19)
+
+### Overview
+
+Added comprehensive tracing infrastructure to observe the complete compilation pipeline from LLVM IR to final machine code.
+
+### Components Added
+
+#### 1. TracingIRCompiler (`yuhuTracingIRCompiler.cpp`)
+- **Purpose**: Trace IRCompileLayer - IR to object file compilation
+- **Location**: `hotspot/src/share/vm/yuhu/yuhuTracingIRCompiler.cpp`
+- **Features**:
+  - Prints complete LLVM IR before compilation
+  - Identifies and prints all `sub` instructions in IR with operand details
+  - Disassembles generated object file to verify machine code
+  - Controlled by `YuhuTraceIRCompilation` switch
+
+#### 2. MachineCodePrinterPlugin (`yuhuORCPlugins.cpp`)
+- **Purpose**: Trace ObjectLinkingLayer - final machine code after linking
+- **Location**: `hotspot/src/share/vm/yuhu/yuhuORCPlugins.cpp`
+- **Features**:
+  - Prints raw machine code bytes
+  - Disassembles AArch64 instructions (sub, add, mov, ldr, str, bl, ret)
+  - Integrated via JITLink PassConfiguration (PostFixupPasses)
+  - Controlled by `YuhuTraceMachineCode` switch
+
+#### 3. Standalone Test Program (`test_yuhu_orc_jit.cpp`)
+- **Purpose**: Isolate and reproduce the bug outside Yuhu compiler
+- **Location**: `test_yuhu/test_yuhu_orc_jit.cpp`
+- **Features**:
+  - Replicates exact Yuhu ORC JIT configuration
+  - Includes TracingIRCompiler and MachineCodePrinterPlugin
+  - Can be built and run independently (no Yuhu compiler rebuild needed)
+
+### Usage
+
+Enable tracing with dedicated flags:
+```bash
+# Trace IR to object file compilation (print IR + disassemble object file)
+-XX:+YuhuTraceIRCompilation
+
+# Trace final machine code from LinkGraph (AArch64 disassembly)
+-XX:+YuhuTraceMachineCode
+
+# Enable both
+-XX:+YuhuTraceIRCompilation -XX:+YuhuTraceMachineCode
+```
+
+### Expected Output
+
+When enabled, the tracing will show:
+
+1. **IR Level** (TracingIRCompiler):
+   ```
+   === TracingIRCompiler: Before Compilation ===
+   Module: com.example.Test.method
+   %stack_bottom = sub i64 %stack_base, %stack_size
+   Found sub in IR:
+     Operand 0: %stack_base
+     Operand 1: %stack_size
+   ```
+
+2. **Object File Level** (TracingIRCompiler):
+   ```
+   === Object File Disassembly ===
+   Section: .text
+   Instructions (32-bit):
+     0x000001cb: sub x0, x0, x1  ← Check if operands are correct
+   ```
+
+3. **LinkGraph Level** (MachineCodePrinterPlugin):
+   ```
+   === Machine Code from LinkGraph ===
+   Symbol: method
+   Instructions (32-bit):
+     0x000001cb: sub x0, x0, x1  ← Final machine code
+   ```
+
+### Debugging Strategy
+
+By comparing these three levels, we can identify:
+- **If IR is wrong**: Bug is in Yuhu's IR generation
+- **If IR is correct but object file is wrong**: Bug is in LLVM instruction selection
+- **If object file is correct but LinkGraph is wrong**: Bug is in LLVM code emission or linking
+
+### Integration Points
+
+Both tracing components are integrated into Yuhu's ORC JIT initialization:
+
+```cpp
+// yuhuCompiler.cpp
+auto JIT = llvm::orc::LLJITBuilder()
+  .setJITTargetMachineBuilder(JTMB)
+  .setObjectLinkingLayerCreator(CreateObjectLinkingLayer)  // Adds MachineCodePrinterPlugin
+  .setCompileFunctionCreator(...)  // Adds TracingIRCompiler
+  .create();
+```
+
+### Status
+
+- ✅ Tracing infrastructure implemented
+- ✅ Dedicated flags added (no pattern matching issues)
+- ✅ `YuhuTraceIRCompilation` - Traces IR → object file
+- ✅ `YuhuTraceMachineCode` - Traces LinkGraph machine code
+- ✅ Ready for testing
+- ⏳ Pending: Run with `-XX:+YuhuTraceIRCompilation -XX:+YuhuTraceMachineCode` to collect evidence
 
 ---
 

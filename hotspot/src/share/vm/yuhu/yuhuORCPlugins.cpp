@@ -9,6 +9,7 @@
 #include "precompiled.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuORCPlugins.hpp"
+#include "yuhu/yuhu_globals.hpp"
 #include <unistd.h>  // For sysconf
 
 using namespace llvm;
@@ -17,55 +18,28 @@ using namespace llvm;
 // This plugin prints all generated machine code for debugging purposes
 
 void MachineCodePrinterPlugin::notifyLoaded(llvm::orc::MaterializationResponsibility &MR) {
-    errs()
-
-            << "\n=== ObjectLinkingLayer: Loaded Object ===\n";
-
-    errs()
-
-            << "Materializing symbols: ";
-    for (
-        auto &Sym
-            : MR.
-
-            getSymbols()
-
-            ) {
-        errs()
-
-                << Sym << " ";
+    if (YuhuTraceMachineCode) {
+        errs() << "\n=== ObjectLinkingLayer: Loaded Object ===\n";
+        errs() << "Materializing symbols: ";
+        for (auto &Sym: MR.getSymbols()) {
+            errs() << Sym << " ";
+        }
+        errs() << "\n";
     }
-
-    errs()
-
-            << "\n";
 }
 
 llvm::Error MachineCodePrinterPlugin::notifyEmitted(llvm::orc::MaterializationResponsibility &MR) {
-    errs()
-
-            << "=== Code Emitted ===\n";
-    return
-
-            Error::success();
+    return Error::success();
 
 }
 
 llvm::Error MachineCodePrinterPlugin::notifyFailed(llvm::orc::MaterializationResponsibility &MR) {
-    errs()
-
-            << "=== Materialization Failed ===\n";
-    return
-
-            Error::success();
+    return Error::success();
 
 }
 
 llvm::Error MachineCodePrinterPlugin::notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) {
-    return
-
-            Error::success();
-
+    return Error::success();
 }
 
 void MachineCodePrinterPlugin::notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
@@ -86,6 +60,12 @@ void MachineCodePrinterPlugin::modifyPassConfig(llvm::orc::MaterializationRespon
 }
 
 llvm::Error MachineCodePrinterPlugin::dumpMachineCode(llvm::jitlink::LinkGraph &G) {
+    // 使用专用开关 YuhuTraceMachineCode
+    if (!YuhuTraceMachineCode) {
+        return Error::success();
+    }
+
+    // 输出机器码
     errs() << "\n=== Machine Code from LinkGraph ===\n";
     errs() << "Graph: " << G.getName() << "\n";
 

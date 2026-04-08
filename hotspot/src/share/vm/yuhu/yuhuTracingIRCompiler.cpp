@@ -9,6 +9,7 @@
 #include "precompiled.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuTracingIRCompiler.hpp"
+#include "yuhu/yuhu_globals.hpp"
 
 using namespace llvm;
 
@@ -21,25 +22,30 @@ TracingIRCompiler::TracingIRCompiler(std::unique_ptr<orc::IRCompileLayer::IRComp
           WrappedCompiler(std::move(WrappedCompiler)) {}
 
 Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M) {
-    // 1. 编译前：打印 IR
-    errs() << "\n=== TracingIRCompiler: Before Compilation ===\n";
-    errs() << "Module: " << M.getName() << "\n";
-    M.print(errs(), nullptr);
-    errs() << "=== End of IR ===\n\n";
+    // 使用专用开关 YuhuTraceIRCompilation
+    bool shouldTrace = YuhuTraceIRCompilation;
 
-    // 专门查找 sub 指令
-    for (auto &F : M) {
-        for (auto &BB : F) {
-            for (auto &I : BB) {
-                if (I.getOpcode() == llvm::Instruction::Sub) {
-                    errs() << "Found sub in IR: ";
-                    I.print(errs());
-                    errs() << "\n";
-                    errs() << "  Operand 0: ";
-                    I.getOperand(0)->print(errs());
-                    errs() << "\n  Operand 1: ";
-                    I.getOperand(1)->print(errs());
-                    errs() << "\n";
+    // 1. 编译前：打印 IR（仅在匹配时）
+    if (shouldTrace) {
+        errs() << "\n=== TracingIRCompiler: Before Compilation ===\n";
+        errs() << "Module: " << M.getName() << "\n";
+        M.print(errs(), nullptr);
+        errs() << "=== End of IR ===\n\n";
+
+        // 专门查找 sub 指令
+        for (auto &F : M) {
+            for (auto &BB : F) {
+                for (auto &I : BB) {
+                    if (I.getOpcode() == llvm::Instruction::Sub) {
+                        errs() << "Found sub in IR: ";
+                        I.print(errs());
+                        errs() << "\n";
+                        errs() << "  Operand 0: ";
+                        I.getOperand(0)->print(errs());
+                        errs() << "\n  Operand 1: ";
+                        I.getOperand(1)->print(errs());
+                        errs() << "\n";
+                    }
                 }
             }
         }
@@ -49,16 +55,20 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
     auto ObjBuffer = (*WrappedCompiler)(M);
 
     if (!ObjBuffer) {
-        errs() << "❌ Compilation failed\n";
+        if (shouldTrace) {
+            errs() << "❌ Compilation failed\n";
+        }
         return ObjBuffer;
     }
 
-    errs() << "✅ Compiled successfully, size: "
-           << (*ObjBuffer)->getBufferSize() << " bytes\n";
+    if (shouldTrace) {
+        errs() << "✅ Compiled successfully, size: "
+               << (*ObjBuffer)->getBufferSize() << " bytes\n";
 
-    // 可选：反汇编目标文件，检查 sub 指令
-    if (auto Err = disassembleObjectFile(**ObjBuffer)) {
-        errs() << "Warning: Failed to disassemble\n";
+        // 可选：反汇编目标文件，检查 sub 指令
+        if (auto Err = disassembleObjectFile(**ObjBuffer)) {
+            errs() << "Warning: Failed to disassemble\n";
+        }
     }
 
     return ObjBuffer;
