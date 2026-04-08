@@ -1,29 +1,41 @@
-# Activity 059: AArch64 Backend sub Instruction Operand Order Bug
+# Activity 059: AArch64 Backend sub Instruction Operand Order - NOT A BUG (LLVM Optimization)
 
 **Date**: 2026-03-19  
 **Author**: AI Assistant  
-**Status**: Debug Infrastructure Added - Ready for Testing  
+**Status**: **CLOSED - Not a Bug** (LLVM algebraic optimization)  
 **Related Files**: 
-- `hotspot/src/share/vm/yuhu/yuhuStack.cpp`, `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp` (Original bug)
-- `hotspot/src/share/vm/yuhu/yuhuTracingIRCompiler.cpp` (NEW - IR to object file tracing)
-- `hotspot/src/share/vm/yuhu/yuhuORCPlugins.cpp` (NEW - Object linking layer tracing)
-- `test_yuhu/test_yuhu_orc_jit.cpp` (Standalone test program)  
-**Related Issue**: Stack overflow check generating incorrect `sub` instruction in AArch64 assembly
+- `hotspot/src/share/vm/yuhu/yuhuStack.cpp`, `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp` (Original code)
+- `hotspot/src/share/vm/yuhu/yuhuTracingIRCompiler.cpp` (Debug infrastructure)
+- `hotspot/src/share/vm/yuhu/yuhuORCPlugins.cpp` (Debug infrastructure)
+- LLVM Bug Report: https://github.com/llvm/llvm-project/issues/190788 (CLOSED)  
+**Related Issue**: Initially reported as incorrect `sub` instruction, later identified as LLVM algebraic optimization
 
 ---
 
 ## Executive Summary
 
-When compiling stack overflow check code, the LLVM AArch64 backend generates **incorrect assembly**: `sub x9, x10, x9` (computes `stack_size - stack_base`) instead of the correct `sub x9, x9, x10` (should compute `stack_base - stack_size`). This causes immediate crash during Yuhu-compiled method execution.
+**This is NOT a bug.** What appeared to be an incorrect `sub` instruction operand order is actually **LLVM's algebraic optimization** transforming `a - (b - c)` into `a + c - b`.
 
-**Root Cause**: LLVM 20.1.5 AArch64 instruction selection or register allocation bug - operands are swapped during instruction generation.
-
-**Evidence**: 
-```assembly
-0x000000010d229d30: ldp	x9, x10, [x23, #328]    ; x9=stack_base, x10=stack_size
-0x000000010d229d34: sub	x9, x10, x9             ; ❌ WRONG: x9 = x10 - x9
-                                              ; Should be: sub x9, x9, x10
+**Original IR**:
+```llvm
+%stack_bottom = sub i64 %stack_base, %stack_size
+%free_stack = sub i64 %current_sp, %stack_bottom
+; Equivalent to: free_stack = current_sp - (stack_base - stack_size)
 ```
+
+**Generated Assembly** (optimized):
+```assembly
+ldp x9, x10, [x23, #328]    ; x9=stack_base, x10=stack_size
+sub x9, x10, x9             ; x9 = stack_size - stack_base (computes -stack_bottom)
+add x9, x8, x9              ; x9 = current_sp + (-stack_bottom) = current_sp - stack_bottom
+```
+
+**Mathematical Equivalence**:
+- Expected: `current_sp - (stack_base - stack_size)`
+- LLVM generates: `current_sp + (stack_size - stack_base)`
+- These are **mathematically identical**: `a - (b - c) = a + c - b`
+
+**Conclusion**: LLVM's instruction selector and DAG combiner correctly optimized the expression. No bug exists.
 
 ---
 
@@ -102,6 +114,105 @@ sub   x9, x9, x10             ; ✅ CORRECT: Computes x9 = x9 - x10
 - **Theory**: `stack_base` and `stack_size` might have different types
 - **Evidence Needed**: Check IR types of both operands
 - **Test**: Ensure both are `i64` type
+
+---
+
+## Root Cause Analysis (CLOSED - Not a Bug)
+
+### Actual Behavior: LLVM Algebraic Optimization
+
+**The "bug" was a misunderstanding of LLVM's optimization behavior.**
+
+#### Original Source Code
+
+```cpp
+// yuhuStack.cpp
+Value *stack_bottom = builder()->CreateSub(stack_base, stack_size, "stack_bottom");
+Value *free_stack = builder()->CreateSub(current_sp, stack_bottom, "free_stack");
+```
+
+#### LLVM IR Generated
+
+```llvm
+%stack_bottom = sub i64 %stack_base, %stack_size
+%free_stack = sub i64 %current_sp, %stack_bottom
+```
+
+This is mathematically: `free_stack = current_sp - (stack_base - stack_size)`
+
+#### Expected Assembly (Naive Translation)
+
+```assembly
+ldp x9, x10, [x23, #328]    ; x9=stack_base, x10=stack_size
+sub x9, x9, x10             ; x9 = stack_base - stack_size
+sub x9, x8, x9              ; x9 = current_sp - stack_bottom
+```
+
+#### Actual Assembly (LLVM Optimized)
+
+```assembly
+ldp x9, x10, [x23, #328]    ; x9=stack_base, x10=stack_size
+sub x9, x10, x9             ; x9 = stack_size - stack_base (= -(stack_base - stack_size))
+add x9, x8, x9              ; x9 = current_sp + (stack_size - stack_base)
+```
+
+#### Why This is Correct
+
+**Mathematical Identity**:
+```
+a - (b - c) = a + (c - b) = a + c - b
+```
+
+**Applied to our case**:
+```
+current_sp - (stack_base - stack_size)
+= current_sp + (stack_size - stack_base)
+= current_sp + stack_size - stack_base
+```
+
+**LLVM's DAG Combiner** recognized this optimization opportunity:
+1. Instead of computing `stack_bottom = stack_base - stack_size` then `current_sp - stack_bottom`
+2. It computes `-stack_bottom = stack_size - stack_base` (one `sub`)
+3. Then adds: `current_sp + (-stack_bottom)` (one `add`)
+
+**Benefits**:
+- Same number of instructions (2 arithmetic ops)
+- `add` may be faster than `sub` on some microarchitectures
+- Better register allocation opportunities
+
+### LLVM Bug Report
+
+A bug was initially filed with LLVM: https://github.com/llvm/llvm-project/issues/190788
+
+**Status**: **CLOSED** - Not a bug, expected optimization behavior.
+
+---
+
+## Key Takeaways
+
+### 1. Don't Judge Individual Instructions in Isolation
+
+Looking at `sub x9, x10, x9` alone appears wrong, but in context with the following `add`, the complete computation is correct.
+
+**Lesson**: Always examine the **complete basic block** when analyzing compiler output, not individual instructions.
+
+### 2. LLVM's DAG Combiner is Aggressive
+
+LLVM's SelectionDAG performs extensive algebraic simplifications:
+- `a - (b - c) → a + c - b`
+- `a - (b + c) → a - b - c`
+- `(a * b) + (a * c) → a * (b + c)`
+- And many more...
+
+These optimizations are **correct** but can make the assembly look "wrong" at first glance.
+
+### 3. Debug Infrastructure is Still Valuable
+
+Even though this specific issue was not a bug, the tracing infrastructure added (`YuhuTraceIRCompilation`, `YuhuTraceMachineCode`) remains valuable for:
+- Understanding LLVM's optimization decisions
+- Debugging real code generation issues
+- Performance analysis
+- Educational purposes
 
 ---
 
