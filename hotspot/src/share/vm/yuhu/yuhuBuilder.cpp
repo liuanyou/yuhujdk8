@@ -288,6 +288,105 @@ Value* YuhuBuilder::register_finalizer() {
   return make_function((address) YuhuRuntime::register_finalizer, "TO", "v");
 }
 
+// Klass pointer encoding/decoding (compressed class pointers support)
+// Must match macroAssembler_aarch64.cpp implementation
+
+Value* YuhuBuilder::encode_klass_not_null(Value* full_klass) {
+  if (!UseCompressedClassPointers) {
+    return full_klass; // return ptr, but caller never goes to this branch
+  }
+
+  // convert ptr to i64
+    Value *full_klass_int = CreatePtrToInt(full_klass, YuhuType::intptr_type());
+  
+  // Encode logic from macroAssembler_aarch64.cpp:3337-3377
+  if (Universe::narrow_klass_base() == NULL) {
+    if (Universe::narrow_klass_shift() != 0) {
+      assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+      return CreateLShr(full_klass_int, LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+    }
+    return full_klass_int; // return i64
+  }
+  
+  // For other cases, use subtraction-based encoding
+  Value *base = LLVMValue::intptr_constant((intptr_t)Universe::narrow_klass_base());
+  Value *sub = CreateSub(full_klass_int, base);
+  if (Universe::narrow_klass_shift() != 0) {
+    assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+    return CreateLShr(sub, LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+  }
+  return sub; // return i64
+}
+
+Value* YuhuBuilder::decode_klass_not_null(Value* compressed_klass) {
+  if (!UseCompressedClassPointers) {
+    return compressed_klass; // return i32, but caller never goes to this branch
+  }
+  
+  // Decode logic from macroAssembler_aarch64.cpp:3383-3427
+  if (Universe::narrow_klass_base() == NULL) {
+    if (Universe::narrow_klass_shift() != 0) {
+      assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
+      Value *shifted = CreateShl(
+        CreateZExt(compressed_klass, YuhuType::intptr_type()),
+        LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+      return CreateIntToPtr(shifted, YuhuType::klass_type()); // return ptr
+    }
+    return CreateIntToPtr(CreateZExt(compressed_klass, YuhuType::intptr_type()), YuhuType::klass_type()); // return ptr
+  }
+  
+  // For other cases, use addition-based decoding
+  Value *base = LLVMValue::intptr_constant((intptr_t)Universe::narrow_klass_base());
+  Value *shifted = CreateShl(
+    CreateZExt(compressed_klass, YuhuType::intptr_type()),
+    LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+  return CreateIntToPtr(CreateAdd(base, shifted), YuhuType::klass_type()); // return ptr
+}
+
+void YuhuBuilder::store_klass_to_object(Value* object, Value* klass) {
+    llvm::Type* klass_ptr_type;
+    if (UseCompressedClassPointers) {
+        klass_ptr_type = YuhuType::jint_type();
+    } else {
+        klass_ptr_type = YuhuType::klass_type();
+    }
+  Value *klass_addr = CreateAddressOfStructEntry(
+    object, in_ByteSize(oopDesc::klass_offset_in_bytes()),
+    PointerType::getUnqual(klass_ptr_type),
+    "klass_addr");
+  
+  if (UseCompressedClassPointers) {
+    // Encode and store 32-bit compressed klass
+    Value *compressed = encode_klass_not_null(klass);
+    CreateStore(CreateTrunc(compressed, YuhuType::jint_type()), klass_addr);
+  } else {
+    // Store full 64-bit klass pointer
+    CreateStore(klass, klass_addr);
+  }
+}
+
+Value* YuhuBuilder::load_klass_from_object(Value* object) {
+    llvm::Type* klass_ptr_type;
+    if (UseCompressedClassPointers) {
+        klass_ptr_type = YuhuType::jint_type();
+    } else {
+        klass_ptr_type = YuhuType::klass_type();
+    }
+  Value *klass_addr = CreateAddressOfStructEntry(
+    object, in_ByteSize(oopDesc::klass_offset_in_bytes()),
+    PointerType::getUnqual(klass_ptr_type),
+    "klass_addr");
+  
+  if (UseCompressedClassPointers) {
+    // Load 32-bit compressed klass and decode
+    Value *compressed = CreateLoad(YuhuType::jint_type(), klass_addr, "compressed_klass");
+    return decode_klass_not_null(compressed);
+  } else {
+    // Load full 64-bit klass pointer
+    return CreateLoad(YuhuType::klass_type(), klass_addr, "klass");
+  }
+}
+
 Value* YuhuBuilder::safepoint() {
   return make_function((address) SafepointSynchronize::block, "T", "v");
 }

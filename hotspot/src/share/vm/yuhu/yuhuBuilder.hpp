@@ -143,6 +143,13 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* throw_ClassCastException();
   llvm::Value* throw_NullPointerException();
 
+  // Klass pointer encoding/decoding (compressed class pointers support)
+ public:
+  llvm::Value* encode_klass_not_null(llvm::Value* full_klass);
+  llvm::Value* decode_klass_not_null(llvm::Value* compressed_klass);
+  void store_klass_to_object(llvm::Value* object, llvm::Value* klass);
+  llvm::Value* load_klass_from_object(llvm::Value* object);
+
   // Intrinsics and external functions, part 2: High-level non-VM calls.
   //   These are called like normal functions.  The stack is not set
   //   up for walking so they must not safepoint or throw exceptions,

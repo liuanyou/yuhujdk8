@@ -586,11 +586,8 @@ void YuhuTopLevelBlock::handle_exception(Value* exception, int action) {
 }
 
 void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
-  Value *exception_klass = builder()->CreateValueOfStructEntry(
-    xstack(0)->jobject_value(),
-    in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(),
-    "exception_klass");
+  Value *exception_klass = builder()->load_klass_from_object(
+    xstack(0)->jobject_value());
 
   for (int i = 0; i < num_options; i++) {
     Value *check_klass =
@@ -1262,10 +1259,7 @@ Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
   BasicBlock *got_entry  = function()->CreateBlock("got_entry");
 
   // Locate the receiver's itable
-  Value *object_klass = builder()->CreateValueOfStructEntry(
-    receiver->jobject_value(), in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(),
-    "object_klass");
+  Value *object_klass = builder()->load_klass_from_object(receiver->jobject_value());
 
   Value *vtable_start = builder()->CreateAdd(
     builder()->CreatePtrToInt(object_klass, YuhuType::intptr_type()),
@@ -1757,10 +1751,7 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
   Value *check_klass = builder()->CreateInlineMetadata(klass, YuhuType::klass_type());
 
   // Get the class of the object being tested
-  Value *object_klass = builder()->CreateValueOfStructEntry(
-    object, in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(),
-    "object_klass");
+  Value *object_klass = builder()->load_klass_from_object(object);
 
   // Perform the check
   builder()->CreateCondBr(
@@ -2031,7 +2022,7 @@ void YuhuTopLevelBlock::do_new() {
 
     // Set the class
     Value *rtklass = builder()->CreateInlineMetadata(klass, YuhuType::klass_type());
-    builder()->CreateStore(rtklass, klass_addr);
+    builder()->store_klass_to_object(fast_object, rtklass);
     got_fast = builder()->GetInsertBlock();
 
     builder()->CreateBr(push_object);
