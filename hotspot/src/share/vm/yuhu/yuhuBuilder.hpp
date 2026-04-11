@@ -37,6 +37,8 @@
 #include "yuhu/yuhuValue.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/sizes.hpp"
+#include "yuhu/yuhuStack.hpp"
+#include "yuhu/yuhuFunction.hpp"
 
 // Forward declarations
 class YuhuFunction;
@@ -44,6 +46,8 @@ class YuhuFunction;
 class YuhuBuilder : public llvm::IRBuilder<> {
   friend class YuhuCompileInvariants;
   friend class YuhuFunction;
+  friend class YuhuBlock;
+  friend class YuhuCompiler;
 
  public:
   YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function);
@@ -64,6 +68,13 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Set the function pointer (called by YuhuFunction during construction)
   void set_function(YuhuFunction* function) {
     _function = function;
+  }
+  
+  // Embed call site mappings as LLVM metadata
+  void embed_call_site_metadata() {
+    if (_function) {
+      _function->embed_call_site_metadata();
+    }
   }
 
  public:
@@ -251,6 +262,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
 
   // Static field access using CP index (like C1)
   llvm::Value* CreateInlineOopForStaticField(int cp_index,
+                                              YuhuStack* stack,
                                               const char* name = "oop");
 
   llvm::Value* CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name = "");

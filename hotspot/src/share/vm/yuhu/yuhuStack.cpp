@@ -306,6 +306,188 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block
   builder()->SetInsertPoint(ok);
 }
 
+void YuhuStack::initialize_stack_pointers(llvm::Value* stack_pointer, llvm::AllocaInst* sp_storage_alloca) {
+    _stack_pointer = stack_pointer;
+    if (sp_storage_alloca != NULL) {
+        // Use the alloca created in the entry block
+        _sp_storage = sp_storage_alloca;
+    } else {
+        // Native wrapper case: create a new alloca (less ideal)
+        _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+    }
+    builder()->CreateStore(stack_pointer, _sp_storage);
+    // Frame pointer address will be set in initialize() when frame is created
+}
+
+llvm::Value* YuhuStack::stack_pointer_addr() const {
+    // For AArch64, return the address of the stack pointer storage
+    if (_sp_storage != NULL) {
+        return _sp_storage;
+    }
+    // Fallback: create a new alloca (should not happen in normal flow)
+    return builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_addr");
+}
+
+llvm::LoadInst* YuhuStack::CreateLoadStackPointer(const char *name) {
+    // For AArch64, load from the stack pointer storage
+    // LLVM 20+ requires explicit type parameter for CreateLoad
+    return builder()->CreateLoad(
+            YuhuType::intptr_type(),
+            stack_pointer_addr(),
+            name);
+}
+
+llvm::StoreInst* YuhuStack::CreateStoreStackPointer(llvm::Value* value) {
+    // For AArch64, store the stack pointer in storage
+    _stack_pointer = value;
+    if (_sp_storage == NULL) {
+        // This should not happen if sp_storage_alloca was passed correctly
+        // Fallback: create a new alloca (warning: this will be in the middle of the function!)
+        _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
+    }
+    return builder()->CreateStore(value, _sp_storage);
+}
+
+llvm::LoadInst* YuhuStack::CreateLoadFramePointer(const char *name) {
+    // For AArch64, load frame pointer from frame header
+    // LLVM 20+ requires explicit type parameter for CreateLoad
+    if (_frame_pointer_addr != NULL) {
+        return builder()->CreateLoad(
+                YuhuType::intptr_type(),
+                _frame_pointer_addr,
+                name);
+    }
+    // Fallback: load from last_Java_fp
+    return builder()->CreateLoad(
+            YuhuType::intptr_type(),
+            builder()->CreateAddressOfStructEntry(
+                    thread(),
+                    JavaThread::last_Java_fp_offset(),
+                    llvm::PointerType::getUnqual(YuhuType::intptr_type())),
+            name);
+}
+
+llvm::StoreInst* YuhuStack::CreateStoreFramePointer(llvm::Value* value) {
+    // For AArch64, store frame pointer in frame header and last_Java_fp
+    if (_frame_pointer_addr != NULL) {
+        builder()->CreateStore(value, _frame_pointer_addr);
+    }
+    // Also update last_Java_fp for frame anchor
+    return builder()->CreateStore(
+            value,
+            builder()->CreateAddressOfStructEntry(
+                    thread(),
+                    JavaThread::last_Java_fp_offset(),
+                    llvm::PointerType::getUnqual(YuhuType::intptr_type())));
+}
+
+llvm::Value* YuhuStack::last_Java_sp_addr() const {
+    return builder()->CreateAddressOfStructEntry(
+            thread(),
+            JavaThread::last_Java_sp_offset(),
+            llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+            "last_Java_sp_addr");
+}
+llvm::Value* YuhuStack::last_Java_fp_addr() const {
+    return builder()->CreateAddressOfStructEntry(
+            thread(),
+            JavaThread::last_Java_fp_offset(),
+            llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+            "last_Java_fp_addr");
+}
+llvm::Value* YuhuStack::last_Java_pc_addr() const {
+    return builder()->CreateAddressOfStructEntry(
+            thread(),
+            JavaThread::last_Java_pc_offset(),
+            llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+            "last_Java_pc_addr");
+}
+
+void YuhuStack::CreateSetLastJavaFrame() {
+    // Legacy implementation - uses ADR instruction to read PC
+    // TODO: This has a bug - ADR reads its own PC, not the return address after call
+    // Kept for backward compatibility, but should use CreateSetLastJavaFrameWithPlaceholder()
+
+    // Note that whenever _last_Java_sp != NULL other anchor fields
+    // must be valid.  The profiler apparently depends on this.
+    builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
+
+    // CRITICAL: Use the unextended_sp (SP after frame allocation) instead of
+    // current SP which may have been modified during execution
+    llvm::Value* unextended_sp = builder()->CreateLoad(
+            YuhuType::intptr_type(),
+            slot_addr(unextended_sp_slot_offset()));
+    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
+
+    // BUG: This uses CreateReadCurrentPC() which generates 'adr x0, .'
+    // This reads the PC of the ADR instruction itself, NOT the return address after call!
+    llvm::Value* current_pc = builder()->CreateReadCurrentPC();
+
+    llvm::Value *pc_addr_i64 = builder()->CreatePtrToInt(last_Java_pc_addr(), YuhuType::intptr_type(), "pc_addr_i64");
+
+    YuhuContext& ctx2 = YuhuContext::current();
+    llvm::FunctionType* store_asm_type2 = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(ctx2),
+            {YuhuType::intptr_type(), YuhuType::intptr_type()},
+            false);
+
+    llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
+            store_asm_type2,
+            "str $1, [$0]",
+            "r,r,~{memory}",
+            true,
+            false,
+            llvm::InlineAsm::AD_ATT
+    );
+
+    std::vector<llvm::Value*> store_pc_args;
+    store_pc_args.push_back(pc_addr_i64);
+    store_pc_args.push_back(current_pc);
+    builder()->CreateCall(store_asm_type2, store_pc_asm, store_pc_args);
+}
+
+// NEW: CreateSetLastJavaFrameWithPlaceholder - stores a placeholder value
+// that will be patched by JITLink plugin with the actual return address
+void YuhuStack::CreateSetLastJavaFrameWithPlaceholder(int virtual_offset) {
+    // Store FP and SP (same as CreateSetLastJavaFrame)
+    builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
+
+    llvm::Value* unextended_sp = builder()->CreateLoad(
+            YuhuType::intptr_type(),
+            slot_addr(unextended_sp_slot_offset()));
+    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
+
+    // Store PLACEHOLDER for PC - will be patched by JITLink plugin
+    // Encode virtual_offset in the placeholder: 0xDEAD0000 | virtual_offset
+    // This makes it easy to identify and patch later
+    uint32_t placeholder = 0xDEAD0000 | (virtual_offset & 0xFFFF);
+
+    llvm::Value *pc_addr_i64 = builder()->CreatePtrToInt(last_Java_pc_addr(), YuhuType::intptr_type(), "pc_addr_i64");
+
+    YuhuContext& ctx = YuhuContext::current();
+    llvm::FunctionType* store_asm_type = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(ctx),
+            {YuhuType::intptr_type(), YuhuType::intptr_type()},
+            false);
+
+    llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
+            store_asm_type,
+            "str $1, [$0]",
+            "r,r,~{memory}",
+            true,
+            false,
+            llvm::InlineAsm::AD_ATT
+    );
+
+    std::vector<llvm::Value*> store_pc_args;
+    store_pc_args.push_back(pc_addr_i64);
+    store_pc_args.push_back(llvm::ConstantInt::get(YuhuType::intptr_type(), placeholder));
+    builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
+}
+void YuhuStack::CreateResetLastJavaFrame() {
+    builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_sp_addr());
+}
+
 Value* YuhuStack::CreatePopFrame(int result_slots) {
   assert(result_slots >= 0 && result_slots <= 2, "should be");
   int locals_to_pop = max_locals() - result_slots;

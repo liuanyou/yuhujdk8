@@ -87,6 +87,12 @@ class YuhuFunction : public YuhuTargetInvariants {
   // Collection for deferred OopMaps to implement delayed safepoint addition
   GrowableArray<OopMap*>*           _deferred_oopmaps;
   GrowableArray<int>*               _deferred_offsets;
+  
+  // Virtual address mapping for call-site correlation
+  // Maps virtual_offset → virtual_address → helper_address
+  GrowableArray<int>*               _virtual_offsets;
+  GrowableArray<uint64_t>*          _virtual_addresses;
+  GrowableArray<uint64_t>*          _helper_addresses;
 
   // Per-function deoptimization stub
   address                           _deoptimization_stub;
@@ -143,6 +149,40 @@ class YuhuFunction : public YuhuTargetInvariants {
   
   GrowableArray<OopMap*>* deferred_oopmaps() const { return _deferred_oopmaps; }
   GrowableArray<int>* deferred_offsets() const { return _deferred_offsets; }
+  
+  // Methods for virtual address mapping (call-site correlation)
+  void register_call_site(int virtual_offset, uint64_t virtual_address, uint64_t helper_address) {
+    if (_virtual_offsets == NULL) {
+      _virtual_offsets = new GrowableArray<int>();
+      _virtual_addresses = new GrowableArray<uint64_t>();
+      _helper_addresses = new GrowableArray<uint64_t>();
+    }
+    _virtual_offsets->append(virtual_offset);
+    _virtual_addresses->append(virtual_address);
+    _helper_addresses->append(helper_address);
+  }
+  
+  // Embed call site mappings as LLVM metadata in the Module
+  void embed_call_site_metadata();
+  
+  int get_virtual_offset_count() const {
+    return _virtual_offsets ? _virtual_offsets->length() : 0;
+  }
+  
+  int get_virtual_offset(int index) const {
+    assert(index < get_virtual_offset_count(), "index out of bounds");
+    return _virtual_offsets->at(index);
+  }
+  
+  uint64_t get_virtual_address(int index) const {
+    assert(index < get_virtual_offset_count(), "index out of bounds");
+    return _virtual_addresses->at(index);
+  }
+  
+  uint64_t get_helper_address(int index) const {
+    assert(index < get_virtual_offset_count(), "index out of bounds");
+    return _helper_addresses->at(index);
+  }
   
   // Methods for deferred frame handling
   void add_deferred_frame(int pc_offset, ciMethod* target, int bci,

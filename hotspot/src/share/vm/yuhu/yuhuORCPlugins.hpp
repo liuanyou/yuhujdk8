@@ -56,4 +56,20 @@ private:
     llvm::Error dumpMachineCode(llvm::jitlink::LinkGraph &G);
 };
 
+// OopMapExtractorPlugin - Extract OopMap information from compiled machine code
+// This plugin scans for VM call sites (movz/movk/blr patterns) and extracts metadata
+// to register OopMaps at correct return addresses
+class OopMapExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
+public:
+    void modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
+                          llvm::jitlink::LinkGraph &LG,
+                          llvm::jitlink::PassConfiguration &PassConfig) override;
+
+private:
+    llvm::Error extractCallSites(llvm::jitlink::LinkGraph &G,
+                                 llvm::orc::MaterializationResponsibility &MR);
+    
+    bool isMovzMovkBlrSequence(const uint32_t* inst, uint64_t& call_target);
+};
+
 #endif // SHARE_VM_YUHU_YUHUORCPLUGINS_HPP

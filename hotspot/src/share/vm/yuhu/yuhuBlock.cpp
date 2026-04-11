@@ -1066,7 +1066,7 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
     if (!is_field) {
       // === GETSTATIC: Call runtime helper to get static field value ===
       int cp_index = iter()->get_field_index();
-      Value* field_result = builder()->CreateInlineOopForStaticField(cp_index);
+      Value* field_result = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
       
       // yuhu_resolve_static_field returns jlong (64-bit container)
       // We need to convert it to the actual field type

@@ -92,6 +92,11 @@ void YuhuFunction::initialize(const char *name) {
   // Initialize deferred OopMap collections
   _deferred_oopmaps = NULL;
   _deferred_offsets = NULL;
+  
+  // Initialize virtual address mapping collections
+  _virtual_offsets = NULL;
+  _virtual_addresses = NULL;
+  _helper_addresses = NULL;
 
   // Initialize deferred frame collections
   _deferred_frame_offsets = NULL;
@@ -703,4 +708,44 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
   }
 
   return _unified_exit_block;
+}
+
+// Embed call site mappings as LLVM named metadata
+// This allows the JITLink plugin to extract the mappings during linking
+void YuhuFunction::embed_call_site_metadata() {
+  if (get_virtual_offset_count() == 0) {
+    return;  // No call sites to embed
+  }
+  
+  llvm::Module* mod = function()->getParent();
+  llvm::LLVMContext& ctx = mod->getContext();
+  
+  // Create metadata for each call site: {virtual_offset, virtual_address, helper_address}
+  std::vector<llvm::MDNode*> call_site_mds;
+  
+  for (int i = 0; i < get_virtual_offset_count(); i++) {
+    int virtual_offset = get_virtual_offset(i);
+    uint64_t virtual_address = get_virtual_address(i);
+    uint64_t helper_address = get_helper_address(i);
+    
+    // Create a tuple: !{i32 virtual_offset, i64 virtual_address, i64 helper_address}
+    llvm::Metadata* operands[] = {
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), virtual_offset)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), virtual_address)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), helper_address))
+    };
+    
+    call_site_mds.push_back(llvm::MDNode::get(ctx, operands));
+  }
+  
+  // Create named metadata node: !yuhu.call_sites = {!{i32, i64, i64}, ...}
+  llvm::NamedMDNode* named_md = mod->getOrInsertNamedMetadata("yuhu.call_sites");
+  
+  for (auto* md : call_site_mds) {
+    named_md->addOperand(md);
+  }
+  
+  if (YuhuTraceIRCompilation) {
+    errs() << "[YuhuFunction] Embedded " << get_virtual_offset_count() << " call site mappings\n";
+  }
 }

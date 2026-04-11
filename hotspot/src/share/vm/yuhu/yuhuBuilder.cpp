@@ -941,6 +941,7 @@ Value* YuhuBuilder::code_buffer_address(int offset) {
 }
 
 Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
+                                                   YuhuStack* stack,
                                                    const char* name) {
   // Static field resolution:
   // At compile time, resolve the field's Method* and offset,
@@ -964,9 +965,18 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     assert(helper_addr != NULL, "yuhu_resolve_static_field must be resolvable via dlsym");
   }
   
-  // Embed helper address as inttoptr constant
+  // NEW: Get unique virtual offset for this call site
+  int virtual_offset = code_buffer()->create_unique_offset();
+  
+  // NEW: Generate virtual address (0xDEAD000000000000 | (virtual_offset << 16))
+  uint64_t virtual_address = 0xDEAD000000000000ULL | ((uint64_t)virtual_offset << 16);
+  
+  // NEW: Register call site mapping for JITLink patching
+  function()->register_call_site(virtual_offset, virtual_address, (uint64_t)(uintptr_t)helper_addr);
+  
+  // Use VIRTUAL ADDRESS instead of actual helper address
   llvm::Value* fn_ptr = CreateIntToPtr(
-    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)helper_addr),
+    llvm::ConstantInt::get(i64_ty, virtual_address),
     ptr_ty);
   
   // Resolve the field at compile time to get Klass* and offset
@@ -998,12 +1008,40 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   llvm::FunctionType* func_ty = llvm::FunctionType::get(
     YuhuType::jlong_type(), {ptr_ty, i32_ty, i1_ty, i1_ty}, false);
   
-  return CreateCall(func_ty, fn_ptr,
+  // Set last_Java_frame with placeholder BEFORE the call
+  stack->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  
+  // Create the call
+  llvm::CallInst* call = CreateCall(func_ty, fn_ptr,
                     {klass_ptr, 
                      llvm::ConstantInt::get(i32_ty, field_offset),
                      llvm::ConstantInt::get(i1_ty, is_object_field ? 1 : 0),
                      llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
                     name ? name : "field_result");
+  
+  // Create deferred OopMap for this call site
+  {
+    // Use actual frame size from stack
+    int frame_size = stack->oopmap_frame_size();
+    int arg_size = 0;
+    
+    OopMap* oopmap = new OopMap(
+      YuhuStack::oopmap_slot_munge(frame_size),
+      YuhuStack::oopmap_slot_munge(arg_size));
+    
+    // If this field returns an object reference, mark x0 (return register) as containing an oop
+    if (is_object_field) {
+      // x0 is the return register on AArch64 (r0 in HotSpot naming)
+      oopmap->set_oop(r0->as_VMReg());
+    }
+    
+    function()->add_deferred_oopmap(virtual_offset, oopmap);
+  }
+  
+  // NEW: Reset last_Java_frame AFTER the call
+  stack->CreateResetLastJavaFrame();
+  
+  return call;
 }
 
 Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {

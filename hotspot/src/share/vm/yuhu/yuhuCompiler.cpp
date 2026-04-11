@@ -647,6 +647,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                   base_name, func_name, entry_bci, env->comp_level());
     return;
   }
+  
+  // NEW: Embed call site mappings as metadata before compilation
+  // This allows the JITLink plugin to extract virtual address mappings
+  // We need to access function through builder since YuhuFunction::build returns llvm::Function*
+  // But the function object is still accessible via builder.function()
+  // Actually, we need to cast llvm::Function back to access YuhuFunction methods
+  // For now, let's add a helper method to YuhuBuilder
+  builder.embed_call_site_metadata();
 
   // Generate native code.  It's unpleasant that we have to drop into
   // the VM to do this -- it blocks safepoints -- but I can't see any

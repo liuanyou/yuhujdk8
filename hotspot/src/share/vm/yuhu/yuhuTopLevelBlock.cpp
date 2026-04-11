@@ -309,8 +309,9 @@ void YuhuTopLevelBlock::cache_after_Java_call(ciMethod *callee, Value* call_resu
   YuhuJavaCallCacher(function(), callee).scan(current_state());
 }
 
-void YuhuTopLevelBlock::decache_for_VM_call() {
-  YuhuVMCallDecacher(function(), bci()).scan(current_state());
+void YuhuTopLevelBlock::decache_for_VM_call(int virtual_offset) {
+  YuhuVMCallDecacher decacher(function(), bci(), virtual_offset);
+  decacher.scan(current_state());
 }
 
 void YuhuTopLevelBlock::cache_after_VM_call() {
