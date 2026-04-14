@@ -9,7 +9,12 @@
 #include "precompiled.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuORCPlugins.hpp"
+#include "yuhu/yuhuVirtualAddressPatcher.hpp"
+#include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuCompiler.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "code/debugInfoRec.hpp"
+#include "compiler/oopMap.hpp"
 #include <unistd.h>  // For sysconf
 
 using namespace llvm;
@@ -130,6 +135,27 @@ llvm::Error MachineCodePrinterPlugin::dumpMachineCode(llvm::jitlink::LinkGraph &
     return Error::success();
 }
 
+void OopMapExtractorPlugin::notifyLoaded(llvm::orc::MaterializationResponsibility &MR) {
+}
+
+llvm::Error OopMapExtractorPlugin::notifyEmitted(llvm::orc::MaterializationResponsibility &MR) {
+    return Error::success();
+
+}
+
+llvm::Error OopMapExtractorPlugin::notifyFailed(llvm::orc::MaterializationResponsibility &MR) {
+    return Error::success();
+
+}
+
+llvm::Error OopMapExtractorPlugin::notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) {
+    return Error::success();
+}
+
+void OopMapExtractorPlugin::notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
+                                                           llvm::orc::ResourceKey SrcKey) {
+}
+
 // OopMapExtractorPlugin implementation
 // Scans for movz/movk/blr patterns and extracts VM call site information
 
@@ -145,50 +171,18 @@ void OopMapExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsib
         });
 }
 
-bool OopMapExtractorPlugin::isMovzMovkBlrSequence(const uint32_t* inst, uint64_t& call_target) {
-    // Pattern: movz (lsl #32) -> movk (lsl #16) -> movk (lsl #0) -> blr
-    // This loads a 48-bit address and makes an indirect call
-    
-    uint32_t rd = inst[0] & 0x1F;
-    
-    // Check movz with lsl #32: 0xD2800000 | (imm << 5) | rd | (2 << 21)
-    bool is_movz_32 = (inst[0] & 0xFF800000) == 0xD2800000 &&
-                      ((inst[0] >> 21) & 0x3) == 2 &&
-                      (inst[0] & 0x1F) == rd;
-    
-    if (!is_movz_32) return false;
-    
-    // Check movk with lsl #16: 0xF2800000 | (imm << 5) | rd | (1 << 21)
-    bool is_movk_16 = (inst[1] & 0xFF800000) == 0xF2800000 &&
-                      ((inst[1] >> 21) & 0x3) == 1 &&
-                      (inst[1] & 0x1F) == rd;
-    
-    // Check movk with lsl #0: 0xF2800000 | (imm << 5) | rd | (0 << 21)
-    bool is_movk_0 = (inst[2] & 0xFF800000) == 0xF2800000 &&
-                     ((inst[2] >> 21) & 0x3) == 0 &&
-                     (inst[2] & 0x1F) == rd;
-    
-    // Check blr: 0xD63F0000 | rn
-    bool is_blr = (inst[3] & 0xFFFFFC1F) == 0xD63F0000 &&
-                  (inst[3] & 0x1F) == rd;
-    
-    if (is_movk_16 && is_movk_0 && is_blr) {
-        // Reconstruct the 48-bit address
-        uint64_t addr = 0;
-        addr |= ((uint64_t)((inst[0] >> 5) & 0xFFFF)) << 32;  // movz
-        addr |= ((uint64_t)((inst[1] >> 5) & 0xFFFF)) << 16;  // movk #16
-        addr |= ((uint64_t)((inst[2] >> 5) & 0xFFFF)) << 0;   // movk #0
-        
-        call_target = addr;
-        return true;
-    }
-    
-    return false;
-}
-
 llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                                                       llvm::orc::MaterializationResponsibility &MR) {
     // Always run this pass (not just when tracing)
+    
+    // Get the current function from YuhuCompiler
+    YuhuFunction* function = YuhuCompiler::current_compiling_function();
+    if (function == NULL) {
+        if (YuhuTraceMachineCode) {
+            errs() << "[OopMap Extractor] Warning: No current function set, skipping OopMap extraction\n";
+        }
+        return Error::success();
+    }
     
     // Iterate over all sections looking for code sections
     for (auto &Section : G.sections()) {
@@ -201,40 +195,148 @@ llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                 uint64_t BaseAddr = Block->getAddress().getValue();
                 size_t Size = Block->getSize();
                 
-                if (Size < 16) continue;  // Need at least 4 instructions
+                if (Size < 20) continue;  // Need at least 5 instructions for dual placeholders
                 
                 uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
                 
-                // Scan for movz/movk/blr pattern
-                for (size_t offset = 0; offset + 16 <= Size; offset += 4) {
-                    uint32_t* inst = reinterpret_cast<uint32_t*>(CodeData + offset);
+                // TODO: Parse __llvm_stackmaps section to get statepoint information
+                // For now, scan for call instructions (blr) and look backwards for placeholders
+                
+                // Simple approach: scan for blr instructions and look backwards
+                for (size_t offset = 12; offset + 4 <= Size; offset += 4) {
+                    uint32_t inst = *(uint32_t*)(CodeData + offset);
                     
-                    uint64_t loaded_address = 0;
-                    if (isMovzMovkBlrSequence(inst, loaded_address)) {
-                        // Check if this is a virtual address (0xDEADxxxxxxxxxx)
-                        if ((loaded_address >> 48) == 0xDEAD) {
-                            // Extract virtual_offset
-                            int virtual_offset = (loaded_address >> 16) & 0xFFFFFFFF;
+                    // Check if this is a blr instruction: 0xD63F0000 | rn
+                    if ((inst & 0xFFFFFC1F) == 0xD63F0000) {
+                        // Found a blr instruction, scan backwards for placeholders
+                        VirtualAddressMatch match;
+                        
+                        bool found = YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
+                            CodeData,
+                            offset,
+                            200,  // Max scan distance: 200 bytes (~50 instructions)
+                            match
+                        );
+                        
+                        if (found) {
+                            // Validate 1-1-1 relationship
+                            if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "[OopMap Extractor] ERROR: Missing placeholders at offset " 
+                                           << format_hex(offset, 8) << "\n";
+                                }
+                                continue;
+                            }
+                            
+                            // Extract virtual_offset and validate
+                            uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset(match.last_java_pc_va);
+                            uint64_t ct_offset = YuhuVirtualAddressScanner::extract_virtual_offset(match.call_target_va);
+                            
+                            if (ljpc_offset != ct_offset) {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "[OopMap Extractor] ERROR: Mismatched virtual_offsets at offset " 
+                                           << format_hex(offset, 8) << "\n";
+                                    errs() << "  last_Java_pc offset: " << ljpc_offset << "\n";
+                                    errs() << "  call_target offset: " << ct_offset << "\n";
+                                }
+                                continue;
+                            }
+                            
+                            uint64_t virtual_offset = ljpc_offset;
                             
                             if (YuhuTraceMachineCode) {
-                                errs() << "[OopMap Extractor] Found virtual address call site:\n";
+                                errs() << "[OopMap Extractor] Found dual placeholders:\n";
+                                errs() << "  Statepoint call offset: " << format_hex(offset, 8) << "\n";
                                 errs() << "  Virtual offset: " << virtual_offset << "\n";
-                                errs() << "  Virtual address: " << format_hex(loaded_address, 16) << "\n";
-                                errs() << "  Location: " << format_hex(BaseAddr + offset, 16) << "\n";
+                                errs() << "  last_Java_pc VA: " << format_hex(match.last_java_pc_va, 16) 
+                                       << " at " << format_hex(match.last_java_pc_placeholder_offset, 8) << "\n";
+                                errs() << "  call_target VA: " << format_hex(match.call_target_va, 16) 
+                                       << " at " << format_hex(match.call_target_placeholder_offset, 8) << "\n";
                             }
                             
-                            // TODO: Look up actual helper address from YuhuFunction
-                            // For now, we need to access the function's call site registry
-                            // This requires passing the function pointer to the plugin
-                            // For the first iteration, we'll just log and skip patching
+                            // Look up OopMap in deferred registry
+                            OopMap* oopmap = function->get_deferred_oopmap(virtual_offset);
+                            
+                            if (oopmap == NULL) {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "[OopMap Extractor] ERROR: No deferred OopMap for virtual_offset " 
+                                           << virtual_offset << "\n";
+                                }
+                                continue;
+                            }
+                            
+                            // Calculate actual offsets for patching
+                            // The return address is the instruction AFTER the bl
+                            uint64_t return_pc_offset = offset + 4;
+                            
+                            // Look up the actual helper address from virtual_offset mapping
+                            uint64_t helper_addr = function->get_helper_address_by_offset((int)virtual_offset);
+                            if (helper_addr == 0) {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "[OopMap Extractor] ERROR: No helper address for virtual_offset " 
+                                           << virtual_offset << "\n";
+                                }
+                                continue;
+                            }
+                            
+                            // Find the marker pattern with matching virtual_offset
+                            uint64_t marker_offset = YuhuVirtualAddressScanner::scan_for_marker_with_offset(
+                                CodeData,
+                                offset,  // Search from bl instruction backwards
+                                100,     // Max scan distance
+                                virtual_offset  // Look for THIS specific virtual_offset
+                            );
+                            
+                            if (marker_offset == UINT64_MAX) {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "[OopMap Extractor] ERROR: Could not find marker with virtual_offset "
+                                           << virtual_offset << " for statepoint at offset " << offset << "\n";
+                                }
+                                continue;
+                            }
+                            
+                            // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
+                            uint64_t adr_offset = marker_offset + 8;
+                            
+                            // Calculate absolute addresses for patching
+                            // BaseAddr is the load address of this section (from JITLink)
+                            uint64_t adr_absolute_address = BaseAddr + adr_offset;
+                            uint64_t return_absolute_address = BaseAddr + return_pc_offset;
+                            
+                            // Patch the adr instruction with correct PC-relative offset
+                            YuhuVirtualAddressScanner::patch_adr_instruction(
+                                CodeData,
+                                adr_offset,
+                                adr_absolute_address,      // Address of adr instruction
+                                return_absolute_address    // Target address (return after bl)
+                            );
+                            
+                            // Register OopMap at the return PC offset
+                            YuhuDebugInformationRecorder* debug_info = function->debug_info_recorder();
+                            if (debug_info != NULL) {
+                                // Calculate the actual code offset (relative to method start)
+                                int code_offset = (int)return_pc_offset;
+                                
+                                // Register the safepoint with the OopMap
+                                debug_info->add_safepoint(code_offset, oopmap);
+                                
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "  [OK] Registered OopMap at code offset: " << code_offset << "\n";
+                                }
+                            } else {
+                                if (YuhuTraceMachineCode) {
+                                    errs() << "  [WARNING] No DebugInformationRecorder, OopMap not registered\n";
+                                }
+                            }
                             
                             if (YuhuTraceMachineCode) {
-                                errs() << "  [TODO] Patch with actual helper address\n";
-                                errs() << "  [TODO] Record OopMap at return PC\n";
+                                errs() << "  [OK] Patched adr instruction at offset " << adr_offset 
+                                       << " to point to return address at offset " << return_pc_offset << "\n";
+                                errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
                             }
                             
-                            // Skip past this sequence
-                            offset += 12;
+                            // Skip past this blr instruction
+                            // (don't skip, as there might be multiple blr instructions in sequence)
                         }
                     }
                 }

@@ -25,6 +25,7 @@
 
 #include "precompiled.hpp"
 #include "yuhu/yuhuInvariants.hpp"
+#include "yuhu/yuhuBuilder.hpp"
 
 int YuhuTargetInvariants::count_monitors() {
   int result = 0;
@@ -34,4 +35,8 @@ int YuhuTargetInvariants::count_monitors() {
     }
   }
   return result;
+}
+
+YuhuCodeBuffer* YuhuCompileInvariants::code_buffer() const {
+    return builder()->code_buffer();
 }

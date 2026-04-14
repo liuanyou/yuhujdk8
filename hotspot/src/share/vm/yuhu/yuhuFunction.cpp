@@ -145,6 +145,9 @@ void YuhuFunction::initialize(const char *name) {
     YuhuContext::current(),
     "frame-pointer",
     "all"));  // "all" means force frame pointer in all functions
+  
+  // Set GC strategy for RS4GC statepoint infrastructure
+  _function->setGC("statepoint-example");
 
   // Initialize the debug information recorder
   _debug_info_recorder = new YuhuDebugInformationRecorder();

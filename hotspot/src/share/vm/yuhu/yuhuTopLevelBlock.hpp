@@ -303,10 +303,11 @@ class YuhuTopLevelBlock : public YuhuBlock {
     // NEW: Get unique virtual offset for this call site (MUST be before decache)
     int virtual_offset = code_buffer()->create_unique_offset();
     
-    // Pass virtual_offset to decacher so it uses the same offset for OopMap
-    decache_for_VM_call(virtual_offset);
+    // Step 2: Create dual virtual addresses with same virtual_offset
+    uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
     
-    // NEW: Extract actual helper address from callee (inttoptr constant)
+    // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;
     if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
       if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
@@ -316,30 +317,24 @@ class YuhuTopLevelBlock : public YuhuBlock {
       }
     }
     
-    // NEW: Generate virtual address and register mapping
-    uint64_t virtual_address = 0xDEAD000000000000ULL | ((uint64_t)virtual_offset << 16);
-    if (helper_address != 0) {
-      function()->register_call_site(virtual_offset, virtual_address, helper_address);
-    }
-    
-    // NEW: Replace callee with virtual address
+    // Step 4: Replace callee with virtual address placeholder
     llvm::Value* virtual_callee = callee;
     if (helper_address != 0) {
       llvm::Module* mod = builder()->GetInsertBlock()->getModule();
       virtual_callee = builder()->CreateIntToPtr(
-        llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), virtual_address),
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
         callee->getType());
     }
     
-    // Use placeholder mechanism for last_Java_pc
-    stack()->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+    // Step 5: Store last_Java_pc placeholder (will be patched later)
+    stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
     
-    // LLVM 20+ requires FunctionType for CreateCall with function pointer
-    // VM calls typically have signature: (Thread*, ...) -> return_type
-    // We need to reconstruct FunctionType from the arguments
+    // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
+    decache_for_VM_call(virtual_offset);
+    
+    // Step 7: Create the call
 #if LLVM_VERSION_MAJOR >= 20
     llvm::ArrayRef<llvm::Value*> args_array(args_start, args_end);
-    // Reconstruct FunctionType: params are the argument types
     std::vector<llvm::Type*> param_types;
     for (llvm::Value** arg = args_start; arg != args_end; ++arg) {
       param_types.push_back((*arg)->getType());
@@ -350,12 +345,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
     llvm::CallInst *res = builder()->CreateCall(virtual_callee, llvm::makeArrayRef(args_start, args_end));
 #endif
     
-    // OopMap is already created and populated by decache_for_VM_call()
-    // No need to create a new one here - the decacher has already:
-    // 1. Created OopMap with correct frame_size
-    // 2. Marked all live oops via set_oop()
-    // 3. Registered it via add_deferred_oopmap()
-    
+    // Step 8: Reset last_Java_pc and cache results
     stack()->CreateResetLastJavaFrame();
     cache_after_VM_call();
     if (exception_action & EAM_CHECK) {

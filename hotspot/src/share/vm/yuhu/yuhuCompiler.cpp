@@ -48,11 +48,15 @@
 #include "yuhu/yuhuDebugInfo.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
+
+// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
+extern "C" void gc_safepoint_poll();
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "code/codeCache.hpp"
 #include "oops/method.hpp"
 #include "c1/c1_Runtime1.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "yuhu/yuhuIRTransformer.hpp"
 
 #include <fnmatch.h>
 #include <cstring>
@@ -68,6 +72,9 @@ namespace {
   MAttrs("mattr",
          cl::CommaSeparated);
 }
+
+// Static member initialization
+YuhuFunction* YuhuCompiler::_current_compiling_function = NULL;
 
 YuhuCompiler::YuhuCompiler()
   : AbstractCompiler() {
@@ -253,13 +260,16 @@ YuhuCompiler::YuhuCompiler()
   llvm::TargetOptions Options;
   // TODO: Set Options to reserve specific registers if API is available
 
-  // Create custom ObjectLinkingLayer with MachineCodePrinterPlugin
+  // Create custom ObjectLinkingLayer with plugins
   auto CreateObjectLinkingLayer = [&](orc::ExecutionSession &ES, const llvm::Triple &TT) {
     auto MemMgr = std::make_unique<jitlink::InProcessMemoryManager>(sysconf(_SC_PAGESIZE));
     auto Layer = std::make_unique<orc::ObjectLinkingLayer>(ES, std::move(MemMgr));
     
     // Add MachineCodePrinterPlugin to trace generated machine code
     Layer->addPlugin(std::make_unique<MachineCodePrinterPlugin>());
+    
+    // Add OopMapExtractorPlugin to scan for virtual address placeholders and register OopMaps
+    Layer->addPlugin(std::make_unique<OopMapExtractorPlugin>());
     
     return Layer;
   };
@@ -289,6 +299,7 @@ YuhuCompiler::YuhuCompiler()
     });
     fatal(err_msg("Failed to create LLJIT: %s", ErrMsg.c_str()));
   }
+  (*JIT)->getIRTransformLayer().setTransform(YuhuIRTransformer::runGCPasses);
   
   _jit = std::move(*JIT);
   
@@ -305,6 +316,20 @@ YuhuCompiler::YuhuCompiler()
     fatal(err_msg("Failed to create DynamicLibrarySearchGenerator: %s", ErrMsg.c_str()));
   }
   MainJD.addGenerator(std::move(*DLSGOrErr));
+
+    llvm::orc::SymbolMap SymMap;
+    auto& ES = _jit->getExecutionSession();
+    SymMap[ES.intern("gc.safepoint_poll")] =
+            llvm::orc::ExecutorSymbolDef(
+                    llvm::orc::ExecutorAddr::fromPtr(&gc_safepoint_poll),
+                    llvm::JITSymbolFlags::Callable);
+    auto symErr = MainJD.define(llvm::orc::absoluteSymbols(std::move(SymMap)));
+    if (symErr) {
+        // handle symErr
+        llvm::handleAllErrors(std::move(symErr), [](const llvm::ErrorInfoBase& EIB) {
+            fatal(err_msg("Error defining symbol: %s", EIB.message().c_str()));
+        });
+    }
   
   // Add normal module to JITDylib
   // Note: ORC JIT uses ThreadSafeModule, which requires ThreadSafeContext
@@ -648,6 +673,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     return;
   }
   
+  // Set the current compiling function for OopMapExtractorPlugin
+  set_current_compiling_function(builder.function());
+  
   // NEW: Embed call site mappings as metadata before compilation
   // This allows the JITLink plugin to extract virtual address mappings
   // We need to access function through builder since YuhuFunction::build returns llvm::Function*
@@ -675,6 +703,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       builder.scan_and_update_offset_markers(code_start, effective_code_size, offset_mapper);
     }
   }
+  
+  // Clear the current compiling function (compilation is complete)
+  set_current_compiling_function(NULL);
 
   bool is_osr = (entry_bci != InvocationEntryBci);
   int adapter_size = 0;
@@ -1465,7 +1496,7 @@ address YuhuCompiler::generate_static_call_stub(ciMethod* target_method, ciMetho
   
   // Register this stub for patching when the current method (caller) is compiled
   // When the current method is compiled, we'll know its x28 offset and can patch this stub
-  register_stub_for_patching(current_method, stub_addr);
+//  register_stub_for_patching(current_method, stub_addr);
   
   if (YuhuTraceInstalls) {
     tty->print_cr("Yuhu: Generated static call stub at " PTR_FORMAT " for target method %s (from caller %s)",

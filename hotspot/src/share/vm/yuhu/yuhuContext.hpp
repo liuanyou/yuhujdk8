@@ -141,6 +141,7 @@ class YuhuContext : public llvm::LLVMContext {
   llvm::PointerType*  _Method_type;
   llvm::ArrayType*    _monitor_type;
   llvm::PointerType*  _oop_type;
+  llvm::PointerType*  _oop_addrspace1_type;  // ptr addrspace(1) for RS4GC
   llvm::PointerType*  _thread_type;
   // Note: AArch64 uses standard ABI stack, no ZeroStack needed
   // _zeroStack_type removed for AArch64
@@ -171,6 +172,9 @@ class YuhuContext : public llvm::LLVMContext {
   }
   llvm::PointerType* oop_type() const {
     return _oop_type;
+  }
+  llvm::PointerType* oop_addrspace1_type() const {
+    return _oop_addrspace1_type;
   }
   llvm::PointerType* thread_type() const {
     return _thread_type;

@@ -11,6 +11,9 @@
 
 #include "yuhu/llvmHeaders.hpp"
 
+// Forward declarations
+class YuhuFunction;
+
 // ORC JIT Plugin declarations
 // All ObjectLinkingLayer::Plugin implementations should be defined here
 
@@ -57,10 +60,21 @@ private:
 };
 
 // OopMapExtractorPlugin - Extract OopMap information from compiled machine code
-// This plugin scans for VM call sites (movz/movk/blr patterns) and extracts metadata
-// to register OopMaps at correct return addresses
+// This plugin scans for dual virtual address placeholders (0xDEADxxxx and 0xBEEFxxxx)
+// and patches them with actual values, then registers OopMaps at correct return addresses
 class OopMapExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
 public:
+    void notifyLoaded(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyEmitted(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyFailed(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) override;
+
+    void notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
+                                     llvm::orc::ResourceKey SrcKey) override;
+
     void modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
                           llvm::jitlink::LinkGraph &LG,
                           llvm::jitlink::PassConfiguration &PassConfig) override;
@@ -68,8 +82,6 @@ public:
 private:
     llvm::Error extractCallSites(llvm::jitlink::LinkGraph &G,
                                  llvm::orc::MaterializationResponsibility &MR);
-    
-    bool isMovzMovkBlrSequence(const uint32_t* inst, uint64_t& call_target);
 };
 
 #endif // SHARE_VM_YUHU_YUHUORCPLUGINS_HPP

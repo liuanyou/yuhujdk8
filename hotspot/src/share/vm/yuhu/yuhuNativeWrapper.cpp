@@ -36,6 +36,9 @@ void YuhuNativeWrapper::initialize(const char *name) {
     YuhuType::entry_point_type(),
     GlobalVariable::InternalLinkage,
     name);
+  
+  // Set GC strategy for RS4GC statepoint infrastructure
+  _function->setGC("statepoint-example");
 
   // Register reservation for x19-x28 is handled globally via TargetMachine features.
 

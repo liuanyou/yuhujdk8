@@ -133,6 +133,7 @@
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
+#include <llvm/ExecutionEngine/Orc/Core.h>  // For absoluteSymbols, JITEvaluatedSymbol
 #include <llvm/Transforms/Utils/Cloning.h>  // For CloneModule
 #include <llvm/Support/Error.h>  // For handleAllErrors, ErrorInfoBase
 // Keep ExecutionEngine.h for forward declarations if needed

@@ -26,6 +26,7 @@
 #include "precompiled.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/deoptimization.hpp"
+#include "runtime/safepoint.hpp"
 #include "runtime/thread.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuRuntime.hpp"
@@ -246,6 +247,21 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
 // Uses Constant Pool Cache approach: embed CP index in IR,
 // runtime helper resolves field via the current method's constant pool.
 // No global state or thread-local storage needed.
+
+// ============================================================================
+// GC Safepoint Poll for LLVM PlaceSafepoints pass
+// ============================================================================
+// This function is called by LLVM-generated code at loop backedges and method entries.
+// PlaceSafepoints pass automatically inserts calls to gc_safepoint_poll(),
+// and RewriteStatepointsForGC wraps them with gc.statepoint intrinsics.
+// This implementation checks if a safepoint is in progress and blocks if needed.
+extern "C" void gc_safepoint_poll() {
+  // Use do_call_back() which checks (_state != _not_synchronized)
+  // This catches both _synchronizing and _synchronized states
+  if (SafepointSynchronize::do_call_back()) {
+    SafepointSynchronize::block(JavaThread::current());
+  }
+}
 
 // Resolve static field by Klass* and field offset
 // Called from LLVM IR generated code with embedded Klass* pointer

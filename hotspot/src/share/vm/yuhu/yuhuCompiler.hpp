@@ -45,6 +45,7 @@ class YuhuBuilder;
 class YuhuContext;
 class YuhuMemoryManager;
 class YuhuEntry;
+class YuhuFunction;
 
 class YuhuCompiler : public AbstractCompiler {
  public:
@@ -167,6 +168,14 @@ class YuhuCompiler : public AbstractCompiler {
     assert(compiler->is_yuhu() && compiler->is_initialized(), "should be");
     return (YuhuCompiler *) compiler;
   }
+  
+  // Current function being compiled (thread-local for safety)
+ private:
+  static YuhuFunction* _current_compiling_function;
+  
+ public:
+  static YuhuFunction* current_compiling_function() { return _current_compiling_function; }
+  static void set_current_compiling_function(YuhuFunction* func) { _current_compiling_function = func; }
 
   // Helpers
  private:

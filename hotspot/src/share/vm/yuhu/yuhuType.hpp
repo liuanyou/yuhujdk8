@@ -94,6 +94,9 @@ class YuhuType : public AllStatic {
   static llvm::PointerType* oop_type() {
     return context().oop_type();
   }
+  static llvm::PointerType* oop_addrspace1_type() {
+    return context().oop_addrspace1_type();
+  }
   static llvm::PointerType* thread_type() {
     return context().thread_type();
   }

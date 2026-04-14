@@ -446,8 +446,66 @@ void YuhuStack::CreateSetLastJavaFrame() {
     builder()->CreateCall(store_asm_type2, store_pc_asm, store_pc_args);
 }
 
-// NEW: CreateSetLastJavaFrameWithPlaceholder - stores a placeholder value
-// that will be patched by JITLink plugin with the actual return address
+// NEW: CreateSetLastJavaFrameWithPlaceholderPC - generates adr instruction with marker
+// The adr instruction will be patched by JITLink plugin to point to return address after blr
+// This generates: marker (mov/movk with virtual_offset) + adr + str pattern
+void YuhuStack::CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address) {
+    // Extract virtual_offset from the virtual address (low 16 bits)
+    int virtual_offset = virtual_address & 0xFFFF;
+    
+    // Store FP and SP (same as CreateSetLastJavaFrame)
+    builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
+
+    llvm::Value* unextended_sp = builder()->CreateLoad(
+            YuhuType::intptr_type(),
+            slot_addr(unextended_sp_slot_offset()));
+    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
+
+    // Generate inline asm with marker + adr instruction
+    // The marker embeds virtual_offset for correlation during patching
+    // asm template:
+    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
+    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
+    //   adr x20, .+8                  - adr with dummy offset (will be patched)
+    //   str x20, [$0]                 - Store to last_Java_pc
+    
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    llvm::LLVMContext& ctx = mod->getContext();
+    
+    // Create function type for inline asm: void (ptr)
+    llvm::FunctionType* asm_type = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(ctx),
+        {llvm::PointerType::getUnqual(llvm::Type::getInt64Ty(ctx))},
+        false);
+    
+    // Inline asm string with marker and adr (no label needed)
+    // Use virtual_offset in the marker for identification during patching
+    char asm_buf[256];
+    snprintf(asm_buf, sizeof(asm_buf),
+        "mov w19, #0xDEAD\\n\\t"           // Marker magic
+        "movk w19, #%d, lsl #16\\n\\t"     // Virtual offset (embedded for correlation)
+        "adr x20, .+8\\n\\t"               // adr with dummy offset (+8 bytes, will be patched)
+        "str x20, [$0]\\n\\t",             // Store address to last_Java_pc
+        virtual_offset);
+    
+    std::string asm_string(asm_buf);
+    
+    // Constraints: "r" means input operand goes to a general register
+    // $0 will be replaced with the last_Java_pc address
+    llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
+        asm_type,
+        asm_string,
+        "r",  // Constraint string
+        true, // hasSideEffects
+        true  // isAlignStack
+    );
+    
+    // Get the address of last_Java_pc
+    llvm::Value* last_java_pc_addr = last_Java_pc_addr();
+    
+    // Create the inline asm call
+    builder()->CreateCall(asm_inst, {last_java_pc_addr});
+}
 void YuhuStack::CreateSetLastJavaFrameWithPlaceholder(int virtual_offset) {
     // Store FP and SP (same as CreateSetLastJavaFrame)
     builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());

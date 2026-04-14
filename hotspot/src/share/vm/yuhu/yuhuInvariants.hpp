@@ -34,7 +34,9 @@
 #include "code/dependencies.hpp"
 #include "memory/allocation.hpp"
 #include "yuhu/llvmHeaders.hpp"
-#include "yuhu/yuhuBuilder.hpp"
+#include "yuhu/yuhuCodeBuffer.hpp"
+
+class YuhuBuilder;
 
 // Base classes used to track various values through the compilation.
 // YuhuCompileInvariants is used to track values which remain the
@@ -99,9 +101,7 @@ class YuhuCompileInvariants : public ResourceObj {
   DebugInformationRecorder* debug_info() const {
     return env()->debug_info();
   }
-  YuhuCodeBuffer* code_buffer() const {
-    return builder()->code_buffer();
-  }
+  YuhuCodeBuffer* code_buffer() const;
 
  public:
   Dependencies* dependencies() const {

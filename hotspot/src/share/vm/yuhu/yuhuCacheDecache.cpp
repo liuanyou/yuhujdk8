@@ -42,11 +42,11 @@ void YuhuDecacher::start_frame() {
     _pc_offset = code_buffer()->create_unique_offset();
   }
   
-  // Insert offset marker to create mapping between virtual offset and actual offset
-  // This is essential for OopMap relocation after machine code generation
-  // Use the builder to create a distinctive LLVM IR marker that can be identified
-  // during machine code generation
-  builder()->CreateOffsetMarker(_pc_offset);
+  // NOTE: We NO LONGER create offset markers!
+  // The dual virtual address approach handles correlation:
+  // - 0xDEADxxxx placeholder for last_Java_pc
+  // - 0xBEEFxxxx placeholder for call target
+  // Both share the same virtual_offset for 1-1-1 mapping
   
   _oopmap = new OopMap(
     oopmap_slot_munge(stack()->oopmap_frame_size()),
@@ -55,7 +55,7 @@ void YuhuDecacher::start_frame() {
   // Store the oopmap for later processing
   // We do NOT call debug_info()->add_safepoint() here because virtual offsets
   // may not be in proper order. We'll process them after machine code generation.
-  function()->add_deferred_oopmap(pc_offset(), oopmap());
+  function()->add_deferred_oopmap(_pc_offset, oopmap());
 }
 
 void YuhuDecacher::start_stack(int stack_depth) {

@@ -133,15 +133,11 @@ void YuhuTopLevelBlock::maybe_add_backedge_safepoint() {
 }
 ```
 
-**The bug**: No decache/cache around backedge safepoints. If an oop is live across the backedge in a register, and GC moves it, the register contains a stale address → crash.
+**The bug**: No decache/cache around backedge safepoints. If an oop is live across the backedge in a register (including LLVM auto-spill slots), and GC moves it, the register/slot contains a stale address → crash.
 
-**Required fix**: Apply same decache/cache pattern to backedge safepoints as used for VM calls:
-1. Force-spill all live oops to known stack slots before safepoint
-2. Mark those slots in OopMap
-3. Reload all oops from stack after safepoint (ensures GC-updated addresses)
+**Root cause**: Yuhu's `current_state()` only tracks Java-level state (locals + expression stack), but LLVM creates additional SSA values that may contain oops in registers or auto-spill slots that are invisible to the decacher.
 
-**Short-term solution**: Force-spill all live oops (type-driven, not register-driven)
-**Long-term solution**: Investigate LLVM's RewriteStatepointsForGC pass
+**Solution**: Use LLVM's RewriteStatepointsForGC + PlaceSafepoints passes to automatically track all oop locations and insert safepoint polls.
 
 ## Scope of Redesign: ALL Java Calls, Not Just Runtime Helpers
 
@@ -245,19 +241,43 @@ Value *result = builder()->CreateCall(func_type, native_function, param_values);
 
 ## Design Solution
 
-### Approach: Inline Metadata + JITLink PostFixupPass
+### Approach: Virtual Address Placeholders + Stack Map Correlation
 
 **Why this approach**:
-1. ✅ Each call site gets a unique virtual offset at IR generation time
-2. ✅ Virtual offset is tracked in Yuhu's deferred OopMap registry
-3. ✅ JITLink scans machine code for call patterns (movz/movk/blr)
-4. ✅ JITLink matches call target addresses to deferred OopMaps
-5. ✅ No wrapper functions (avoids extra bl + ret overhead)
-6. ✅ No offset markers (user preference)
+1. ✅ Each call site gets a unique virtual address at IR generation time
+2. ✅ Virtual address serves as placeholder for last_Java_pc
+3. ✅ Virtual address is scannable pattern in machine code
+4. ✅ Stack maps provide exact offsets after code generation
+5. ✅ Backward scanning from statepoint call finds the placeholder
+6. ✅ No GlobalVariable (doesn't work with nmethod CodeBlob)
+7. ✅ No wrapper functions (breaks stack walking)
+8. ✅ No custom metadata (dropped by RewriteStatepointsForGC)
 
-### Phase 1: IR Generation - Add Metadata to ALL Call Sites
+### Phase 1: IR Generation - Store Dual Virtual Address Placeholders
 
 **Apply to ALL call types**, not just `CreateInlineOopForStaticField()`:
+
+**Key Change**: For each call site, we create **two** virtual addresses encoded with the **same** virtual offset but **different magic numbers**:
+1. **Last Java PC placeholder** (`0xDEADxxxx`): Stored to `thread->last_Java_pc`
+2. **Call target placeholder** (`0xBEEFxxxx`): Used as the call target address
+
+Both placeholders share the same `virtual_offset` to establish a 1-1-1 relationship with the statepoint ID.
+
+#### Dual Virtual Address Encoding
+
+```cpp
+// At each call site:
+int virtual_offset = code_buffer()->create_unique_offset();  // e.g., 0x1000, 0x1004, 0x1008...
+
+// Two virtual addresses with different magic numbers, same virtual_offset
+uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // e.g., 0xDEAD1000
+uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // e.g., 0xBEEF1000
+```
+
+**Why different magic numbers**:
+- `0xDEADxxxx`: Magic for last_Java_pc placeholders (easily identifiable when scanning backwards from statepoint)
+- `0xBEEFxxxx`: Magic for call target placeholders (easily identifiable when patching call instructions)
+- Same `xxxx` (virtual_offset): Guarantees 1-1-1 relationship between last_Java_pc, call target, and statepoint
 
 #### 1. VM Runtime Calls via `call_vm()`
 
@@ -270,13 +290,21 @@ llvm::CallInst* call_vm(llvm::Value* callee, ...) {
   // 1. Get unique virtual offset for this call site
   int virtual_offset = code_buffer()->create_unique_offset();
   
-  // 2. Store placeholder for last_Java_pc (will be patched later)
-  stack()->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  // 2. Create dual virtual addresses with same virtual_offset
+  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
+  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
   
-  // 3. Create the call
-  CallInst *res = builder()->CreateCall(func_type, callee, args);
+  // 3. Store virtual address as placeholder for last_Java_pc
+  Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
+  builder()->CreateStore(ljpc_placeholder, last_Java_pc_addr());
   
-  // 4. Create deferred OopMap
+  // 4. Create the call using virtual address as call target
+  Value* callee_ptr = CreateIntToPtr(
+    ConstantInt::get(i64_ty, call_target_va), 
+    func_type->getPointerTo());
+  CallInst *res = builder()->CreateCall(func_type, callee_ptr, args);
+  
+  // 5. Create deferred OopMap keyed by virtual_offset
   OopMap* oopmap = create_oopmap_for_runtime_call();
   function()->add_deferred_oopmap(virtual_offset, oopmap);
   
@@ -295,13 +323,21 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index, const char* name
   // 1. Get unique virtual offset
   int virtual_offset = code_buffer()->create_unique_offset();
   
-  // 2. Set last_Java_frame with placeholder
-  stack()->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  // 2. Create dual virtual addresses
+  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;
+  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;
   
-  // 3. Create the call
-  CallInst* call = CreateCall(func_ty, fn_ptr, args, name);
+  // 3. Store placeholder for last_Java_pc
+  Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
+  builder()->CreateStore(ljpc_placeholder, last_Java_pc_addr());
   
-  // 4. Create deferred OopMap
+  // 4. Create the call using virtual address as call target
+  Value* callee_ptr = CreateIntToPtr(
+    ConstantInt::get(i64_ty, call_target_va), 
+    func_ty->getPointerTo());
+  CallInst* call = CreateCall(func_ty, callee_ptr, args, name);
+  
+  // 5. Create deferred OopMap
   OopMap* oopmap = new OopMap(frame_size, arg_size);
   if (is_object_field) {
     oopmap->set_reg(OopMap::kReturnRegister);  // x0 contains oop
@@ -323,13 +359,21 @@ void YuhuNativeWrapper::initialize() {
   // 1. Get unique virtual offset
   int virtual_offset = code_buffer()->create_unique_offset();
   
-  // 2. Set last_Java_frame with placeholder
-  stack()->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  // 2. Create dual virtual addresses
+  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;
+  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;
   
-  // 3. Create the native call
-  Value *result = builder()->CreateCall(func_type, native_function, param_values);
+  // 3. Store placeholder for last_Java_pc
+  Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
+  builder()->CreateStore(ljpc_placeholder, last_Java_pc_addr());
   
-  // 4. Create deferred OopMap
+  // 4. Create the native call using virtual address as call target
+  Value* callee_ptr = CreateIntToPtr(
+    ConstantInt::get(i64_ty, call_target_va), 
+    func_type->getPointerTo());
+  Value *result = builder()->CreateCall(func_type, callee_ptr, param_values);
+  
+  // 5. Create deferred OopMap
   OopMap* oopmap = create_oopmap_for_native_wrapper();
   function()->add_deferred_oopmap(virtual_offset, oopmap);
   
@@ -348,136 +392,423 @@ void YuhuNativeWrapper::initialize() {
 
 **Pattern** (for all call types):
 1. Get unique virtual offset: `code_buffer()->create_unique_offset()`
-2. Set last_Java_pc with placeholder
-3. Create the call
-4. Create deferred OopMap: `function()->add_deferred_oopmap(virtual_offset, oopmap)`
+2. Create dual virtual addresses:
+   - `last_java_pc_va = 0xDEAD0000 | virtual_offset`
+   - `call_target_va = 0xBEEF0000 | virtual_offset`
+3. Store `last_java_pc_va` as placeholder for `last_Java_pc`
+4. Use `call_target_va` as the call target (via `CreateIntToPtr`)
+5. Create deferred OopMap: `function()->add_deferred_oopmap(virtual_offset, oopmap)`
 
-### Phase 2: Update Last Java PC Mechanism
+### Phase 2: adr + Marker Approach for Last Java PC
 
-**Problem**: Current `CreateSetLastJavaFrame()` uses `adr x0, .` which reads the PC of the `adr` instruction itself.
+**Problem**: Current `CreateSetLastJavaFrame()` uses `adr x0, .` which reads the PC of the `adr` instruction itself, NOT the return address after the call.
 
-**Solution**: Use deferred patching (similar to C1's Label mechanism):
+**Solution**: Use `adr` instruction with marker pattern to store the return address, then patch the `adr` offset after code generation.
 
-```cpp
-void CreateSetLastJavaFrame() {
-  // Store placeholder for last_Java_pc
-  int pc_virtual_offset = code_buffer()->create_unique_offset();
-  
-  // Generate code that stores placeholder (will be patched later)
-  builder()->CreateStore(
-    LLVMValue::intptr_constant(0xDEAD0000 | pc_virtual_offset),
-    last_Java_pc_addr()
-  );
-  
-  // Record for patching
-  function()->add_last_java_pc_patch_site(pc_virtual_offset);
-}
+#### Why adr Instead of movz/movk?
+
+**advantage of adr**:
+- `adr` is **PC-relative** - calculates `target = current_PC + offset`
+- When code is copied from CodeBuffer to nmethod, `adr` still works correctly
+- Both the `adr` instruction and the target move by the same amount, so the relative offset stays correct
+- No need to patch again after copying to nmethod
+
+**Why we still need patching**:
+- At IR generation time, we don't know where the `blr` instruction will be
+- We generate `adr` with a dummy offset pointing to a temporary location
+- After JITLink compilation, we calculate the actual offset to the return address (after `blr`)
+- We patch the `adr` instruction with the correct PC-relative offset
+
+#### How It Works
+
+**At IR generation time**:
+```llvm
+; Use inline asm to generate marker + adr instruction
+call void asm sideeffect "
+  mov w19, #0xDEAD\n\t         @ Marker magic
+  movk w19, #0x0001, lsl #16\n\t @ Marker for last_Java_pc
+  adr x20, 1f\n\t               @ adr to label (dummy offset initially)
+  str x20, [$0]\n\t              @ Store to last_Java_pc
+  1:\n\t                         @ Label (will be after blr)
+", "r"(i64* %last_Java_pc_addr)
+
+; The actual call
+%callee_ptr = inttoptr i64 %call_target to ptr
+call void %callee_ptr()
 ```
 
-After machine code generation, scan for `bl`/`blr` instructions, calculate return addresses, and patch the placeholders.
+**LLVM generates machine code**:
+```assembly
+; Marker + adr instruction (generated by inline asm)
+Offset 0x100: mov w19, #0xDEAD              ; Marker magic
+Offset 0x104: movk w19, #0x0001, lsl #16    ; Marker identifier
+Offset 0x108: adr x20, #8                   ; PC-relative offset (dummy, will be patched)
+Offset 0x10C: str x20, [x28, #last_Java_pc] ; Store address to thread
 
-### Phase 3: JITLink Plugin - Extract Call Sites
+; Call setup and execution
+Offset 0x110: ... setup arguments ...
+Offset 0x114: bl helper_function             ; The actual call
+Offset 0x118: ... (return address - where adr should point)
+```
 
-**Create `OopMapExtractorPlugin`**:
+**Key insight**: The `adr` instruction at 0x108 currently points to 0x110 (offset +8), but it should point to 0x118 (offset +16, the return address after `bl`).
+
+**After code generation**, we have:
+- Stack map record: `StatepointID 5 → InstructionOffset 0x114` (points to bl)
+- Deferred OopMap: `virtual_offset 0x1000 → OopMap_A`
+- **Goal**: Find the marker, patch the `adr` instruction to point to 0x118 (return address after bl)
+
+#### The Correlation Problem
+
+**StackMapRecord does NOT contain call target information**:
+```cpp
+struct StackMapRecord {
+  uint64_t StatepointID;        // Just a number (e.g., 5, 12, 18...)
+  uint64_t InstructionOffset;   // PC offset of the statepoint call (e.g., 0x110)
+  uint16_t NumLocations;        // Number of live oop locations
+  StackMapLocation Locations[]; // Where the live oops are
+  // NO callee function address!
+  // NO callee function name!
+  // NO correlation to original IR call!
+};
+```
+
+#### Solution: Backward Scanning from Statepoint Call
+
+**Algorithm**:
+1. For each `StackMapRecord.InstructionOffset` (e.g., 0x114, points to `blr`)
+2. Scan backwards in machine code to find **both** placeholders:
+   - `0xDEADxxxx` (last_Java_pc placeholder)
+   - `0xBEEFxxxx` (call target placeholder)
+3. Verify they share the same `virtual_offset` (low 16 bits match)
+4. Now we have the complete 1-1-1 mapping:
+   - `virtual_offset 0x1000 → StatepointID 5 → InstructionOffset 0x114`
+   - Both placeholders can be patched with actual values
+
+**Why this works**:
+- The `str` to `last_Java_pc` MUST precede the statepoint call
+- Distance is predictable (within ~20-40 bytes)
+- Virtual address pattern (`0xDEADxxxx`) is unique and easily identifiable
+- No ordering assumptions needed
+- No metadata preservation required
+
+### Phase 3: Machine Code Scanning & Virtual Address Extraction
+
+**Task**: For each statepoint, find the corresponding virtual address placeholder by scanning backwards.
+
+#### AArch64 Instruction Pattern
+
+**Expected pattern** for `store i64 0xDEAD1000, i64* %last_Java_pc_addr`:
+
+```assembly
+Offset N+0: movz xR, #0xDEAD, lsl #32    ; Load high 16 bits with shift
+Offset N+4: movk xR, #0x1000             ; Load low 16 bits
+Offset N+8: str xR, [x0, #last_Java_pc_offset]  ; Store to thread->last_Java_pc
+```
+
+**Total**: 12 bytes (3 instructions)
+
+#### Scanning Algorithm
 
 ```cpp
-class OopMapExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
-public:
-  void modifyPassConfig(MaterializationResponsibility &MR,
-                        jitlink::LinkGraph &LG,
-                        jitlink::PassConfiguration &PassConfig) override {
-    PassConfig.PostFixupPasses.push_back(
-      [this, &MR, &LG](jitlink::LinkGraph &G) -> Error {
-        return extractCallSites(G, MR);
-      });
-  }
+struct PlaceholderInfo {
+  uint64_t last_java_pc_va;         // e.g., 0xDEAD1000
+  uint64_t last_java_pc_offset;     // Offset of movz instruction
+  uint64_t call_target_va;          // e.g., 0xBEEF1000
+  uint64_t call_target_offset;      // Offset of movz instruction
+  uint64_t virtual_offset;          // e.g., 0x1000 (shared by both)
+};
 
-private:
-  Error extractCallSites(jitlink::LinkGraph &G, MaterializationResponsibility &MR) {
-    for (auto *Sym : G.defined_symbols()) {
-      if (!Sym->hasName() || !Sym->getName().startswith("yuhu_")) continue;
+PlaceholderInfo scan_backwards_for_placeholders(
+  const uint8_t* code_buffer,
+  uint64_t statepoint_call_offset,
+  uint64_t max_scan_distance = 100  // bytes
+) {
+  PlaceholderInfo result = {};
+  uint64_t scan_start = statepoint_call_offset;
+  uint64_t scan_end = (statepoint_call_offset > max_scan_distance) 
+                      ? statepoint_call_offset - max_scan_distance : 0;
+  
+  bool found_ljpc = false;
+  bool found_call_target = false;
+  
+  // Scan backwards from statepoint call
+  for (uint64_t offset = scan_start; offset >= scan_end; offset -= 4) {
+    uint32_t inst = *(uint32_t*)(code_buffer + offset);
+    
+    // Check for movz with lsl #32 (potential placeholder load)
+    if ((inst & 0xFF800000) == 0xD2800000) {  // movz with shift
+      uint32_t imm16 = (inst >> 5) & 0xFFFF;
+      uint32_t shift = (inst >> 21) & 0x3;
       
-      auto &Block = Sym->getBlock();
-      auto Content = Block.getContent();
-      auto Size = Block.getSize();
-      uint64_t BaseAddr = Sym->getAddress();
-      
-      // Scan for movz/movk/blr pattern (48-bit addresses)
-      for (size_t offset = 0; offset + 16 <= Size; offset += 4) {
-        uint32_t* inst = (uint32_t*)(Content + offset);
-        
-        // Pattern: movz (lsl #32) -> movk (lsl #16) -> movk (lsl #0) -> blr
-        uint32_t rd = inst[0] & 0x1F;
-        
-        bool is_movz_32 = (inst[0] & 0xFF800000) == 0xD2800000 && 
-                          ((inst[0] >> 21) & 0x3) == 2 &&
-                          (inst[0] & 0x1F) == rd;
-        
-        bool is_movk_16 = (inst[1] & 0xFF800000) == 0xF2800000 && 
-                          ((inst[1] >> 21) & 0x3) == 1 &&
-                          (inst[1] & 0x1F) == rd;
-        
-        bool is_movk_0 = (inst[2] & 0xFF800000) == 0xF2800000 && 
-                         ((inst[2] >> 21) & 0x3) == 0 &&
-                         (inst[2] & 0x1F) == rd;
-        
-        bool is_blr = (inst[3] & 0xFFFFFC1F) == 0xD63F0000 && 
-                      (inst[3] & 0x1F) == rd;
-        
-        if (is_movz_32 && is_movk_16 && is_movk_0 && is_blr) {
-          // Reconstruct call target address
-          uint64_t addr = 0;
-          addr |= ((uint64_t)((inst[0] >> 5) & 0xFFFF)) << 32;
-          addr |= ((uint64_t)((inst[1] >> 5) & 0xFFFF)) << 16;
-          addr |= ((uint64_t)((inst[2] >> 5) & 0xFFFF)) << 0;
-          
-          // Check if this calls a known VM helper
-          if (isVMHelperAddress(addr)) {
-            uint64_t ReturnPC = BaseAddr + offset + 16;  // After blr
-            int actual_offset = ReturnPC - BaseAddr;
-            
-            // Find matching deferred OopMap by call target address
-            int virtual_offset = findVirtualOffsetByCallTarget(addr);
-            
-            if (virtual_offset >= 0) {
-              // Map virtual → actual offset
-              offset_mapper->add_mapping(virtual_offset, actual_offset);
-              
-              // Patch last_Java_pc placeholder
-              patchLastJavaPC(BaseAddr, Size, virtual_offset, actual_offset);
-            }
+      if (shift == 2) {  // lsl #32
+        // Check high 16 bits for magic numbers
+        if (imm16 == 0xDEAD) {
+          // Found last_Java_pc placeholder's movz
+          // Extract low 16 bits from preceding movk
+          uint32_t movk_inst = *(uint32_t*)(code_buffer + offset + 4);
+          if ((movk_inst & 0xFF800000) == 0xF2800000) {  // movk
+            uint32_t low16 = (movk_inst >> 5) & 0xFFFF;
+            result.last_java_pc_va = ((uint64_t)imm16 << 32) | low16;
+            result.last_java_pc_offset = offset;
+            result.virtual_offset = low16;
+            found_ljpc = true;
           }
-          
-          offset += 12;  // Skip processed instructions
+        } else if (imm16 == 0xBEEF) {
+          // Found call target placeholder's movz
+          uint32_t movk_inst = *(uint32_t*)(code_buffer + offset + 4);
+          if ((movk_inst & 0xFF800000) == 0xF2800000) {  // movk
+            uint32_t low16 = (movk_inst >> 5) & 0xFFFF;
+            result.call_target_va = ((uint64_t)imm16 << 32) | low16;
+            result.call_target_offset = offset;
+            // Verify same virtual_offset
+            if (result.virtual_offset == 0) {
+              result.virtual_offset = low16;
+            } else if (result.virtual_offset != low16) {
+              report_error("Mismatched virtual_offsets!");
+            }
+            found_call_target = true;
+          }
         }
       }
     }
     
-    return Error::success();
-  }
-};
-```
-
-### Phase 4: Register OopMaps with Actual Offsets
-
-**After JITLink completes**, use the offset mappings to register OopMaps:
-
-```cpp
-Error notifyEmitted(MaterializationResponsibility &MR) override {
-  for (auto& mapping : offset_mapper->get_mappings()) {
-    int virtual_offset = mapping.virtual_offset;
-    int actual_offset = mapping.actual_offset;
-    
-    // Get deferred OopMap
-    OopMap* oopmap = function()->get_deferred_oopmap(virtual_offset);
-    
-    // Register with HotSpot using ACTUAL machine code offset
-    debug_info->add_safepoint(actual_offset, oopmap);
+    // Stop if we found both placeholders
+    if (found_ljpc && found_call_target) {
+      return result;
+    }
   }
   
-  return Error::success();
+  report_error("Could not find both placeholders for statepoint at offset " + 
+               std::to_string(statepoint_call_offset));
+  return {};
 }
 ```
+
+#### Matching Algorithm
+
+```cpp
+void match_statepoints_to_virtual_offsets() {
+  for (auto& record : stack_map_records) {
+    uint64_t statepoint_id = record.StatepointID;
+    uint64_t call_offset = record.InstructionOffset;  // Points to blr instruction
+    
+    // Scan backwards to find BOTH placeholders
+    PlaceholderInfo info = scan_backwards_for_placeholders(
+      code_buffer, 
+      call_offset,
+      max_scan_distance = 100  // bytes
+    );
+    
+    if (!info.last_java_pc_va || !info.call_target_va) {
+      report_error("Could not find both placeholders for statepoint " + 
+                   std::to_string(statepoint_id));
+      continue;
+    }
+    
+    // Verify 1-1-1 relationship
+    uint64_t ljpc_virtual_offset = info.last_java_pc_va & 0x0000FFFF;
+    uint64_t call_virtual_offset = info.call_target_va & 0x0000FFFF;
+    
+    assert(ljpc_virtual_offset == call_virtual_offset);
+    assert((info.last_java_pc_va & 0xFFFF0000) == 0xDEAD0000);
+    assert((info.call_target_va & 0xFFFF0000) == 0xBEEF0000);
+    
+    // Build 1-1-1 mapping
+    mapping[ljpc_virtual_offset] = {
+      .statepoint_id = statepoint_id,
+      .instruction_offset = call_offset,
+      .last_java_pc_va = info.last_java_pc_va,
+      .last_java_pc_placeholder_offset = info.last_java_pc_offset,
+      .call_target_va = info.call_target_va,
+      .call_target_placeholder_offset = info.call_target_offset
+    };
+  }
+}
+```
+
+#### Placeholder Detection
+
+**Scan backwards looking for**:
+1. `str xR, [x0, #last_Java_pc_offset]` instruction
+2. Verify the stored value came from `movz` + `movk` pair
+3. Reconstruct the 64-bit value from the two 16-bit immediates
+4. Check if value is in range `0xDEAD0000 - 0xDEADFFFF`
+
+**AArch64 instruction encodings**:
+- `movz` with `lsl #32`: `0xD2800000 | (imm16 << 5) | rd | (2 << 21)`
+- `movk` with no shift: `0xF2800000 | (imm16 << 5) | rd | (0 << 21)`
+- `str` immediate: `0xF9000000 | (imm12 << 10) | rn | rt`
+
+#### adr Instruction Patching
+
+**After JITLink compilation**, the OopMapExtractorPlugin patches the `adr` instruction:
+
+```cpp
+void patch_adr_for_last_java_pc() {
+  for (auto& [virtual_offset, info] : matched_mappings) {
+    // 1. Find the marker pattern (mov w19, #0xDEAD; movk w19, #0x0001, lsl #16)
+    uint32_t* marker_addr = scan_for_marker(code_buffer, call_offset);
+    if (!marker_addr) continue;
+    
+    // 2. Find the adr instruction (4 bytes after marker start)
+    uint32_t* adr_instr = marker_addr + 2;  // Offset 0x108 in example
+    
+    // 3. Calculate the actual return address
+    uint64_t blr_address = info.instruction_offset;  // 0x114
+    uint64_t return_address = blr_address + 4;       // 0x118 (after bl)
+    
+    // 4. Calculate PC-relative offset for adr
+    uint64_t adr_address = (uint64_t)adr_instr;
+    int64_t pc_offset = return_address - adr_address;  // Should be +16
+    
+    // 5. Patch the adr instruction
+    // ADR encoding: bits 5-23 = immhi, bits 29-30 = immlo
+    uint32_t new_adr = 0x10000000;  // ADR opcode
+    new_adr |= ((pc_offset & 0x3) << 29);        // immlo (bits 0-1)
+    new_adr |= ((pc_offset & 0x7FFFC) << 3);    // immhi (bits 2-20)
+    new_adr |= 20;  // x20 (destination register)
+    
+    *adr_instr = new_adr;
+    
+    // Example:
+    // Before: adr x20, #8   (0x10000148)
+    // After:  adr x20, #16  (0x10000288)
+  }
+}
+```
+
+**AArch64 adr encoding**:
+```
+adr xd, label
+= 0001 0000 | immlo (2 bits) | 00000 | immhi (19 bits) | rd (5 bits)
+= bits 30-29: 00
+= bit 28: 0
+= bits 27-24: 0001
+= bits 23-5: 21-bit PC-relative offset (immhi:immlo)
+= bits 4-0: rd (destination register)
+```
+
+**Key benefit**: Once patched, the `adr` instruction is position-independent. When the code is copied from CodeBuffer to nmethod, the `adr` still calculates the correct return address because it's PC-relative.
+
+#### Key Changes from Old Approach
+
+1. **Use adr instead of movz/movk**: `adr` is PC-relative, works after code copying
+2. **Marker-based identification**: Unique marker pattern identifies the `adr` instruction to patch
+3. **No call target matching**: Don't need to match helper addresses for last_Java_pc
+4. **No ordering assumptions**: Don't rely on sequential ordering of statepoints
+5. **Marker scanning**: Scan for marker pattern instead of backward scanning from statepoint
+6. **Single patching**: Patch `adr` once during JITLink, no need to patch again after nmethod copy
+
+### Phase 4: Patch adr Instruction & Register OopMaps
+
+**After matching virtual offsets to statepoint IDs**, patch the `adr` instruction and register OopMaps:
+
+#### Task 1: Patch adr Instruction for Last Java PC
+
+```cpp
+void patch_adr_instructions() {
+  for (auto& [virtual_offset, info] : matched_mappings) {
+    // 1. Find marker pattern near the statepoint call
+    uint32_t* marker_addr = scan_for_marker(
+      code_buffer, 
+      info.instruction_offset,
+      max_scan_distance = 100
+    );
+    if (!marker_addr) continue;
+    
+    // 2. The adr instruction is at marker_addr + 2 (8 bytes after marker start)
+    uint32_t* adr_instr = marker_addr + 2;
+    
+    // 3. Calculate return address (after bl instruction)
+    uint64_t bl_address = info.instruction_offset;
+    uint64_t return_address = bl_address + 4;
+    
+    // 4. Calculate PC-relative offset
+    uint64_t adr_address = (uint64_t)adr_instr;
+    int64_t pc_offset = return_address - adr_address;
+    
+    // 5. Verify offset fits in 21-bit signed range (-1MB to +1MB)
+    assert(pc_offset >= -0x100000 && pc_offset < 0x100000);
+    
+    // 6. Encode new adr instruction
+    uint32_t new_adr = 0x10000000;  // ADR opcode base
+    new_adr |= ((pc_offset & 0x3) << 29);         // immlo (bits 0-1 of offset)
+    new_adr |= (((pc_offset >> 2) & 0x7FFFF) << 5); // immhi (bits 2-20 of offset)
+    new_adr |= 20;  // x20 as destination register
+    
+    // 7. Patch the instruction
+    *adr_instr = new_adr;
+    
+    // Example:
+    // Before: adr x20, #8   (points to instruction after adr)
+    // After:  adr x20, #16  (points to return address after bl)
+  }
+}
+```
+
+**Why patch adr?**: The `adr` instruction needs to point to the return address after the `bl` instruction, not to some temporary location. Once patched with the correct PC-relative offset, `adr` will calculate the correct absolute address at runtime, even after the code is copied to nmethod.
+
+#### Task 2: Patch Call Target Placeholder
+
+```cpp
+void patch_call_target_placeholders() {
+  for (auto& [virtual_offset, info] : matched_mappings) {
+    uint64_t call_target_placeholder_offset = info.call_target_placeholder_offset;
+    
+    // Get the actual helper function address for this call site
+    void* real_helper_addr = lookup_helper_address(virtual_offset);
+    
+    // Patch the movz/movk instructions with actual helper address
+    patch_movz_movk_instructions(
+      code_buffer,
+      call_target_placeholder_offset,
+      (uint64_t)real_helper_addr
+    );
+    
+    // Example:
+    // Before: movz x9, #0xBEEF, lsl #32 / movk x9, #0x1000
+    // After:  movz x9, #0x1234, lsl #32 / movk x9, #0x5678
+    //         (real_helper_addr = 0x12345678, e.g., yuhu_resolve_static_field)
+  }
+}
+```
+
+**Why patch?**: The call target placeholder (0xBEEF1000) is not a valid function address. We must replace it with the actual helper function address obtained via `dlsym()` or lookup table.
+
+#### Task 3: Register OopMaps at Exact Offsets
+
+```cpp
+void register_oopmaps() {
+  for (auto& [virtual_offset, info] : matched_mappings) {
+    uint64_t actual_offset = info.instruction_offset;
+    
+    // Get deferred OopMap by virtual_offset
+    OopMap* oopmap = function()->get_deferred_oopmap(virtual_offset);
+    
+    // Register with HotSpot using exact offset from stack map
+    debug_info->add_safepoint(actual_offset, oopmap);
+    
+    // Stack map also tells us where live oops are located
+    StackMapRecord& record = info.stack_map_record;
+    for (auto& location : record.Locations) {
+      if (location.is_register()) {
+        oopmap->set_reg(location.get_register());
+      } else if (location.is_direct()) {
+        oopmap->set_oop(location.get_stack_offset());
+      }
+    }
+  }
+}
+```
+
+**Key workflow**:
+1. Parse `__llvm_stackmaps` section → get StatepointID + InstructionOffset
+2. Scan backwards from InstructionOffset → find BOTH placeholders (0xDEADxxxx + 0xBEEFxxxx)
+3. Verify they share the same virtual_offset (1-1-1 relationship)
+4. Patch last_Java_pc placeholder with actual return offset
+5. Patch call target placeholder with actual helper function address
+6. Register OopMap at InstructionOffset with exact oop locations from stack map
 
 ## AArch64 Instruction Encodings
 
@@ -507,7 +838,7 @@ blr x8
 
 Total: 4 instructions × 4 bytes = 16 bytes
 
-## OopMap Completeness: The LLVM Register Allocator Gap
+## OopMap Completeness: Solving the LLVM Register Allocator Gap
 
 ### The Core Problem
 
@@ -518,184 +849,191 @@ Total: 4 instructions × 4 bytes = 16 bytes
 - Which stack slots LLVM auto-spills contain oops
 - Whether an oop is in x0, x19, or [sp+80]
 
-**The risk**: If LLVM keeps an oop in a register across a safepoint, and GC moves the object, the register contains a stale address → crash.
+**The risk**: If LLVM keeps an oop in a register or auto-spill slot across a safepoint, and GC moves the object, that location contains a stale address → crash.
 
-### Solution 1: Force-Spill All Live Oops (Short-Term)
+### Solution: LLVM's Statepoint Infrastructure (PlaceSafepoints + RewriteStatepointsForGC)
 
-**Mechanism**: Before every safepoint, explicitly store ALL live oops to known stack slots, mark those slots in OopMap, then reload after the safepoint.
+**LLVM's official GC support mechanism** provides complete oop tracking without manual force-spill:
 
-#### How It Works
-
-**At IR generation time** (we still have full type information):
+#### Step 1: Mark Functions with GC Strategy
 
 ```cpp
-// In maybe_add_safepoint() - BEFORE LLVM code generation
-void YuhuTopLevelBlock::force_spill_all_live_oops() {
-  // Iterate current_state() - we know types of all values
-  for (int i = 0; i < max_locals(); i++) {
-    YuhuValue* val = current_state()->local_at(i);
-    if (val->is_jobject()) {  // ← We KNOW this is an oop
-      // Force-spill to known stack slot
-      write_value_to_frame(val->generic_value(), locals_offset(i));
-      oopmap->set_oop(slot2reg(locals_offset(i)));  // ← Mark in OopMap
-      
-      // Create reload for post-safepoint uses
-      YuhuValue* reloaded = read_value_from_frame(locals_offset(i));
-      current_state()->set_local_at(i, reloaded);  // ← Replace old value
-    }
-  }
-  
-  // Same for expression stack
-  for (int i = 0; i < stack_depth(); i++) {
-    YuhuValue* val = current_state()->stack_at(i);
-    if (val->is_jobject()) {
-      write_value_to_frame(val->generic_value(), stack_offset(i));
-      oopmap->set_oop(slot2reg(stack_offset(i)));
-      
-      YuhuValue* reloaded = read_value_from_frame(stack_offset(i));
-      current_state()->set_stack_at(i, reloaded);
-    }
+// At function creation time
+F.setGC("statepoint-example");
+```
+
+Produces IR:
+```llvm
+define ptr addrspace(1) @test(ptr addrspace(1) %obj) gc "statepoint-example" {
+  ...
+}
+```
+
+#### Step 2: Use Non-Integral Pointer Types for Oops
+
+Change all oop types from `i8*` to `ptr addrspace(1)`:
+```llvm
+; Old: Yuhu generates i8* for oops
+%obj = call i8* @new_instance()
+
+; New: Use GC-tracked pointer type
+%obj = call ptr addrspace(1) @new_instance()
+```
+
+#### Step 3: PlaceSafepoints Pass - Automatic Safepoint Insertion
+
+**What it does**: Automatically inserts safepoint polls at:
+- Method entry
+- Loop backedges
+
+**How it works**: Looks for a function named `gc.safepoint_poll` and calls it at appropriate locations.
+
+**Example**:
+```llvm
+; Before PlaceSafepoints
+define void @loop(ptr addrspace(1) %obj) gc "statepoint-example" {
+loop:
+  %val = call ptr addrspace(1) @process(ptr addrspace(1) %obj)
+  br label %loop
+}
+
+; After PlaceSafepoints
+define void @loop(ptr addrspace(1) %obj) gc "statepoint-example" {
+entry:
+  call void @gc.safepoint_poll()  ; ← Method entry poll
+  br label %loop
+
+loop:
+  %val = call ptr addrspace(1) @process(ptr addrspace(1) %obj)
+  call void @gc.safepoint_poll()  ; ← Backedge poll (auto-inserted!)
+  br label %loop
+}
+```
+
+**For Yuhu**: Implement `gc.safepoint_poll()` to check safepoint state using `do_call_back()`:
+```cpp
+extern "C" void gc_safepoint_poll() {
+  // Use do_call_back() which checks (_state != _not_synchronized)
+  // This catches both _synchronizing and _synchronized states
+  if (SafepointSynchronize::do_call_back()) {
+    SafepointSynchronize::block(JavaThread::current());
   }
 }
 ```
 
-**Key insight**: We don't track registers. We track LLVM Values. After force-spill and reload, all post-safepoint uses of oops will generate loads from our known stack slots (which GC updates), not uses of stale register values.
+#### Step 4: RewriteStatepointsForGC Pass - Complete Oop Tracking
 
-#### What Gets Marked in OopMap
+**What it does**: Wraps ALL calls (including `gc.safepoint_poll`) in statepoint relocation sequences.
 
-**All oop locations are STACK SLOTS, never registers**:
-
-```cpp
-// All of these are stack slots in OopMap:
-oopmap->set_oop(slot2reg(16));   // locals area
-oopmap->set_oop(slot2reg(48));   // expression/stack area
-oopmap->set_oop(slot2reg(80));   // force-spill area (for backedge safepoint)
-```
-
-**Why no register slots?** Because we can't track what LLVM does with registers after IR generation.
-
-#### The Three Areas We Control
-
-1. **Locals area** — `current_state()->local_at(i)`
-2. **Expression/stack area** — `current_state()->stack_at(i)`
-3. **Force-spill area** — explicit spills before backedge safepoints
-
-#### The One Area We Don't Control: LLVM Auto-Spills
-
-**LLVM may additionally spill values during code generation**:
-
+**Transformation example**:
 ```llvm
-; Yuhu IR - we control up to this point
-%oop1 = call i8* @get_object()
-store i8* %oop1, i8** %force_spill_0   ; ← We control this
+; Before RewriteStatepointsForGC
+call void @gc.safepoint_poll()
+%result = call ptr addrspace(1) @process(ptr addrspace(1) %obj)
 
-; LLVM CodeGen - we lose visibility here
-; LLVM decides to also spill some intermediate values:
-;   [sp+200] = %temp_computed_value  ← We don't know this exists!
-```
-
-**Is this a problem?** Generally **no**, because:
-1. LLVM's spills happen during code generation (MachineInstr level), not at IR level
-2. If LLVM spills before the safepoint call, it will reload before using it
-3. The safepoint is a **call** — LLVM treats calls as potential side-effect points
-4. LLVM will reload from our known slots **after** the call, not use stale register values
-
-**The mitigation**: By force-spilling and immediately reloading, we ensure:
-- All live oops are in **known** stack slots at the safepoint
-- All post-safepoint uses reload from those known slots
-- LLVM's internal spills are short-lived (spill → immediate reload) and won't span the safepoint call boundary
-
-#### Interaction with Callee-Saved Save/Restore
-
-**They serve different purposes and can coexist**:
-
-| Aspect | Force-Spill for OopMap | Callee-Saved Save/Restore |
-|--------|------------------------|---------------------------|
-| **What it saves** | All live oops (any register) | x19, x20, x23, x25, x27 (fixed registers) |
-| **Why** | GC needs to find all live oops | Interpreter may corrupt these registers |
-| **When** | Before ANY safepoint | Before Java method calls only |
-| **Where** | Explicit stack slots per oop | Fixed location: `[sp, #80]` |
-| **OopMap** | MARKED in OopMap | NOT marked in OopMap |
-
-**Example sequence before Java call**:
-
-```llvm
-; 1. Force-spill all live oops (for GC)
-store i8* %x0_oop, i8** [sp, #32]   ; oop from x0
-store i8* %x19_oop, i8** [sp, #40]  ; oop from x19
-OopMap marks: [sp+32], [sp+40]
-
-; 2. Callee-saved save (protects ALL values from interpreter)
-stp x19, x20, [sp, #80]   ; Saves x19 (oop) + x20 (jint)
-stp x23, x25, [sp, #96]   ; Saves x23 (oop) + x25 (jlong)
-
-; 3. Java call
-call void @interpreter_entry()
-
-; 4. Callee-saved restore
-ldp x19, x20, [sp, #80]   ; Restores x19 (may be stale oop!)
-ldp x23, x25, [sp, #96]   ; Restores x23 (may be stale oop!)
-
-; 5. Force-spill reload (gets GC-updated oop addresses)
-ldr x0, [sp, #32]   ; Reload oop
-ldr x19, [sp, #40]  ; Reload oop ← Overwrites stale x19!
-```
-
-**Force-spill is type-driven, not register-driven**:
-- We don't ask: "Is this value in x19?"
-- We only ask: "Is this value an oop?" If yes, force-spill it.
-
-### Solution 2: RewriteStatepointsForGC (Long-Term)
-
-**LLVM's official GC support mechanism** (LLVM >= 3.9):
-
-```llvm
-%token = call token (i64, i32, void ()*, i32, i32, ...) 
+; After RewriteStatepointsForGC
+%token = call token (i64, i32, ptr, i32, i32, ...) 
   @llvm.experimental.gc.statepoint.p0f_isVoidf(
-    i64 0, i32 0, void ()* @SafepointSynchronize_block, 
-    i32 0, i32 0,  ; flags
-    ; list of live oops as operands
-    i8* %oop1, i8* %oop2, i8* %oop3)
+    i64 0,           ; statepoint ID
+    i32 0,           ; flags
+    ptr @gc.safepoint_poll,
+    i32 0, i32 0, i32 0, i32 0)
+  ["gc-live" (ptr addrspace(1) %obj)]  ; ← Marks %obj as live oop!
+
+%obj.relocated = call ptr addrspace(1) 
+  @llvm.experimental.gc.relocate.p1(
+    token %token, i32 0, i32 0)
+
+%token2 = call token (i64, i32, ptr, i32, i32, ...)
+  @llvm.experimental.gc.statepoint.p0f_isPtrf(
+    i64 1, i32 0, ptr @process, 
+    i32 1, i32 0, i32 1, i32 0,
+    ptr addrspace(1) %obj.relocated)
+  ["gc-live" (ptr addrspace(1) %obj.relocated)]
+
+%result.relocated = call ptr addrspace(1)
+  @llvm.experimental.gc.relocate.p1(token %token2, i32 0, i32 0)
+
+%result = call ptr addrspace(1)
+  @llvm.experimental.gc.result.p1(token %token2)
 ```
 
-**LLVM's RewriteStatepointsForGC pass automatically**:
-1. Identifies all live oops at the statepoint
-2. Generates gc.relocates for each oop
-3. Produces accurate OopMap-equivalent metadata
+**Key features**:
+1. **Automatic liveness tracking**: LLVM identifies ALL live `ptr addrspace(1)` values at each call
+2. **Explicit relocation**: `gc.relocate` creates new SSA values for post-safepoint uses
+3. **Complete OopMap**: LLVM generates stack maps with exact locations (register or stack slot) for every live oop
+4. **Handles auto-spills**: LLVM tracks oops even in its own spill slots
+
+#### Step 5: Parse LLVM Stack Maps
+
+After code generation, LLVM emits `__llvm_stackmaps` section containing:
+- Statepoint ID
+- Instruction offset
+- Location of each live oop (register or stack slot)
+
+**Parse this section to build HotSpot OopMaps**:
+```cpp
+struct StackMapHeader {
+  uint8_t Version;
+  uint8_t Reserved[3];
+  uint32_t NumFunctions;
+  uint32_t NumConstants;
+  uint64_t Constants[];
+};
+
+struct StackMapRecord {
+  uint64_t StatepointID;
+  uint64_t InstructionOffset;
+  uint16_t NumLocations;
+  uint16_t Padding;
+  uint32_t NumOpSlots;
+  uint16_t NumPatchBytes;
+  uint16_t NumDunwindOpSlots;
+  StackMapLocation Locations[];  ; Register or stack slot for each oop
+};
+```
+
+#### Integration with Yuhu
+
+**Pass pipeline order**:
+```
+1. Yuhu IR generation (use ptr addrspace(1) for oops)
+2. PlaceSafepoints (insert gc.safepoint_poll at entry/backedges)
+3. RewriteStatepointsForGC (wrap calls in statepoints, insert gc.relocate)
+4. Standard LLVM optimization passes
+5. Code generation
+6. Parse __llvm_stackmaps section
+7. Build HotSpot OopMaps from stack map records
+8. Register OopMaps with DebugInformationRecorder
+```
+
+**What changes in Yuhu**:
+1. **IR generation**: Use `ptr addrspace(1)` instead of `i8*` for all oops
+2. **Function attribute**: Call `F.setGC("statepoint-example")` on all Yuhu functions
+3. **Remove manual safepoints**: Remove `maybe_add_backedge_safepoint()` (PlaceSafepoints handles it)
+4. **Remove decache/cache**: No longer needed (RewriteStatepointsForGC inserts gc.relocate)
+5. **Stack map parsing**: Add code to parse `__llvm_stackmaps` section after JITLink
+6. **OopMap registration**: Convert stack map records to HotSpot OopMaps
 
 **Pros**:
-- LLVM handles liveness tracking
-- Official LLVM GC support mechanism
-- Works with any register allocator
-- No manual force-spill needed
+- ✅ Complete oop tracking (including LLVM auto-spills)
+- ✅ Automatic safepoint placement (method entry + backedges)
+- ✅ LLVM handles all liveness analysis
+- ✅ No manual force-spill overhead
+- ✅ Official LLVM GC support (used by production JVMs)
+- ✅ Works with any LLVM optimization
 
 **Cons**:
-- Requires restructuring Yuhu to use LLVM's GC infrastructure
-- Complex integration
-- Needs investigation and prototyping
+- ⚠️ Major architectural change (all oop types must change)
+- ⚠️ Requires implementing `gc.safepoint_poll()` function
+- ⚠️ Need to parse LLVM stack maps and convert to HotSpot OopMaps
+- ⚠️ Need to integrate gc.relocate values into `current_state()` tracking
 
-**Status**: **To be investigated** as a long-term solution. Current short-term approach is force-spill.
-
-## Backedge Safepoints: The Missing Decache/Cache
+## Backedge Safepoints: Handled by PlaceSafepoints Pass
 
 ### The Current Gap
 
-**VM calls** (current implementation — works correctly):
-
-From [yuhuTopLevelBlock.hpp line 307](file:///Users/liuanyou/CLionProjects/jdk8/hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.hpp#L307):
-
-```cpp
-decache_for_VM_call(virtual_offset);
-// ... 
-CallInst *res = builder()->CreateCall(virtual_callee, args_array);
-cache_after_VM_call();  // ← RELOADS from stack after call!
-```
-
-**`cache_after_VM_call()`** reloads values from the stack slots back into LLVM's value tracking, ensuring post-call uses get GC-updated oop addresses.
-
-**Backedge safepoints** (current implementation — BROKEN):
-
-From [yuhuTopLevelBlock.cpp line 700-710](file:///Users/liuanyou/CLionProjects/jdk8/hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp#L700-L710):
+**Current implementation** (yuhuTopLevelBlock.cpp:700-710):
 
 ```cpp
 void YuhuTopLevelBlock::maybe_add_backedge_safepoint() {
@@ -704,179 +1042,160 @@ void YuhuTopLevelBlock::maybe_add_backedge_safepoint() {
   
   for (int i = 0; i < num_successors(); i++) {
     if (successor(i)->can_reach(this)) {
-      maybe_add_safepoint();  // ← Does NOT decache!
+      maybe_add_safepoint();  // ← Manual safepoint insertion
       break;
     }
   }
 }
 ```
 
-**The bug**: There is NO decache, NO cache — just a state check and conditional call to `SafepointSynchronize::block()`.
+**Problems**:
+1. No decache/cache around safepoint (oops may be in registers/auto-spills)
+2. Only handles backedges, not method entry
+3. Relies on manual tracking which is incomplete
 
-**The crash scenario**:
-```llvm
-%oop = load i8*, i8** %local_0    ; Load oop into LLVM Value
-; LLVM puts %oop in x19
+### The Solution: Remove Manual Safepoint Insertion
 
-; Backedge safepoint (no decache!)
-ldr w0, [SafepointSynchronize::_state]
-cbnz w0, do_safepoint
-continue:
-; After safepoint, LLVM uses x19 directly
-; If GC moved the object, x19 has stale address!
-call void @use(i8* %oop)  ; ← CRASH: uses stale x19!
-```
+**With PlaceSafepoints + RewriteStatepointsForGC**:
+1. **Remove** `maybe_add_backedge_safepoint()` entirely
+2. **Implement** `gc.safepoint_poll()` function
+3. **Run** PlaceSafepoints pass (automatically inserts polls at entry + backedges)
+4. **Run** RewriteStatepointsForGC pass (wraps polls in statepoints, inserts gc.relocate)
 
-### The Fix: Apply Same Decache/Cache Pattern to Backedges
+**Result**: Complete oop tracking at ALL safepoints without manual decache/cache.
 
-```cpp
-void YuhuTopLevelBlock::maybe_add_backedge_safepoint() {
-  if (current_state()->has_safepointed())
-    return;
-  
-  // Check if any successor can reach this block (backedge)
-  for (int i = 0; i < num_successors(); i++) {
-    if (successor(i)->can_reach(this)) {
-      // NEW: Decache all live oops before safepoint
-      decache_live_oops_for_safepoint();  // ← Spill oops to stack, create OopMap
-      
-      // Emit safepoint check
-      maybe_add_safepoint();  // This calls SafepointSynchronize::block()
-      
-      // NEW: Reload oops from stack (so LLVM uses GC-updated addresses)
-      recache_live_oops_after_safepoint();  // ← Reload from stack!
-      
-      break;
-    }
-  }
-}
-```
+## Implementation Plan
 
-**The sequence**:
-1. Iterate `current_state()` to find all live oops
-2. For each oop: store to stack, mark in OopMap
-3. Emit safepoint check (call to `SafepointSynchronize::block()`)
-4. For each oop: reload from stack, update `current_state()`
-5. All post-safepoint uses of oops will generate loads from stack (GC-updated)
+### Step 1: Replace ADR with Virtual Address Placeholders in All Call Sites
+- Modify `YuhuTopLevelBlock::call_vm()` to store virtual address placeholder
+- Modify `YuhuBuilder::CreateInlineOopForStaticField()` to store virtual address placeholder
+- Modify `YuhuBuilder::CreateInlineOop()` to store virtual address placeholder
+- Modify `YuhuBuilder::CreateInlineMetadata()` to store virtual address placeholder
+- Modify `YuhuNativeWrapper::initialize()` to store virtual address placeholder
+- Change deferred OopMap registry to use `uint64_t virtual_address` as key (not `int virtual_offset`)
 
-### Why This Works Without Knowing Registers
+### Step 2: Remove Old Offset Marker Infrastructure
+- Remove `YuhuBuilder::CreateOffsetMarker()` (yuhuBuilder.cpp:1159-1207)
+- Remove `YuhuBuilder::scan_and_update_offset_markers()` (yuhuBuilder.cpp:1209-1310)
+- Remove offset marker creation in `YuhuCacheDecache::start_frame()`
+- Remove or repurpose `YuhuOffsetMapper` class
 
-**We don't track registers. We track LLVM Values.**
+### Step 3: Implement Virtual Address to Statepoint Matching
+- Implement `scan_backwards_for_placeholder()` to find `str` instruction
+- Implement `extract_virtual_address()` to decode movz/movk instructions
+- Implement `match_statepoints_to_virtual_addresses()` correlation algorithm
+- Test with simple cases (1 call, 2 calls, multiple calls)
 
-```cpp
-// Before safepoint
-YuhuValue* oop = current_state()->local_at(0);  
-// oop->generic_value() = %42 (LLVM Value, NOT a register)
+### Step 4: Implement Placeholder Patching
+- Implement `patch_movz_movk_instructions()` to replace virtual address with actual offset
+- Verify patched machine code is correct (movz/movk encoding)
+- Ensure patched values are visible to GC (memory barriers if needed)
 
-// We DON'T care if LLVM puts %42 in x0, x19, or [sp+80]
-// We FORCE it to [sp+32] by generating an explicit store:
-CreateStore(%42, [sp+32]);
+### Step 5: Integrate LLVM Statepoint Infrastructure
+- Change all oop types from `i8*` to `ptr addrspace(1)`
+- Set `gc "statepoint-example"` attribute on all Yuhu functions
+- Implement `gc.safepoint_poll()` function
+- Remove `maybe_add_backedge_safepoint()` (PlaceSafepoints handles it)
+- Add PlaceSafepoints pass to LLVM pass pipeline
+- Add RewriteStatepointsForGC pass to LLVM pass pipeline
 
-// After safepoint, we reload:
-%42_reloaded = CreateLoad([sp+32]);
+### Step 6: JITLink Plugin for Stack Map Parsing & OopMap Registration
+- Create `OopMapExtractorPlugin` to parse `__llvm_stackmaps` section
+- Extract StatepointID + InstructionOffset from stack map records
+- Call `match_statepoints_to_virtual_addresses()` to build correlation
+- Call `patch_virtual_address_placeholders()` to update machine code
+- Call `register_oopmaps()` to register with DebugInformationRecorder
+- Integrate with ObjectLinkingLayer as plugin
 
-// Now all future uses of this oop use %42_reloaded, not the old %42
-current_state()->set_local_at(0, %42_reloaded);
-```
-
-**LLVM's register allocator can do whatever it wants** with %42 before the store and %42_reloaded after the load — we don't care. The important thing is:
-- Before safepoint: oop is in [sp+32] (we put it there)
-- GC updates [sp+32] if object moved
-- After safepoint: we load from [sp+32], getting the new address
-
-## Implementation Plan (Updated)
-
-### Step 1: Add Virtual Offset Tracking to VM Calls
-- Modify `CreateInlineOopForStaticField()` to use virtual offset tracking
-- Add similar tracking to other VM call generators (safepoints, runtime calls, etc.)
-- Create deferred OopMap registry keyed by virtual offset
-
-### Step 2: Create JITLink Plugin
-- Implement `OopMapExtractorPlugin` as ObjectLinkingLayer::Plugin
-- Add PostFixupPass to scan for movz/movk/blr patterns
-- Match call target addresses to deferred OopMaps
-- Build virtual → actual offset mapping
-
-### Step 3: Fix Last Java PC Mechanism
-- Change `CreateSetLastJavaFrame()` to use placeholder values
-- Implement placeholder patching in JITLink plugin
-- Ensure last_Java_pc points to return address (after blr)
-
-### Step 4: Register OopMaps
-- Implement `notifyEmitted()` to register OopMaps with actual offsets
-- Integrate with existing `DebugInformationRecorder`
-- Verify OopMap coverage for all VM call sites
-
-### Step 5: Implement Force-Spill for Backedge Safepoints (NEW)
-- Add `decache_live_oops_for_safepoint()` to force-spill all live oops
-- Modify `maybe_add_backedge_safepoint()` to call decache/cache
-- Ensure all backedge safepoints have complete OopMap coverage
-- Test with loops that have live oops across backedges
-
-### Step 6: Testing
+### Step 7: Testing
 - Run existing test suite to verify no regressions
 - Test GC during static field access (original crash scenario)
 - Test stack traversal with multiple VM calls
-- Verify OopMap correctness with `-XX:+TraceSafepoints`
-- **NEW**: Test GC during loop backedges (force-spill correctness)
-- **NEW**: Test object movement across backedge safepoints
+- Verify OopMap coverage for all VM call sites
+- Test GC during loop backedges (statepoint correctness)
+- Test object movement across safepoints (gc.relocate correctness)
+- Verify `__llvm_stackmaps` section contains all live oops
+- Test virtual address patching correctness
+- Verify GC can find OopMap at `last_Java_pc` offset
 
-## Key Design Decisions (Updated)
+## Key Design Decisions
 
 ### Decision 1: Why Not Offset Markers?
 **Rejected**: User preference against offset marker approach.
 
-**Alternative**: Use virtual offset tracking with call target address matching in JITLink.
+**Alternative**: Use virtual address placeholders that are scannable in machine code.
 
 ### Decision 2: Why Not Wrapper Functions?
 **Rejected**: Each wrapper adds 2 extra instructions (bl + ret), causing performance degradation.
 
-**Alternative**: Direct call scanning with metadata correlation.
+**Critical issue**: Wrapper functions break stack frame walking because they're part of nmethod CodeBlob, change LR, and have 0 frame_size.
+
+**Alternative**: Direct call scanning with backward search from statepoint.
 
 ### Decision 3: Why Not Encode Offset in Address?
 **Rejected**: Cannot encode metadata into function addresses without breaking the call (address must be valid pointer).
 
-**Alternative**: Use virtual offset registry with call target address matching.
+**Alternative**: Use virtual address encoding (`0xDEAD0000 | virtual_offset`) for placeholder stores.
 
-### Decision 4: Why Scan movz/movk/blr Instead of bl?
-**Reason**: LLVM generates `inttoptr` + `CallInst` as indirect calls (movz/movk/blr), not direct calls (bl).
+### Decision 4: Why Not Custom Metadata?
+**Rejected**: Empirical testing shows RewriteStatepointsForGC does NOT preserve custom metadata on call instructions (test results: 0/3 metadata annotations preserved).
+
+**Alternative**: Scan backwards from statepoint call to find virtual address placeholder.
+
+### Decision 5: Why Virtual Address Instead of Statepoint ID?
+**Reason**: Statepoint IDs are only assigned by RewriteStatepointsForGC AFTER IR generation. We need a correlation key that's known at IR time.
+
+**Solution**: Virtual addresses are created at IR time (`0xDEAD0000 | virtual_offset`), stored as placeholders, and found by scanning backwards from statepoint calls.
+
+### Decision 6: Why Backward Scanning?
+**Reason**: StackMapRecord does NOT contain call target information or any link to the original IR call. We cannot match by statepoint ID directly.
+
+**Solution**: Scan backwards from `StackMapRecord.InstructionOffset` to find the `str` instruction that stores the virtual address placeholder. The distance is predictable (~20-40 bytes) and the pattern is unique.
 
 **Direct call** (bl): Used for known functions at link time
 **Indirect call** (blr): Used for function pointers from `inttoptr` constants
 
-### Decision 5: Why Force-Spill Instead of Tracking LLVM Registers? (NEW)
-**Reason**: LLVM's register allocator is opaque — we cannot know which physical registers hold oops after code generation.
+### Decision 5: Why Use LLVM Statepoint Infrastructure Instead of Manual Force-Spill? (NEW)
+**Reason**: Manual force-spill cannot track LLVM auto-spill slots, leading to incomplete OopMaps.
 
-**Force-spill approach**:
-- **Pros**: Simple, predictable, doesn't require LLVM internals knowledge
-- **Cons**: Performance overhead (extra stores/loads at every safepoint)
-- **Status**: Short-term solution, proven correct by C1's decache/cache pattern
-
-### Decision 6: Why Not Use RewriteStatepointsForGC Immediately? (NEW)
-**Reason**: Requires significant restructuring of Yuhu to use LLVM's GC infrastructure.
-
-**RewriteStatepointsForGC**:
-- **Pros**: LLVM handles liveness tracking, official GC support, better performance
-- **Cons**: Complex integration, needs investigation, may require IR redesign
-- **Status**: Long-term solution, to be investigated after force-spill is working
+**Statepoint approach**:
+- **Pros**: Complete oop tracking (including auto-spills), automatic safepoint placement, official LLVM GC support, used by production JVMs
+- **Cons**: Major architectural change (all oop types must change), requires stack map parsing
+- **Status**: Selected solution, replaces force-spill approach
 
 ## Code to Remove
 
 After implementing the new OopMap mechanism, the following old code should be removed or replaced:
 
-### 1. Offset Marker Infrastructure (REJECT: User preference)
+### 1. Offset Marker Infrastructure (REMOVED)
 
 **Files**: hotspot/src/share/vm/yuhu/yuhuBuilder.cpp, yuhuBuilder.hpp, yuhuCacheDecache.cpp
 
 **Remove**:
 - `YuhuBuilder::CreateOffsetMarker()` (yuhuBuilder.cpp:1159-1207)
   - Creates inline asm markers with magic number 0xDEADBEEF
-  - No longer needed: using virtual offset tracking instead
+  - No longer needed: using virtual address placeholders instead
   
 - `YuhuBuilder::scan_and_update_offset_markers()` (yuhuBuilder.cpp:1209-1310)
   - Scans machine code for offset marker patterns
   - Has bugs: looks for ADR instruction instead of return address after BL/BLR
-  - Replaced by: `OopMapExtractorPlugin::extractCallSites()` in JITLink
+  - Replaced by: `match_statepoints_to_virtual_addresses()` in JITLink plugin
+  
+- `YuhuBuilder::insert_offset_marker()` declaration (yuhuBuilder.hpp)
+- Offset marker creation in `YuhuCacheDecache::start_frame()`
+
+### 2. ADR-Based last_Java_pc Setting (REPLACED)
+
+**Files**: hotspot/src/share/vm/yuhu/yuhuStack.hpp, yuhuStack.cpp
+
+**Replace**:
+- `YuhuStack::CreateReadCurrentPC()` - Uses ADR instruction (WRONG!)
+- `YuhuStack::CreateSetLastJavaFrame()` - Calls CreateReadCurrentPC (WRONG!)
+
+**New implementation**:
+- Direct store of virtual address placeholder to `thread->last_Java_pc`
+- No ADR instruction needed
+- Patching happens after code generation when actual offsets are known
 
 - `YuhuBuilder::insert_offset_marker()` (yuhuBuilder.hpp:267)
   - Declaration for offset marker insertion
@@ -1048,41 +1367,55 @@ llvm::CallInst* call_vm(llvm::Value* callee, ...) {
 
 | Component | Location | Action | Reason |
 |-----------|----------|--------|--------|
-| `CreateOffsetMarker()` | yuhuBuilder.cpp:1159-1207 | **REMOVE** | Replaced by virtual offset tracking |
-| `scan_and_update_offset_markers()` | yuhuBuilder.cpp:1209-1310 | **REMOVE** | Replaced by JITLink plugin |
+| `CreateOffsetMarker()` | yuhuBuilder.cpp:1159-1207 | **REMOVE** | Replaced by statepoint infrastructure |
+| `scan_and_update_offset_markers()` | yuhuBuilder.cpp:1209-1310 | **REMOVE** | Replaced by stack map parsing |
 | `insert_offset_marker()` | yuhuBuilder.hpp:267 | **REMOVE** | Part of old marker infrastructure |
 | Offset marker in `start_frame()` | yuhuCacheDecache.cpp:45 | **REMOVE** | No longer creating markers |
-| ADR-based PC setting | yuhuStack.hpp:220-247 | **REPLACE** | Uses wrong PC (ADR instead of return address) |
+| ADR-based PC setting | yuhuStack.hpp:220-247 | **REMOVE** | Replaced by stack map offsets |
 | ADR scanning logic | yuhuBuilder.cpp:1268-1295 | **REMOVE** | Wrong instruction to scan for |
 | `CreateReadCurrentPC()` | yuhuBuilder.cpp:695-713 | **KEEP** | Still needed for function entry |
-| `YuhuOffsetMapper` | yuhuOffsetMapper.hpp | **KEEP** | Still needed for offset mapping |
-| `add_deferred_oopmap()` | yuhuFunction.cpp | **UPDATE** | Use with new JITLink-based offset mapper |
-| `relocate_oopmaps()` | yuhuBuilder.cpp | **UPDATE** | Use JITLink-based offset mapper |
-| `call_vm()` | yuhuTopLevelBlock.hpp:298-327 | **UPDATE** | Add metadata, placeholder mechanism (~20-30 call sites affected) |
-| `CreateInlineOopForStaticField()` | yuhuBuilder.cpp:943-1007 | **UPDATE** | Add metadata, placeholder mechanism |
-| `YuhuNativeWrapper::initialize()` | yuhuNativeWrapper.cpp:194 | **UPDATE** | Add metadata, placeholder mechanism |
-| `CreateInlineOop()` | yuhuBuilder.cpp | **UPDATE** | Add metadata, placeholder mechanism |
-| `CreateInlineMetadata()` | yuhuBuilder.cpp | **UPDATE** | Add metadata, placeholder mechanism |
+| `YuhuOffsetMapper` | yuhuOffsetMapper.hpp | **REMOVE** | No longer needed (stack maps give exact offsets) |
+| Placeholder patching | yuhuStack.hpp | **REMOVE** | No longer needed with statepoints |
+| `add_deferred_oopmap()` | yuhuFunction.cpp | **UPDATE** | Key by statepoint ID instead of virtual offset |
+| `call_vm()` | yuhuTopLevelBlock.hpp:298-327 | **SIMPLIFY** | Remove placeholder mechanism, use statepoint ID |
+| `CreateInlineOopForStaticField()` | yuhuBuilder.cpp:943-1007 | **SIMPLIFY** | Remove placeholder mechanism |
+| `YuhuNativeWrapper::initialize()` | yuhuNativeWrapper.cpp:194 | **SIMPLIFY** | Remove placeholder mechanism |
+| All oop types | Throughout Yuhu | **CHANGE** | `i8*` → `ptr addrspace(1)` |
+| `maybe_add_backedge_safepoint()` | yuhuTopLevelBlock.cpp | **REMOVE** | PlaceSafepoints handles it |
+| `decache_for_VM_call()` / `cache_after_VM_call()` | yuhuTopLevelBlock.hpp | **REMOVE** | RewriteStatepointsForGC inserts gc.relocate |
 
 ## Files to Modify
 
 1. **hotspot/src/share/vm/yuhu/yuhuBuilder.cpp**
-   - `CreateInlineOopForStaticField()`: Add metadata, create deferred OopMap
+   - Change all oop types from `i8*` to `ptr addrspace(1)`
+   - Set `gc "statepoint-example"` attribute on all functions
+   - Remove `CreateOffsetMarker()` and `scan_and_update_offset_markers()`
    
 2. **hotspot/src/share/vm/yuhu/yuhuStack.hpp**
-   - `CreateSetLastJavaFrame()`: Use placeholder mechanism
+   - **REMOVE** placeholder mechanism from `CreateSetLastJavaFrame()`
+   - Simplify to just store thread state (offsets come from stack maps)
 
-3. **hotspot/src/share/vm/yuhu/yuhuORCPlugins.hpp**
-   - Declare `OopMapExtractorPlugin` class
+3. **hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.hpp**
+   - Remove `maybe_add_backedge_safepoint()` (PlaceSafepoints handles it)
+   - Simplify `call_vm()` (remove placeholder, use statepoint ID)
+   - Remove `decache_for_VM_call()` / `cache_after_VM_call()` (gc.relocate handles it)
 
-4. **hotspot/src/share/vm/yuhu/yuhuORCPlugins.cpp**
-   - Implement `OopMapExtractorPlugin`
-   - Implement call target address matching
-   - Implement placeholder patching
+4. **hotspot/src/share/vm/yuhu/yuhuORCPlugins.hpp/cpp**
+   - Implement `OopMapExtractorPlugin` to parse `__llvm_stackmaps`
+   - Extract exact offsets and oop locations from stack map records
+   - Register OopMaps with DebugInformationRecorder
 
 5. **hotspot/src/share/vm/yuhu/yuhuCompiler.cpp**
+   - Add PlaceSafepoints pass to LLVM pass pipeline
+   - Add RewriteStatepointsForGC pass to LLVM pass pipeline
    - Register `OopMapExtractorPlugin` with ObjectLinkingLayer
-   - Integrate OopMap registration after JITLink completion
+   - Implement `gc.safepoint_poll()` function
+
+6. **hotspot/src/share/vm/yuhu/yuhuFunction.cpp**
+   - Update `add_deferred_oopmap()` to key by statepoint ID
+
+7. **hotspot/src/share/vm/yuhu/yuhuRuntime.cpp**
+   - Implement `gc.safepoint_poll()` function for PlaceSafepoints
 
 ## References
 

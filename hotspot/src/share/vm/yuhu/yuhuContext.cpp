@@ -84,6 +84,10 @@ YuhuContext::YuhuContext(const char* name)
 
   _oop_type = PointerType::getUnqual(
     llvm::ArrayType::get(jbyte_type(), sizeof(oopDesc)));
+  
+  // ptr addrspace(1) for RS4GC statepoint infrastructure
+  _oop_addrspace1_type = PointerType::get(
+    llvm::ArrayType::get(jbyte_type(), sizeof(oopDesc)), 1);
 
   _thread_type = PointerType::getUnqual(
     llvm::ArrayType::get(jbyte_type(), sizeof(JavaThread)));

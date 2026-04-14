@@ -387,6 +387,12 @@ Value* YuhuBuilder::load_klass_from_object(Value* object) {
   }
 }
 
+void YuhuBuilder::embed_call_site_metadata() {
+    if (_function) {
+        _function->embed_call_site_metadata();
+    }
+}
+
 Value* YuhuBuilder::safepoint() {
   return make_function((address) SafepointSynchronize::block, "T", "v");
 }
@@ -965,18 +971,20 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     assert(helper_addr != NULL, "yuhu_resolve_static_field must be resolvable via dlsym");
   }
   
-  // NEW: Get unique virtual offset for this call site
+  // Step 1: Get unique virtual offset for this call site
   int virtual_offset = code_buffer()->create_unique_offset();
   
-  // NEW: Generate virtual address (0xDEAD000000000000 | (virtual_offset << 16))
-  uint64_t virtual_address = 0xDEAD000000000000ULL | ((uint64_t)virtual_offset << 16);
+  // Step 2: Create dual virtual addresses with same virtual_offset
+  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
+  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
   
-  // NEW: Register call site mapping for JITLink patching
-  function()->register_call_site(virtual_offset, virtual_address, (uint64_t)(uintptr_t)helper_addr);
+  // Step 2.5: Register the call site mapping (virtual_offset -> helper_address)
+  // This allows OopMapExtractorPlugin to look up the actual helper address during patching
+  function()->register_call_site(virtual_offset, call_target_va, (uint64_t)(uintptr_t)helper_addr);
   
-  // Use VIRTUAL ADDRESS instead of actual helper address
+  // Step 3: Use call target placeholder instead of actual helper address
   llvm::Value* fn_ptr = CreateIntToPtr(
-    llvm::ConstantInt::get(i64_ty, virtual_address),
+    llvm::ConstantInt::get(i64_ty, call_target_va),
     ptr_ty);
   
   // Resolve the field at compile time to get Klass* and offset
@@ -1008,10 +1016,10 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   llvm::FunctionType* func_ty = llvm::FunctionType::get(
     YuhuType::jlong_type(), {ptr_ty, i32_ty, i1_ty, i1_ty}, false);
   
-  // Set last_Java_frame with placeholder BEFORE the call
-  stack->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  // Step 4: Store last_Java_pc placeholder BEFORE the call
+  stack->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
   
-  // Create the call
+  // Step 5: Create the call
   llvm::CallInst* call = CreateCall(func_ty, fn_ptr,
                     {klass_ptr, 
                      llvm::ConstantInt::get(i32_ty, field_offset),
@@ -1019,7 +1027,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
                      llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
                     name ? name : "field_result");
   
-  // Create deferred OopMap for this call site
+  // Step 6: Create deferred OopMap for this call site
   {
     // Use actual frame size from stack
     int frame_size = stack->oopmap_frame_size();
@@ -1038,7 +1046,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     function()->add_deferred_oopmap(virtual_offset, oopmap);
   }
   
-  // NEW: Reset last_Java_frame AFTER the call
+  // Step 7: Reset last_Java_frame AFTER the call
   stack->CreateResetLastJavaFrame();
   
   return call;

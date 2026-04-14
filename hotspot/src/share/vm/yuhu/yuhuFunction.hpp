@@ -150,6 +150,17 @@ class YuhuFunction : public YuhuTargetInvariants {
   GrowableArray<OopMap*>* deferred_oopmaps() const { return _deferred_oopmaps; }
   GrowableArray<int>* deferred_offsets() const { return _deferred_offsets; }
   
+  // Look up OopMap by virtual_offset
+  OopMap* get_deferred_oopmap(int virtual_offset) const {
+    if (_deferred_offsets == NULL) return NULL;
+    for (int i = 0; i < _deferred_offsets->length(); i++) {
+      if (_deferred_offsets->at(i) == virtual_offset) {
+        return _deferred_oopmaps->at(i);
+      }
+    }
+    return NULL;
+  }
+  
   // Methods for virtual address mapping (call-site correlation)
   void register_call_site(int virtual_offset, uint64_t virtual_address, uint64_t helper_address) {
     if (_virtual_offsets == NULL) {
@@ -182,6 +193,17 @@ class YuhuFunction : public YuhuTargetInvariants {
   uint64_t get_helper_address(int index) const {
     assert(index < get_virtual_offset_count(), "index out of bounds");
     return _helper_addresses->at(index);
+  }
+  
+  // Look up helper address by virtual_offset
+  uint64_t get_helper_address_by_offset(int virtual_offset) const {
+    if (_virtual_offsets == NULL) return 0;
+    for (int i = 0; i < _virtual_offsets->length(); i++) {
+      if (_virtual_offsets->at(i) == virtual_offset) {
+        return _helper_addresses->at(i);
+      }
+    }
+    return 0;  // Not found
   }
   
   // Methods for deferred frame handling

@@ -71,11 +71,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   }
   
   // Embed call site mappings as LLVM metadata
-  void embed_call_site_metadata() {
-    if (_function) {
-      _function->embed_call_site_metadata();
-    }
-  }
+  void embed_call_site_metadata();
 
  public:
   llvm::LoadInst* CreateAtomicLoad(llvm::Value* ptr,
