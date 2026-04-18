@@ -237,6 +237,7 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuTracingIRCompiler.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuVirtualAddressPatcher.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuIRTransformer.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
+  CXXFLAGS/yuhuDebugInformationRecorder.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
   CXXFLAGS/yuhu_macroAssembler_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhu_templateTable_aarch64.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
@@ -274,6 +275,7 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuTracingIRCompiler.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuVirtualAddressPatcher.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuIRTransformer.o = $(PCH_FLAG/NO_PCH)
+    PCH_FLAG/yuhuDebugInformationRecorder.o = $(PCH_FLAG/NO_PCH)
     # Platform-specific Yuhu files (in cpu/aarch64/vm/yuhu/)
     PCH_FLAG/yuhu_macroAssembler_aarch64.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhu_templateTable_aarch64.o = $(PCH_FLAG/NO_PCH)

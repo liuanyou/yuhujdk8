@@ -1076,8 +1076,8 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
       Value* field_value;
       if (basic_type == T_OBJECT || basic_type == T_ARRAY) {
         // For static field object references, yuhu_resolve_static_field returns
-        // the decoded oop pointer directly (not compressed), so use oop_type()
-        field_value = builder()->CreateIntToPtr(field_result, YuhuType::oop_type());
+        // the decoded oop pointer directly (not compressed)
+        field_value = builder()->CreateIntToPtr(field_result, YuhuType::oop_addrspace1_type()); // FIXED - static field is allocated in heap
       } else if (basic_type == T_LONG || basic_type == T_DOUBLE) {
         // Already jlong/jdouble (64-bit), may need bitcast for double
         if (basic_type == T_DOUBLE) {

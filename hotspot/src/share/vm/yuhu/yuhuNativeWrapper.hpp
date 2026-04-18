@@ -150,7 +150,7 @@ class YuhuNativeWrapper : public YuhuCompileInvariants {
   llvm::Value* pending_exception_address() const {
     return builder()->CreateAddressOfStructEntry(
       thread(), Thread::pending_exception_offset(),
-      llvm::PointerType::getUnqual(YuhuType::oop_type()),
+      llvm::PointerType::getUnqual(YuhuType::oop_addrspace1_type()), // FIXED - pending exception object is allocated in heap
       "pending_exception_address");
   }
   void CreateSetThreadState(JavaThreadState state) const {
@@ -187,7 +187,7 @@ class YuhuNativeWrapper : public YuhuCompileInvariants {
   }
   llvm::LoadInst* CreateLoadPendingException() const {
     return builder()->CreateLoad(
-      YuhuType::oop_type(),
+      YuhuType::oop_addrspace1_type(), // FIXED - pending exception object is allocated in heap
       pending_exception_address(), "pending_exception");
   }
 };

@@ -42,6 +42,7 @@
 #include "yuhu/yuhuContext.hpp"
 #include "yuhu/yuhuEntry.hpp"
 #include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuMemoryManager.hpp"
 #include "yuhu/yuhuNativeWrapper.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
@@ -72,9 +73,6 @@ namespace {
   MAttrs("mattr",
          cl::CommaSeparated);
 }
-
-// Static member initialization
-YuhuFunction* YuhuCompiler::_current_compiling_function = NULL;
 
 YuhuCompiler::YuhuCompiler()
   : AbstractCompiler() {
@@ -664,25 +662,22 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   size_t llvm_code_size = 0;
   size_t effective_code_size = 0;
 
-  // Build the LLVM IR for the method and get the debug information recorder
-  YuhuDebugInformationRecorder* debug_info_recorder = NULL;
-  Function *function = YuhuFunction::build(env, &builder, flow, func_name, &debug_info_recorder);
+    // Initialize thread-local debug information recorder
+    YuhuDebugInformationRecorder::initialize_tls();
+    YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+    // Set the LLVM module reference for embedding metadata later
+    recorder->set_module(YuhuContext::current().module());
+
+  Function *function = YuhuFunction::build(env, &builder, flow, func_name);
   if (env->failing()) {
     tty->print_cr("Yuhu: compile failing during IR build for %s (func_name=%s) entry_bci=%d comp_level=%d",
                   base_name, func_name, entry_bci, env->comp_level());
     return;
   }
   
-  // Set the current compiling function for OopMapExtractorPlugin
-  set_current_compiling_function(builder.function());
-  
   // NEW: Embed call site mappings as metadata before compilation
   // This allows the JITLink plugin to extract virtual address mappings
-  // We need to access function through builder since YuhuFunction::build returns llvm::Function*
-  // But the function object is still accessible via builder.function()
-  // Actually, we need to cast llvm::Function back to access YuhuFunction methods
-  // For now, let's add a helper method to YuhuBuilder
-  builder.embed_call_site_metadata();
+  YuhuDebugInformationRecorder::get()->embed_call_site_metadata();
 
   // Generate native code.  It's unpleasant that we have to drop into
   // the VM to do this -- it blocks safepoints -- but I can't see any
@@ -695,17 +690,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     llvm_code_size = entry->code_limit() - code_start;
     // Calculate effective code size by scanning for trailing udf #0 instructions
     effective_code_size = calculate_effective_code_size(entry->code_start(), llvm_code_size);
-    
-    // After native code generation, scan the generated machine code for offset markers
-    // and update the offset mapper with the actual PC offsets
-    YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
-    if (offset_mapper != NULL) {
-      builder.scan_and_update_offset_markers(code_start, effective_code_size, offset_mapper);
-    }
   }
-  
-  // Clear the current compiling function (compilation is complete)
-  set_current_compiling_function(NULL);
 
   bool is_osr = (entry_bci != InvocationEntryBci);
   int adapter_size = 0;
@@ -786,24 +771,12 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Only copy effective code (excluding trailing udf #0 padding)
     memcpy(combined_base + adapter_size, entry->code_start(), effective_code_size);
 
-    // Convert virtual offsets to real offsets and add to the debug information recorder
-    if (debug_info_recorder != NULL) {
-      DebugInformationRecorder* real_debug_info = env->debug_info();
-      YuhuOffsetMapper* offset_mapper = cb.offset_mapper();
-      if (real_debug_info != NULL && offset_mapper != NULL) {
-        debug_info_recorder->convert_and_add_to_real_recorder(real_debug_info, target, offset_mapper, adapter_size);
-      }
-    }
-
       // Generate unwind handler (always needed - JVM requires it for exception propagation)
       // This is different from exception handler - unwind handler propagates exceptions upward.
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
       combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
       generate_unwind_handler(combined_cb, frame_size * wordSize);
-
-    // adjust oopmaps offset
-//    builder.adjust_oopmaps_pc_offset(env, adapter_size);
 
       // CRITICAL: Fix up epilogue markers (0xcafebabe -> sub sp, x29, #imm)
       // This is needed to restore SP from x29 before returning from the function.
@@ -974,6 +947,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   
   release_last_code_blob_unlocked();
 #endif
+    // Release thread-local debug information recorder after compilation is complete
+    // This frees the C heap memory and clears the TLS slot
+    YuhuDebugInformationRecorder::release();
 }
 
 nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,

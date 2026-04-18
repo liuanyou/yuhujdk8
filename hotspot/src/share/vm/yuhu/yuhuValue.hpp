@@ -120,7 +120,7 @@ class YuhuValue : public ResourceObj {
     return create_generic(ciType::make(T_DOUBLE), value, false);
   }
   static YuhuValue* create_jobject(llvm::Value* value, bool zero_checked) {
-    assert(value->getType() == YuhuType::oop_type(), "should be");
+    assert(value->getType() == YuhuType::oop_addrspace1_type(), "should be"); // FIXED - create oop_addrspace1_type as well
     return create_generic(ciType::make(T_OBJECT), value, zero_checked);
   }
 

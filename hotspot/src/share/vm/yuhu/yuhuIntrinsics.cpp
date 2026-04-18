@@ -235,7 +235,7 @@ void YuhuIntrinsics::do_Object_getClass() {
       builder()->CreateValueOfStructEntry(
         klass,
         Klass::java_mirror_offset(),
-        YuhuType::oop_type(),
+        YuhuType::oop_addrspace1_type(), // FIXED - class object is allocated in heap
         "java_mirror"),
       true));
 }
@@ -264,7 +264,7 @@ void YuhuIntrinsics::do_Thread_currentThread() {
     YuhuValue::create_jobject(
       builder()->CreateValueOfStructEntry(
         thread(), JavaThread::threadObj_offset(),
-        YuhuType::oop_type(),
+        YuhuType::oop_addrspace1_type(), // FIXED - java thread object is allocated in heap
         "threadObj"),
       true));
 }

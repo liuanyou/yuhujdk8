@@ -54,7 +54,7 @@ class LLVMValue : public AllStatic {
   }
   static llvm::ConstantPointerNull* null()
   {
-    return llvm::ConstantPointerNull::get(YuhuType::oop_type());
+    return llvm::ConstantPointerNull::get(YuhuType::oop_addrspace1_type()); // FIXED - null in compare should use same oop_addrspace1_type
   }
   static llvm::ConstantPointerNull* nullKlass()
   {

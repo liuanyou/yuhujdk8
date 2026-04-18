@@ -783,7 +783,7 @@ void YuhuTopLevelBlock::call_register_finalizer(Value *receiver) {
   Value *klass = builder()->CreateValueOfStructEntry(
     receiver,
     in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::oop_type(),
+    YuhuType::klass_type(), // klass object is allocated in meta-space, no GC
     "klass");
 
   Value *access_flags = builder()->CreateValueOfStructEntry(
@@ -927,7 +927,7 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
     // Cast back to pointer type
     value = builder()->CreateIntToPtr(
       value,
-      llvm::PointerType::getUnqual(YuhuType::oop_type()),
+      llvm::PointerType::getUnqual(YuhuType::oop_addrspace1_type()), // FIXED - object is allocated in heap
       "decompressed_ptr");
   } else {
     // Normal load for non-compressed oops or other types
@@ -1237,7 +1237,7 @@ Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
   Value *klass = builder()->CreateValueOfStructEntry(
     receiver->jobject_value(),
     in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::oop_type(),
+    YuhuType::klass_type(), // klass object is allocated in meta-space, no GC
     "klass");
 
   return builder()->CreateLoad(
@@ -1561,7 +1561,7 @@ void YuhuTopLevelBlock::do_call() {
     // x1, x2, ... will be filled by actual parameters (no NULL placeholder needed)
   } else {
     param_types.push_back(YuhuType::intptr_type());  // Dummy in x0 (unused)
-    param_types.push_back(YuhuType::oop_type());     // receiver in x1
+    param_types.push_back(YuhuType::oop_addrspace1_type());     // FIXED - use same type as function definition, receiver in x1
   }
   
   // Add Java method parameters
@@ -1925,7 +1925,7 @@ void YuhuTopLevelBlock::do_new() {
 
       builder()->SetInsertPoint(got_tlab);
       tlab_object = builder()->CreateIntToPtr(
-        old_top, YuhuType::oop_type(), "tlab_object");
+        old_top, YuhuType::oop_addrspace1_type(), "tlab_object"); // FIXED - tlab object is still in Eden, part of heap, should GC
 
       builder()->CreateStore(new_top, top_addr);
       builder()->CreateBr(initialize);
@@ -1959,7 +1959,7 @@ void YuhuTopLevelBlock::do_new() {
 
     builder()->SetInsertPoint(got_heap);
     heap_object = builder()->CreateIntToPtr(
-      old_top, YuhuType::oop_type(), "heap_object");
+      old_top, YuhuType::oop_addrspace1_type(), "heap_object"); // FIXED - object is allocated in heap
 
     // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
 #if LLVM_VERSION_MAJOR >= 20
@@ -1985,7 +1985,7 @@ void YuhuTopLevelBlock::do_new() {
     builder()->SetInsertPoint(initialize);
     if (tlab_object) {
       PHINode *phi = builder()->CreatePHI(
-        YuhuType::oop_type(), 0, "fast_object");
+        YuhuType::oop_addrspace1_type(), 0, "fast_object"); // FIXED - phi node should use oop_addrspace1_type as used in slow path and fast path
       phi->addIncoming(tlab_object, got_tlab);
       phi->addIncoming(heap_object, got_heap);
       fast_object = phi;
@@ -1994,9 +1994,11 @@ void YuhuTopLevelBlock::do_new() {
       fast_object = heap_object;
     }
 
-    builder()->CreateMemset(
-      builder()->CreateBitCast(
-        fast_object, PointerType::getUnqual(YuhuType::jbyte_type())),
+      // Convert oop (ptr addrspace(1)) → intptr_t → ptr (address space 0)
+      Value* fast_object_int = builder()->CreatePtrToInt(fast_object, YuhuType::intptr_type());
+      Value* memset_ptr = builder()->CreateIntToPtr(fast_object_int, PointerType::getUnqual(YuhuType::jbyte_type()));
+
+    builder()->CreateMemset(memset_ptr,
       LLVMValue::jbyte_constant(0),
       LLVMValue::jint_constant(size_in_bytes),
       LLVMValue::jint_constant(HeapWordSize));
@@ -2045,7 +2047,7 @@ void YuhuTopLevelBlock::do_new() {
     builder()->SetInsertPoint(push_object);
   }
   if (fast_object) {
-    PHINode *phi = builder()->CreatePHI(YuhuType::oop_type(), 0, "object");
+    PHINode *phi = builder()->CreatePHI(YuhuType::oop_addrspace1_type(), 0, "object"); // FIXED - phi node should use oop_addrspace1_type as used in slow path and fast path
     phi->addIncoming(fast_object, got_fast);
     phi->addIncoming(slow_object, got_slow);
     object = phi;
@@ -2264,7 +2266,7 @@ void YuhuTopLevelBlock::release_lock(int exception_action) {
   Value *lock = builder()->CreatePtrToInt(
     monitor_header_addr, YuhuType::intptr_type());
 
-  Value *lockee = builder()->CreateLoad(YuhuType::oop_type(), monitor_object_addr);
+  Value *lockee = builder()->CreateLoad(YuhuType::oop_addrspace1_type(), monitor_object_addr);// FIXED - locked object is allocated in heap
 
   Value *mark_addr = builder()->CreateAddressOfStructEntry(
     lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),

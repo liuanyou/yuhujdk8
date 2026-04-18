@@ -74,7 +74,7 @@ void YuhuNativeWrapper::initialize(const char *name) {
   if (is_static() || is_returning_oop()) {
     _oop_tmp_slot = stack()->slot_addr(
       stack()->oop_tmp_slot_offset(),
-      YuhuType::oop_type(),
+      YuhuType::oop_addrspace1_type(), // FIXED - oop tmp is allocated in heap
       "oop_tmp_slot");
 
     oopmap->set_oop(YuhuStack::slot2reg(stack()->oop_tmp_slot_offset()));
@@ -89,7 +89,7 @@ void YuhuNativeWrapper::initialize(const char *name) {
   // Start building the argument list
   std::vector<llvm::Type*> param_types;  // Use llvm::Type to avoid conflict with HotSpot's Type class
   std::vector<Value*> param_values;
-  PointerType *box_type = PointerType::getUnqual(YuhuType::oop_type());
+  PointerType *box_type = PointerType::getUnqual(YuhuType::oop_addrspace1_type()); // FIXED - oop tmp slot is ptr addrspace(1)*, hence box_type should match
 
   // First argument is the JNIEnv
   param_types.push_back(YuhuType::jniEnv_type());
@@ -138,11 +138,11 @@ void YuhuNativeWrapper::initialize(const char *name) {
       not_null = CreateBlock("not_null");
       merge    = CreateBlock("merge");
 
-      box = stack()->slot_addr(slot_offset, YuhuType::oop_type());
+      box = stack()->slot_addr(slot_offset, YuhuType::oop_addrspace1_type()); // FIXED - both object and array are allocated in heap
       builder()->CreateCondBr(
         builder()->CreateICmp(
           ICmpInst::ICMP_EQ,
-          builder()->CreateLoad(YuhuType::oop_type(), box),
+          builder()->CreateLoad(YuhuType::oop_addrspace1_type(), box), // FIXED - both object and array are allocated in heap
           LLVMValue::null()),
         null, not_null);
 
@@ -326,7 +326,7 @@ void YuhuNativeWrapper::initialize(const char *name) {
     builder()->CreateBr(merge);
 
     builder()->SetInsertPoint(merge);
-    PHINode *phi = builder()->CreatePHI(YuhuType::oop_type(), 0, "result");
+    PHINode *phi = builder()->CreatePHI(YuhuType::oop_addrspace1_type(), 0, "result"); // FIXED - phi node should match type
     phi->addIncoming(LLVMValue::null(), null);
     phi->addIncoming(unboxed_result, not_null);
     result = phi;

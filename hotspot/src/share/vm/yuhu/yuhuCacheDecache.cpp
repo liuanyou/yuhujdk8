@@ -111,7 +111,7 @@ void YuhuDecacher::process_oop_tmp_slot(Value** value, int offset) {
   // Decache the temporary oop slot
   if (*value) {
     write_value_to_frame(
-      YuhuType::oop_type(),
+      YuhuType::oop_addrspace1_type(), // FIXED - oop tmp is heap object
       *value,
       offset);
 
@@ -355,15 +355,15 @@ void YuhuOSREntryCacher::process_monitor(int index,
     stack()->slot_addr(box_offset, YuhuType::intptr_type()));
   builder()->CreateStore(
     builder()->CreateLoad(
-      YuhuType::oop_type(),
-      CreateAddressOfOSRBufEntry(src_offset + 1, YuhuType::oop_type())),
-    stack()->slot_addr(obj_offset, YuhuType::oop_type()));
+      YuhuType::oop_addrspace1_type(), // FIXED - monitor object is allocated in heap
+      CreateAddressOfOSRBufEntry(src_offset + 1, YuhuType::oop_addrspace1_type())), // FIXED - monitor object is allocated in heap
+    stack()->slot_addr(obj_offset, YuhuType::oop_addrspace1_type())); // FIXED - type should match
 }
 
 void YuhuCacher::process_oop_tmp_slot(Value** value, int offset) {
   // Cache the temporary oop
   if (*value)
-    *value = read_value_from_frame(YuhuType::oop_type(), offset);
+    *value = read_value_from_frame(YuhuType::oop_addrspace1_type(), offset); // FIXED - oop tmp is allocated in heap
 }
 
 void YuhuCacher::process_method_slot(Value** value, int offset) {

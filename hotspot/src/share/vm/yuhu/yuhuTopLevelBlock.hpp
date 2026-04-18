@@ -255,12 +255,12 @@ class YuhuTopLevelBlock : public YuhuBlock {
   llvm::Value* pending_exception_address() const {
     return builder()->CreateAddressOfStructEntry(
       thread(), Thread::pending_exception_offset(),
-      llvm::PointerType::getUnqual(YuhuType::oop_type()),
+      llvm::PointerType::getUnqual(YuhuType::oop_addrspace1_type()),
       "pending_exception_addr");
   }
   llvm::LoadInst* get_pending_exception() const {
     return builder()->CreateLoad(
-      YuhuType::oop_type(),
+      YuhuType::oop_addrspace1_type(),
       pending_exception_address(), "pending_exception");
   }
   void clear_pending_exception() const {
@@ -397,10 +397,10 @@ class YuhuTopLevelBlock : public YuhuBlock {
   llvm::LoadInst* get_vm_result() const {
     llvm::Value *addr = builder()->CreateAddressOfStructEntry(
       thread(), JavaThread::vm_result_offset(),
-      llvm::PointerType::getUnqual(YuhuType::oop_type()),
+      llvm::PointerType::getUnqual(YuhuType::oop_addrspace1_type()),
       "vm_result_addr");
     llvm::LoadInst *result = builder()->CreateLoad(
-      YuhuType::oop_type(), addr, "vm_result");
+      YuhuType::oop_addrspace1_type(), addr, "vm_result");
     builder()->CreateStore(LLVMValue::null(), addr);
     return result;
   }

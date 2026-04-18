@@ -7,16 +7,22 @@
 #include "code/scopeDesc.hpp"
 #include "yuhu/yuhuOffsetMapper.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "runtime/threadLocalStorage.hpp"
 
-// YuhuDebugInformationRecorder: 用于收集虚拟 PC offset 的 OopMap 信息
-// 在 LLVM IR 生成期间收集信息，在机器码生成后转换为真实 PC offset
+namespace llvm {
+    class Module;
+}
+
+// YuhuDebugInformationRecorder: Thread-local recorder for collecting debug information
+// and call site metadata during LLVM IR generation
+// Lives for the duration of a single compilation, managed via thread-local storage
 class YuhuDebugInformationRecorder : public ResourceObj {
 private:
-  // 存储虚拟 PC offset 的 OopMap 信息
+  // Storage for virtual PC offset OopMap information
   GrowableArray<int>* _virtual_offsets;
   GrowableArray<OopMap*>* _oopmaps;
   
-  // 存储虚拟 PC offset 的帧信息（用于解缓存）
+  // Storage for virtual PC offset frame information (for deoptimization)
   GrowableArray<int>* _virtual_frame_offsets;
   GrowableArray<ciMethod*>* _frame_targets;
   GrowableArray<int>* _frame_bcis;
@@ -24,26 +30,32 @@ private:
   GrowableArray<GrowableArray<ScopeValue*>*>* _frame_expressions;
   GrowableArray<GrowableArray<MonitorValue*>*>* _frame_monitors;
 
+  // Call site metadata for JITLink correlation
+  // Maps virtual_offset → virtual_address → helper_address
+  GrowableArray<int>* _call_site_virtual_offsets;
+  GrowableArray<uint64_t>* _call_site_virtual_addresses;
+  GrowableArray<uint64_t>* _call_site_helper_addresses;
+
+  // LLVM Module reference for embedding metadata
+  llvm::Module* _module;
+
+  // Thread-local storage index
+  static int _tls_index;
+
 public:
-  YuhuDebugInformationRecorder() {
-    _virtual_offsets = new GrowableArray<int>();
-    _oopmaps = new GrowableArray<OopMap*>();
-    
-    _virtual_frame_offsets = new GrowableArray<int>();
-    _frame_targets = new GrowableArray<ciMethod*>();
-    _frame_bcis = new GrowableArray<int>();
-    _frame_locals = new GrowableArray<GrowableArray<ScopeValue*>*>();
-    _frame_expressions = new GrowableArray<GrowableArray<ScopeValue*>*>();
-    _frame_monitors = new GrowableArray<GrowableArray<MonitorValue*>*>();
-  }
+  YuhuDebugInformationRecorder();
+  ~YuhuDebugInformationRecorder();
+  
+  // Thread-local storage management
+  static void initialize_tls();
+  static YuhuDebugInformationRecorder* get();
+  static void release();
+  void set_module(llvm::Module* mod) { _module = mod; }
 
-  // 添加虚拟 PC offset 的 safepoint 信息
-  void add_safepoint(int virtual_pc_offset, OopMap* oopmap) {
-    _virtual_offsets->append(virtual_pc_offset);
-    _oopmaps->append(oopmap);
-  }
+  // Add virtual PC offset safepoint information
+  void add_safepoint(int virtual_pc_offset, OopMap* oopmap);
 
-  // 描述虚拟 PC offset 的作用域信息
+  // Describe scope information at virtual PC offset
   void describe_scope(int virtual_pc_offset,
                      ciMethod* method,
                      int bci,
@@ -52,22 +64,12 @@ public:
                      bool is_method_handle_invoke,
                      GrowableArray<ScopeValue*>* locals,
                      GrowableArray<ScopeValue*>* expressions,
-                     GrowableArray<MonitorValue*>* monitors) {
-    // 记录帧信息，等待后续转换
-    _virtual_frame_offsets->append(virtual_pc_offset);
-    _frame_targets->append(method);
-    _frame_bcis->append(bci);
-    _frame_locals->append(locals);
-    _frame_expressions->append(expressions);
-    _frame_monitors->append(monitors);
-  }
+                     GrowableArray<MonitorValue*>* monitors);
 
-  // 结束虚拟 PC offset 的 safepoint 记录
-  void end_safepoint(int virtual_pc_offset) {
-    // 实际上不需要做任何事情，因为我们已经记录了所需的所有信息
-  }
+  // End safepoint recording at virtual PC offset
+  void end_safepoint(int virtual_pc_offset);
 
-  // 获取虚拟 PC offset 数组
+  // Getter methods
   GrowableArray<int>* virtual_offsets() const { return _virtual_offsets; }
   GrowableArray<OopMap*>* oopmaps() const { return _oopmaps; }
   GrowableArray<int>* virtual_frame_offsets() const { return _virtual_frame_offsets; }
@@ -76,6 +78,29 @@ public:
   GrowableArray<GrowableArray<ScopeValue*>*>* frame_locals() const { return _frame_locals; }
   GrowableArray<GrowableArray<ScopeValue*>*>* frame_expressions() const { return _frame_expressions; }
   GrowableArray<GrowableArray<MonitorValue*>*>* frame_monitors() const { return _frame_monitors; }
+
+  // Call site metadata methods (moved from YuhuFunction)
+  void register_call_site(int virtual_offset, uint64_t virtual_address, uint64_t helper_address);
+  void embed_call_site_metadata();
+  
+  int get_call_site_count() const {
+    return _call_site_virtual_offsets ? _call_site_virtual_offsets->length() : 0;
+  }
+  
+  int get_call_site_virtual_offset(int index) const {
+    assert(index < get_call_site_count(), "index out of bounds");
+    return _call_site_virtual_offsets->at(index);
+  }
+  
+  uint64_t get_call_site_virtual_address(int index) const {
+    assert(index < get_call_site_count(), "index out of bounds");
+    return _call_site_virtual_addresses->at(index);
+  }
+  
+  uint64_t get_call_site_helper_address(int index) const {
+    assert(index < get_call_site_count(), "index out of bounds");
+    return _call_site_helper_addresses->at(index);
+  }
 
   void quick_sort_by_actual_offset(int left, int right, YuhuOffsetMapper* offset_mapper) {
       if (left >= right) return;

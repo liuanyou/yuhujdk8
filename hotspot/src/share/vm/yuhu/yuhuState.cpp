@@ -143,7 +143,7 @@ void YuhuState::merge(YuhuState* other,
   Value *other_oop_tmp = other->oop_tmp();
   if (this_oop_tmp != other_oop_tmp) {
     assert(this_oop_tmp && other_oop_tmp, "can't merge NULL with non-NULL");
-    PHINode *phi = builder()->CreatePHI(YuhuType::oop_type(), 0, "oop_tmp");
+    PHINode *phi = builder()->CreatePHI(YuhuType::oop_addrspace1_type(), 0, "oop_tmp"); // FIXED - oop_tmp is using oop_addrspace1_type, hence PHI should use the same type
     phi->addIncoming(this_oop_tmp, this_block);
     phi->addIncoming(other_oop_tmp, other_block);
     set_oop_tmp(phi);

@@ -202,7 +202,7 @@ class YuhuStack : public YuhuCompileInvariants {
   llvm::Value* monitor_object_addr(int index) const {
     return slot_addr(
       monitor_object_offset(index),
-      YuhuType::oop_type(),
+      YuhuType::oop_addrspace1_type(), // FIXED - monitor object is allocated in heap
       "object_addr");
   }
   llvm::Value* monitor_header_addr(int index) const {

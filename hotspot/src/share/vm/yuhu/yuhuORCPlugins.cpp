@@ -11,10 +11,13 @@
 #include "yuhu/yuhuORCPlugins.hpp"
 #include "yuhu/yuhuVirtualAddressPatcher.hpp"
 #include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuCompiler.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "code/debugInfoRec.hpp"
 #include "compiler/oopMap.hpp"
+#include "llvm/Object/StackMapParser.h"
+#include "llvm/Support/Endian.h"
 #include <unistd.h>  // For sysconf
 
 using namespace llvm;
@@ -173,15 +176,72 @@ void OopMapExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsib
 
 llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                                                       llvm::orc::MaterializationResponsibility &MR) {
-    // Always run this pass (not just when tracing)
-    
-    // Get the current function from YuhuCompiler
-    YuhuFunction* function = YuhuCompiler::current_compiling_function();
-    if (function == NULL) {
-        if (YuhuTraceMachineCode) {
-            errs() << "[OopMap Extractor] Warning: No current function set, skipping OopMap extraction\n";
+    // 1. 找到 __LLVM_StackMaps 段
+    for (auto &Section : G.sections()) {
+        if (Section.getName() != "__LLVM_StackMaps") continue;
+
+        for (auto *Block : Section.blocks()) {
+            auto Content = Block->getContent();
+            const uint8_t* Data = reinterpret_cast<const uint8_t*>(Content.data());
+            size_t Size = Content.size();
+
+            if (Size < 8) continue;
+
+            // 2. 使用 LLVM 的 StackMapParser
+            // 注意：使用 llvm::support::endianness::little 或 big
+            using StackMapParser = llvm::StackMapParser<endianness::little>;
+
+            StackMapParser Parser(llvm::ArrayRef<uint8_t>(Data, Size));
+
+                // 4. 遍历该函数中的所有 statepoint 记录
+                for (auto StatepointRecord : Parser.records()) {
+                    uint64_t StatepointID = StatepointRecord.getID();
+                    uint32_t InstructionOffset = StatepointRecord.getInstructionOffset();
+//                    uint64_t PC = FunctionAddr + InstructionOffset;
+//
+//                    if (YuhuTraceMachineCode) {
+//                        errs() << "[StackMap]   Statepoint at 0x"
+//                               << llvm::format_hex(PC, 16)
+//                               << ", ID: " << StatepointID << "\n";
+//                    }
+
+                    // 5. 解析 locations（栈上的 GC 根）
+                    for (auto LocationRecord : StatepointRecord.locations()) {
+                        auto Kind = LocationRecord.getKind();
+//                        uint8_t Flags = LocationRecord.getFlags();
+                        uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                        int32_t Offset = LocationRecord.getOffset();
+
+                        // Kind 2 = Direct (stack slot)
+                        // Kind 1 = In Register
+                        if (Kind == StackMapParser::LocationKind::Direct) {
+                            // 这是栈上的 GC 指针
+                            if (YuhuTraceMachineCode) {
+                                errs() << "[StackMap]     GC Root at stack offset: "
+                                       << Offset << "\n";
+                            }
+
+                            // TODO: 记录到 YuhuCompiler 的 OopMap 数据结构
+                            // YuhuCompiler::record_oopmap_slot(PC, Offset);
+                        } else if (Kind == StackMapParser::LocationKind::Register) {
+                            // 寄存器中的 GC 指针
+                            if (YuhuTraceMachineCode) {
+                                errs() << "[StackMap]     GC Root in register: "
+                                       << (int)DwarfRegNum << "\n";
+                            }
+                        }
+                    }
+
+                    // 6. 解析 live values（可选）
+                    for (auto LiveValue : StatepointRecord.liveouts()) {
+                        // LiveValue 包含 GC 指针的位置信息
+                        if (YuhuTraceMachineCode) {
+                            errs() << "[StackMap]     Live value index: "
+                                   << LiveValue.getDwarfRegNum() << "\n";
+                        }
+                    }
+                }
         }
-        return Error::success();
     }
     
     // Iterate over all sections looking for code sections
@@ -198,8 +258,7 @@ llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                 if (Size < 20) continue;  // Need at least 5 instructions for dual placeholders
                 
                 uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
-                
-                // TODO: Parse __llvm_stackmaps section to get statepoint information
+
                 // For now, scan for call instructions (blr) and look backwards for placeholders
                 
                 // Simple approach: scan for blr instructions and look backwards
@@ -255,22 +314,22 @@ llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                             }
                             
                             // Look up OopMap in deferred registry
-                            OopMap* oopmap = function->get_deferred_oopmap(virtual_offset);
-                            
-                            if (oopmap == NULL) {
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "[OopMap Extractor] ERROR: No deferred OopMap for virtual_offset " 
-                                           << virtual_offset << "\n";
-                                }
-                                continue;
-                            }
+//                            OopMap* oopmap = function->get_deferred_oopmap(virtual_offset);
+//
+//                            if (oopmap == NULL) {
+//                                if (YuhuTraceMachineCode) {
+//                                    errs() << "[OopMap Extractor] ERROR: No deferred OopMap for virtual_offset "
+//                                           << virtual_offset << "\n";
+//                                }
+//                                continue;
+//                            }
                             
                             // Calculate actual offsets for patching
                             // The return address is the instruction AFTER the bl
                             uint64_t return_pc_offset = offset + 4;
                             
                             // Look up the actual helper address from virtual_offset mapping
-                            uint64_t helper_addr = function->get_helper_address_by_offset((int)virtual_offset);
+                            uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address((int)virtual_offset);
                             if (helper_addr == 0) {
                                 if (YuhuTraceMachineCode) {
                                     errs() << "[OopMap Extractor] ERROR: No helper address for virtual_offset " 
@@ -312,22 +371,23 @@ llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                             );
                             
                             // Register OopMap at the return PC offset
-                            YuhuDebugInformationRecorder* debug_info = function->debug_info_recorder();
-                            if (debug_info != NULL) {
-                                // Calculate the actual code offset (relative to method start)
-                                int code_offset = (int)return_pc_offset;
-                                
-                                // Register the safepoint with the OopMap
-                                debug_info->add_safepoint(code_offset, oopmap);
-                                
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "  [OK] Registered OopMap at code offset: " << code_offset << "\n";
-                                }
-                            } else {
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "  [WARNING] No DebugInformationRecorder, OopMap not registered\n";
-                                }
-                            }
+                            // Use thread-local YuhuDebugInformationRecorder
+                            YuhuDebugInformationRecorder* debug_info = YuhuDebugInformationRecorder::get();
+//                            if (debug_info != NULL) {
+//                                // Calculate the actual code offset (relative to method start)
+//                                int code_offset = (int)return_pc_offset;
+//
+//                                // Register the safepoint with the OopMap
+//                                debug_info->add_safepoint(code_offset, oopmap);
+//
+//                                if (YuhuTraceMachineCode) {
+//                                    errs() << "  [OK] Registered OopMap at code offset: " << code_offset << "\n";
+//                                }
+//                            } else {
+//                                if (YuhuTraceMachineCode) {
+//                                    errs() << "  [WARNING] No DebugInformationRecorder, OopMap not registered\n";
+//                                }
+//                            }
                             
                             if (YuhuTraceMachineCode) {
                                 errs() << "  [OK] Patched adr instruction at offset " << adr_offset 

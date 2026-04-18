@@ -157,12 +157,12 @@ YuhuContext::YuhuContext(const char* name)
       // For object/array references, we need to consider compressed oops
       if (UseCompressedOops) {
         // When compressed oops are enabled, object fields store 32-bit compressed pointers
-        _to_stackType[i] = oop_type();      // Stack operations still use full pointer type
+        _to_stackType[i] = oop_addrspace1_type();      // FIXED - should GC // Stack operations still use full pointer type
         _to_arrayType[i] = jint_type();    // Field access loads 32-bit compressed pointers
       } else {
         // When compressed oops are disabled, object fields store full pointers
-        _to_stackType[i] = oop_type();
-        _to_arrayType[i] = oop_type();
+        _to_stackType[i] = oop_addrspace1_type(); // FIXED - used by everywhere, should GC
+        _to_arrayType[i] = oop_addrspace1_type(); // FIXED - used by everywhere
       }
       break;
 

@@ -41,6 +41,7 @@
 #include <dlfcn.h>
 #include "yuhu/yuhuContext.hpp"
 #include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhu_globals.hpp"
@@ -199,7 +200,7 @@ llvm::Type* YuhuBuilder::make_type(char type, bool void_ok) {
   case 'M':
     return PointerType::getUnqual(YuhuType::monitor_type());
   case 'O':
-    return YuhuType::oop_type();
+    return YuhuType::oop_addrspace1_type(); // FIXED - heap object, should GC
   case 'K':
     return YuhuType::klass_type();
 
@@ -385,12 +386,6 @@ Value* YuhuBuilder::load_klass_from_object(Value* object) {
     // Load full 64-bit klass pointer
     return CreateLoad(YuhuType::klass_type(), klass_addr, "klass");
   }
-}
-
-void YuhuBuilder::embed_call_site_metadata() {
-    if (_function) {
-        _function->embed_call_site_metadata();
-    }
 }
 
 Value* YuhuBuilder::safepoint() {
@@ -980,7 +975,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   
   // Step 2.5: Register the call site mapping (virtual_offset -> helper_address)
   // This allows OopMapExtractorPlugin to look up the actual helper address during patching
-  function()->register_call_site(virtual_offset, call_target_va, (uint64_t)(uintptr_t)helper_addr);
+  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)(uintptr_t)helper_addr);
   
   // Step 3: Use call target placeholder instead of actual helper address
   llvm::Value* fn_ptr = CreateIntToPtr(
@@ -1055,21 +1050,18 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
 Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   if (object == NULL || object->is_null_object()) {
     return llvm::ConstantPointerNull::get(
-      llvm::PointerType::get(YuhuType::oop_type()->getContext(), 0));
+      llvm::PointerType::get(YuhuType::oop_addrspace1_type()->getContext(), 1));
   }
 
   Module* mod = YuhuContext::current().module();
   LLVMContext& ctx = mod->getContext();
-  llvm::Type* ptr_ty = llvm::PointerType::get(ctx, 0);
   llvm::Type* i64_ty = llvm::Type::getInt64Ty(ctx);
-  llvm::Type* i32_ty = llvm::Type::getInt32Ty(ctx);
-  llvm::Type* i16_ty = llvm::Type::getInt16Ty(ctx);
 
-  // Non-String oop (e.g. klass mirror): lives in metaspace, not moved by GC
+  // Non-String oop (e.g. klass mirror): instance of java.lang.Class is allocated in heap
   oop real_oop = object->get_oop();
   if (real_oop != NULL && real_oop->klass() != SystemDictionary::String_klass()) {
     uint64_t oop_addr = (uint64_t)(uintptr_t)real_oop;
-    return CreateIntToPtr(llvm::ConstantInt::get(i64_ty, oop_addr), ptr_ty);
+    return CreateIntToPtr(llvm::ConstantInt::get(i64_ty, oop_addr), YuhuType::oop_addrspace1_type()); // FIXED - instance of java.lang.Class is allocated in heap
   }
 
   // String oop: allocate unique oop_id and generate marker for deferred oop_index allocation
@@ -1120,7 +1112,7 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   // Emit the marker + placeholder assembly, return the pointer value
   llvm::Value* str_oop = CreateIntToPtr(
     CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
-    ptr_ty);
+    YuhuType::oop_addrspace1_type()); // FIXED - 2 reason: 1. string object is allocated in heap; 2. caller expects oop_addrspace1_type to avoid type mismatch
   
   return str_oop;
 }
@@ -1659,17 +1651,17 @@ Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop) {
       // Add the base address
       Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
       Value* result_int = CreateAdd(base_as_int, shifted);
-      return CreateIntToPtr(result_int, YuhuType::oop_type());
+      return CreateIntToPtr(result_int, YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
     } else {
       // If shift is 0, just add to base
       Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
       Value* result_int = CreateAdd(base_as_int, compressed_as_int);
-      return CreateIntToPtr(result_int, YuhuType::oop_type());
+      return CreateIntToPtr(result_int, YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
     }
   } else {
     // If compressed oops are not used, just return the value as-is (cast to oop*)
     return CreateIntToPtr(CreateIntCast(compressed_oop, YuhuType::intptr_type(), false), 
-                         YuhuType::oop_type());
+                         YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
   }
 }
 

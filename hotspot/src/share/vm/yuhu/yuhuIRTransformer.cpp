@@ -22,10 +22,26 @@
 
 using namespace llvm;
 
+void declareGCSafepointPoll(Module& M) {
+    LLVMContext& Ctx = M.getContext();
+    FunctionType* PollType = FunctionType::get(
+            llvm::Type::getVoidTy(Ctx),  // 返回类型 void
+            false                  // 不是可变参数
+    );
+
+    // 如果不存在，则声明
+    if (!M.getFunction("gc.safepoint_poll")) {
+        Function::Create(PollType, Function::ExternalLinkage,
+                         "gc.safepoint_poll", &M);
+    }
+}
+
 llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm::orc::ThreadSafeModule TSM,
                                        llvm::orc::MaterializationResponsibility &MR) {
     TSM.withModuleDo([](Module &M) {
         errs() << "=== Running GC Passes on module: " << M.getName() << " ===\n";
+
+        declareGCSafepointPoll(M);
 
         // 1. 创建 PassBuilder 和 StandardInstrumentations
         PassInstrumentationCallbacks PIC;

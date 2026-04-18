@@ -131,7 +131,7 @@ bool YuhuNormalValue::is_jdouble() const {
   return llvm_value()->getType() == YuhuType::jdouble_type();
 }
 bool YuhuNormalValue::is_jobject() const {
-  return llvm_value()->getType() == YuhuType::oop_type();
+  return llvm_value()->getType() == YuhuType::oop_addrspace1_type(); // FIXED - check oop_addrspace1_type as well
 }
 bool YuhuNormalValue::is_jarray() const {
   return basic_type() == T_ARRAY;
