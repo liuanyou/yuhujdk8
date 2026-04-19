@@ -9,12 +9,12 @@
 #include "precompiled.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuIRTransformer.hpp"
+#include "yuhu/yuhuRewriteStatepointsForGC.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Transforms/Scalar/PlaceSafepoints.h"
-#include "llvm/Transforms/Scalar/RewriteStatepointsForGC.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/IR/Verifier.h"
@@ -78,7 +78,7 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
 
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
-        MPM.addPass(RewriteStatepointsForGC());
+        MPM.addPass(YuhuRewriteStatepointsForGC());
 
         // 6. 运行 Pass Manager
         MPM.run(M, MAM);
