@@ -10,6 +10,8 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuTracingIRCompiler.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
+#include "llvm/Object/StackMapParser.h"
 
 using namespace llvm;
 
@@ -69,6 +71,101 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
         if (auto Err = disassembleObjectFile(**ObjBuffer)) {
             errs() << "Warning: Failed to disassemble\n";
         }
+    }
+
+    // ObjBuffer is a std::unique_ptr<MemoryBuffer>
+    // You can parse it as an object file!
+
+    // Use LLVM's ObjectFile API:
+    auto ObjFile = llvm::object::ObjectFile::createObjectFile(
+            (*ObjBuffer)->getMemBufferRef());
+
+    if (!ObjFile) {
+        return ObjBuffer;
+    }
+
+    // 1. 找到 __LLVM_StackMaps 段
+    for (auto &Section : (*ObjFile)->sections()) {
+        auto NameOrErr = Section.getName();
+        if (!NameOrErr) {
+            continue;
+        }
+        errs() << "Section: " << *NameOrErr << "\n";
+        // Section.getName() returns in format of segment,section eg
+        // Section: __TEXT,__text
+        // Section: $__GOT
+        // Section: __LD,__compact_unwind
+        // Section: __LLVM_STACKMAPS,__llvm_stackmaps
+        // Section: __TEXT,__lcl_macho_hdr
+        // Section: __TEXT,__unwind_info
+        if (!Section.getName()->ends_with("__llvm_stackmaps")) continue;
+        errs() << "Size: " << Section.getSize() << "\n";
+        auto ContentOrErr = Section.getContents();
+        if (!ContentOrErr) {
+            continue;
+        }
+        auto Content = *ContentOrErr;
+        const uint8_t* Data = reinterpret_cast<const uint8_t*>(Content.data());
+        size_t Size = Content.size();
+
+        if (Size < 8) continue;
+
+        // 2. 使用 LLVM 的 StackMapParser
+        // 注意：使用 llvm::support::endianness::little 或 big
+        using StackMapParser = llvm::StackMapParser<endianness::little>;
+
+        StackMapParser Parser(llvm::ArrayRef<uint8_t>(Data, Size));
+
+        // 4. 遍历该函数中的所有 statepoint 记录
+        for (auto StatepointRecord : Parser.records()) {
+            uint64_t StatepointID = StatepointRecord.getID();
+            uint32_t InstructionOffset = StatepointRecord.getInstructionOffset();
+            errs() << "[StackMap] ID: " << StatepointID << " , InstructionOffset: " << InstructionOffset
+                    << ", Locations: " << StatepointRecord.getNumLocations() << " , Liveouts: " << StatepointRecord.getNumLiveOuts() << "\n";
+            if (YuhuTraceMachineCode) {
+                errs() << "[StackMap]   Statepoint at offset: " << InstructionOffset << " , ID: " << StatepointID << "\n";
+            }
+
+            // 5. 解析 locations（栈上的 GC 根）
+            for (auto LocationRecord : StatepointRecord.locations()) {
+                auto Kind = LocationRecord.getKind();
+                if (Kind == StackMapParser::LocationKind::Direct) {
+                    uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                    int32_t Offset = LocationRecord.getOffset();
+                    errs() << "[StackMap] Direct: " << DwarfRegNum << " , Offset: " << Offset << "\n";
+                    if (YuhuTraceMachineCode) {
+                        errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Direct: " << DwarfRegNum << "\n";
+                    }
+                    YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset, static_cast<uint8_t>(Kind), DwarfRegNum, Offset);
+                } else if (Kind == StackMapParser::LocationKind::Register) {
+                    uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                    errs() << "[StackMap] Register: " << DwarfRegNum << "\n";
+                    if (YuhuTraceMachineCode) {
+                        errs() << "[StackMap]     GC Root in register: " << (int)DwarfRegNum << "\n";
+                    }
+                    YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset, static_cast<uint8_t>(Kind), DwarfRegNum, 0);
+                } else if (Kind == StackMapParser::LocationKind::Indirect) {
+                    uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                    int32_t Offset = LocationRecord.getOffset();
+                    errs() << "[StackMap] Indirect: " << DwarfRegNum << " , Offset: " << Offset << "\n";
+                    if (YuhuTraceMachineCode) {
+                        errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Indirect: " << DwarfRegNum << "\n";
+                    }
+                    YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset, static_cast<uint8_t>(Kind), DwarfRegNum, Offset);
+                } else if (Kind == StackMapParser::LocationKind::Constant) {
+                    errs() << "[StackMap] Constant: " << LocationRecord.getSmallConstant() << "\n";
+                    if (YuhuTraceMachineCode) {
+                        errs() << "[StackMap] Ignore Constant" << "\n";
+                    }
+                } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
+                    errs() << "[StackMap] ConstantIndex: " << LocationRecord.getConstantIndex() << "\n";
+                    if (YuhuTraceMachineCode) {
+                        errs() << "[StackMap] Ignore ConstantIndex" << "\n";
+                    }
+                }
+            }
+        }
+
     }
 
     return ObjBuffer;

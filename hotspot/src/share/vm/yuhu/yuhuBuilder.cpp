@@ -971,7 +971,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   
   // Step 2: Create dual virtual addresses with same virtual_offset
   uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
+  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
   
   // Step 2.5: Register the call site mapping (virtual_offset -> helper_address)
   // This allows OopMapExtractorPlugin to look up the actual helper address during patching

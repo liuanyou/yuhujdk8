@@ -46,6 +46,12 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   _call_site_virtual_offsets = new GrowableArray<int>();
   _call_site_virtual_addresses = new GrowableArray<uint64_t>();
   _call_site_helper_addresses = new GrowableArray<uint64_t>();
+  _call_site_return_pc_offset = new GrowableArray<uint64_t>();
+
+  _stack_map_instruction_offsets = new GrowableArray<uint32_t>();
+  _stack_map_location_kinds = new GrowableArray<GrowableArray<uint8_t>*>();
+  _stack_map_location_reg_nums = new GrowableArray<GrowableArray<uint32_t>*>();
+  _stack_map_location_offsets = new GrowableArray<GrowableArray<int32_t>*>();
 }
 
 // Destructor
@@ -122,6 +128,7 @@ void YuhuDebugInformationRecorder::register_call_site(int virtual_offset,
   _call_site_virtual_offsets->append(virtual_offset);
   _call_site_virtual_addresses->append(virtual_address);
   _call_site_helper_addresses->append(helper_address);
+  _call_site_return_pc_offset->append(0);
 }
 
 // Embed call site mappings as LLVM named metadata
@@ -165,4 +172,20 @@ void YuhuDebugInformationRecorder::embed_call_site_metadata() {
     llvm::errs() << "[YuhuDebugInformationRecorder] Embedded " 
                  << get_call_site_count() << " call site mappings\n";
   }
+}
+
+void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offset,
+                                                      uint8_t location_kind,
+                                                      uint32_t location_reg_num,
+                                                      int32_t location_offset) {
+    if (!_stack_map_instruction_offsets->contains(instruction_offset)) {
+        _stack_map_instruction_offsets->append(instruction_offset);
+        _stack_map_location_kinds->append(new GrowableArray<uint8_t>());
+        _stack_map_location_reg_nums->append(new GrowableArray<uint32_t>());
+        _stack_map_location_offsets->append(new GrowableArray<int32_t>());
+    }
+    int index = _stack_map_instruction_offsets->find(instruction_offset);
+    _stack_map_location_kinds->at(index)->append(location_kind);
+    _stack_map_location_reg_nums->at(index)->append(location_reg_num);
+    _stack_map_location_offsets->at(index)->append(location_offset);
 }

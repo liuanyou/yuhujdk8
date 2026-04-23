@@ -35,6 +35,13 @@ private:
   GrowableArray<int>* _call_site_virtual_offsets;
   GrowableArray<uint64_t>* _call_site_virtual_addresses;
   GrowableArray<uint64_t>* _call_site_helper_addresses;
+  GrowableArray<uint64_t>* _call_site_return_pc_offset; // will be resolved later in OopMapExtractorPlugin
+
+  // Stack map statepoint locations
+  GrowableArray<uint32_t>* _stack_map_instruction_offsets;
+  GrowableArray<GrowableArray<uint8_t>*>* _stack_map_location_kinds;
+  GrowableArray<GrowableArray<uint32_t>*>* _stack_map_location_reg_nums;
+  GrowableArray<GrowableArray<int32_t>*>* _stack_map_location_offsets; // 0 is populated for Register kind
 
   // LLVM Module reference for embedding metadata
   llvm::Module* _module;
@@ -79,7 +86,7 @@ public:
   GrowableArray<GrowableArray<ScopeValue*>*>* frame_expressions() const { return _frame_expressions; }
   GrowableArray<GrowableArray<MonitorValue*>*>* frame_monitors() const { return _frame_monitors; }
 
-  // Call site metadata methods (moved from YuhuFunction)
+  // Call site related functions
   void register_call_site(int virtual_offset, uint64_t virtual_address, uint64_t helper_address);
   void embed_call_site_metadata();
   
@@ -101,6 +108,32 @@ public:
     assert(index < get_call_site_count(), "index out of bounds");
     return _call_site_helper_addresses->at(index);
   }
+  
+  // NEW: Look up virtual address by virtual_offset (not array index)
+  uint64_t get_call_site_virtual_address_by_offset(int virtual_offset) const {
+    if (!_call_site_virtual_offsets) return 0;
+    int index = _call_site_virtual_offsets->find(virtual_offset);
+    if (index == -1) return 0;
+    return _call_site_virtual_addresses->at(index);
+  }
+  
+  // NEW: Look up helper address by virtual_offset (not array index)
+  uint64_t get_call_site_helper_address_by_offset(int virtual_offset) const {
+    if (!_call_site_virtual_offsets) return 0;
+    int index = _call_site_virtual_offsets->find(virtual_offset);
+    if (index == -1) return 0;
+    return _call_site_helper_addresses->at(index);
+  }
+
+  void update_call_site_return_pc_offset(int virtual_offset, uint64_t return_pc_offset) const {
+      if (!_call_site_virtual_offsets) return;
+      int index = _call_site_virtual_offsets->find(virtual_offset);
+      if (index == -1) return;
+      _call_site_return_pc_offset->at_put(index, return_pc_offset);
+  }
+
+  // stack map related functions
+  void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset);
 
   void quick_sort_by_actual_offset(int left, int right, YuhuOffsetMapper* offset_mapper) {
       if (left >= right) return;

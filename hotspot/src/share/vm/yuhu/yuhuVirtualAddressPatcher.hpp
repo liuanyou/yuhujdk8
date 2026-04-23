@@ -29,8 +29,8 @@
 #include "utilities/globalDefinitions.hpp"
 
 // Virtual address magic numbers for placeholder identification
-static const uint32_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;
-static const uint32_t CALL_TARGET_MAGIC = 0xBEEF0000;
+static const uint64_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;
+static const uint64_t CALL_TARGET_MAGIC = 0xBEEFBEEF0000;
 
 // Information about matched placeholders for a single statepoint
 struct VirtualAddressMatch {
@@ -58,34 +58,12 @@ class YuhuVirtualAddressScanner : public AllStatic {
     VirtualAddressMatch& out_match
   );
   
-  // Extract virtual address from movz/movk instruction pair
-  static uint64_t extract_virtual_address_from_movz_movk(
-    const uint8_t* code_buffer,
-    uint64_t movz_offset
-  );
-  
-  // Patch movz/movk instructions with a new 64-bit value
-  static void patch_movz_movk_instructions(
+  // Patch call target movz/movk instructions with a new 64-bit value
+  // Handles 3-instruction pattern: movz (lsl #48) + movk (lsl #16) + movk (no shift)
+  static void patch_call_target_instructions(
     uint8_t* code_buffer,
     uint64_t movz_offset,
     uint64_t new_value
-  );
-  
-  // Scan for marker pattern (mov w19, #0xDEAD; movk w19, #virtual_offset, lsl #16)
-  // Returns offset of marker start, or UINT64_MAX if not found
-  static uint64_t scan_for_marker(
-    const uint8_t* code_buffer,
-    uint64_t search_start_offset,
-    uint64_t max_scan_distance
-  );
-  
-  // Scan for marker pattern with specific virtual_offset
-  // Returns offset of marker start, or UINT64_MAX if not found
-  static uint64_t scan_for_marker_with_offset(
-    const uint8_t* code_buffer,
-    uint64_t search_start_offset,
-    uint64_t max_scan_distance,
-    uint64_t expected_virtual_offset
   );
   
   // Patch adr instruction with new PC-relative offset
@@ -104,12 +82,16 @@ class YuhuVirtualAddressScanner : public AllStatic {
   }
   
   static bool is_call_target_placeholder(uint64_t va) {
-    return (va & 0xFFFF0000) == CALL_TARGET_MAGIC;
+    return (va & 0xFFFFFFFF0000) == CALL_TARGET_MAGIC;
   }
   
   // Extract virtual_offset from a virtual address
-  static uint64_t extract_virtual_offset(uint64_t va) {
+  static uint64_t extract_virtual_offset_from_virtual_last_java_pc(uint64_t va) {
     return va & 0x0000FFFF;
+  }
+
+  static uint64_t extract_virtual_offset_from_virtual_call_target(uint64_t va) {
+    return va & 0x00000000FFFF;
   }
 };
 

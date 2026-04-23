@@ -482,10 +482,10 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address
     // Use virtual_offset in the marker for identification during patching
     char asm_buf[256];
     snprintf(asm_buf, sizeof(asm_buf),
-        "mov w19, #0xDEAD\\n\\t"           // Marker magic
-        "movk w19, #%d, lsl #16\\n\\t"     // Virtual offset (embedded for correlation)
-        "adr x20, .+8\\n\\t"               // adr with dummy offset (+8 bytes, will be patched)
-        "str x20, [$0]\\n\\t",             // Store address to last_Java_pc
+        "mov w19, #%d\n" // Virtual offset (embedded for correlation)
+        "movk w19, #0xDEAD, lsl #16\n"           // Marker magic
+        "adr x20, .+8\n"               // adr with dummy offset (+8 bytes, will be patched)
+        "str x20, [$0]\n",             // Store address to last_Java_pc
         virtual_offset);
     
     std::string asm_string(asm_buf);

@@ -38,6 +38,7 @@
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuCacheDecache.hpp"
 #include "yuhu/yuhuConstant.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuInliner.hpp"
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuTopLevelBlock.hpp"
@@ -1544,6 +1545,31 @@ void YuhuTopLevelBlock::do_call() {
   // This creates an OopMap at the call site
   decache_for_Java_call(call_method);
 
+  // NEW: Get unique virtual offset for this call site (MUST be before creating placeholders)
+  int virtual_offset = code_buffer()->create_unique_offset();
+  
+  // NEW: Create dual virtual addresses with same virtual_offset
+  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
+  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
+  
+  // NEW: Extract actual compiled entry address from from_compiled_entry
+  uint64_t compiled_entry_address = 0;
+  if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(from_compiled_entry)) {
+    if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+      if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+        compiled_entry_address = IntConst->getZExtValue();
+      }
+    }
+  }
+  
+  // NEW: Store last_Java_pc placeholder
+  stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
+  
+  // NEW: Register call site for later patching
+  if (compiled_entry_address != 0) {
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, compiled_entry_address);
+  }
+
   // Save callee-saved registers that Yuhu uses but interpreter may corrupt
   builder()->CreateSaveCalleeSavedRegisters();
 
@@ -1579,18 +1605,32 @@ void YuhuTopLevelBlock::do_call() {
   // Create the correct function type with actual return type
   llvm::FunctionType* compiled_ftype = FunctionType::get(llvm_return_type, param_types, false);
 
-  Value *compiled_entry = builder()->CreateIntToPtr(
-    from_compiled_entry,
-    PointerType::getUnqual(compiled_ftype),
-    "compiled_entry");
+  // NEW: Use virtual address placeholder as call target if we extracted the real address
+  Value *compiled_entry_ptr;
+  if (compiled_entry_address != 0) {
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    compiled_entry_ptr = builder()->CreateIntToPtr(
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
+      PointerType::getUnqual(compiled_ftype),
+      "compiled_entry_virtual");
+  } else {
+    // Fallback: use original from_compiled_entry (for virtual/interface calls)
+    compiled_entry_ptr = builder()->CreateIntToPtr(
+      from_compiled_entry,
+      PointerType::getUnqual(compiled_ftype),
+      "compiled_entry");
+  }
 
   // Call the compiled entry and get the actual return value
   // Note: decache_for_Java_call() was already called above (line 1566)
   Value* call_result = builder()->CreateCall(
-    compiled_ftype, compiled_entry, call_args);
+    compiled_ftype, compiled_entry_ptr, call_args);
 
   // Restore callee-saved registers from save area at [sp, #80]
   builder()->CreateRestoreCalleeSavedRegisters();
+
+  // NEW: Reset last_Java_pc after call returns
+  stack()->CreateResetLastJavaFrame();
 
   // NOTE: Unlike Shark, we use the correct function return type instead of jint.
   // Shark uses a special entry point that returns jint (deoptimization count),

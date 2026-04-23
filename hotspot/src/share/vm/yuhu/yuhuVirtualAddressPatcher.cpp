@@ -32,9 +32,20 @@
 // movk (move and keep):  0xF2800000 | (imm16 << 5) | rd | (shift << 21)
 
 static const uint32_t MOVZ_MASK = 0xFF800000;
-static const uint32_t MOVZ_PATTERN = 0xD2800000;
+static const uint32_t MOVZ_PATTERN_64 = 0xD2800000;
+static const uint32_t MOVZ_PATTERN_32 = 0x52800000;
+
 static const uint32_t MOVK_MASK = 0xFF800000;
-static const uint32_t MOVK_PATTERN = 0xF2800000;
+static const uint32_t MOVK_PATTERN_64 = 0xF2800000;
+static const uint32_t MOVK_PATTERN_32 = 0x72800000;
+
+// MOV (immediate) is encoded as ORR (immediate)
+static const uint32_t MOV_IMM_MASK = 0xFF800000;
+static const uint32_t MOV_IMM_PATTERN_32 = 0x2A000000;
+static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
+
+static const uint32_t BLR_MASK = 0xFFFFFC1F;
+static const uint32_t BLR_PATTERN = 0xD63F0000;
 
 bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
   const uint8_t* code_buffer,
@@ -57,53 +68,98 @@ bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
   bool found_call_target = false;
   
   // Scan backwards from statepoint call
-  for (uint64_t offset = scan_start; offset + 8 >= scan_end && offset >= 8; offset -= 4) {
+  for (uint64_t offset = scan_start; offset + 12 >= scan_end && offset >= 12; offset -= 4) {
     // Read instruction at current offset
     uint32_t inst = *(uint32_t*)(code_buffer + offset);
-    
-    // Check for movz with lsl #32 (shift = 2)
-    if ((inst & MOVZ_MASK) == MOVZ_PATTERN) {
-      uint32_t imm16 = (inst >> 5) & 0xFFFF;
-      uint32_t shift = (inst >> 21) & 0x3;
-      
-      if (shift == 2) {  // lsl #32
-        // Check if there's a following movk instruction
-        if (offset + 4 < scan_start + 100) {  // Sanity check
-          uint32_t next_inst = *(uint32_t*)(code_buffer + offset + 4);
-          
-          if ((next_inst & MOVK_MASK) == MOVK_PATTERN) {
+
+    // Immediate stop at another blr instruction
+    if (offset < scan_start && (inst & BLR_MASK) == BLR_PATTERN) {
+        break;
+    }
+
+    // expected instruction sequences for last java pc
+    // mov    w19, #0x20
+    // movk   w19, #0xdead, lsl #16
+    bool is_mov_32 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_32);
+    bool is_movz_32 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_32) && ((inst >> 21) & 0x3) == 0;
+    // handle for last java pc
+    if (is_mov_32 || is_movz_32) {
+        uint32_t low16 = (inst >> 5) & 0xFFFF;
+
+        // Check next instruction for movk
+        uint32_t next_inst = *(uint32_t*)(code_buffer + offset + 4);
+        if ((next_inst & MOVK_MASK) == MOVK_PATTERN_32) {
             uint32_t next_shift = (next_inst >> 21) & 0x3;
-            
-            // movk should have no shift (shift = 0) for low 16 bits
-            if (next_shift == 0) {
-              uint32_t low16 = (next_inst >> 5) & 0xFFFF;
-              uint64_t virtual_address = ((uint64_t)imm16 << 32) | low16;
-              
-              // Check magic number
-              if (imm16 == 0xDEAD) {
-                // Found last_Java_pc placeholder
-                out_match.last_java_pc_va = virtual_address;
-                out_match.last_java_pc_placeholder_offset = offset;
-                out_match.virtual_offset = low16;
-                found_ljpc = true;
-              } else if (imm16 == 0xBEEF) {
-                // Found call target placeholder
-                out_match.call_target_va = virtual_address;
-                out_match.call_target_placeholder_offset = offset;
-                
-                // Verify same virtual_offset
-                if (out_match.virtual_offset == 0) {
-                  out_match.virtual_offset = low16;
-                } else if (out_match.virtual_offset != low16) {
-                  // Mismatched virtual_offsets - this is an error
-                  return false;
+            if (next_shift == 1) {
+                uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                // Check virtual address for last java pc
+                if (mid16_31 == 0xDEAD) {
+                    // Found last_Java_pc placeholder
+                    out_match.last_java_pc_va = ((uint64_t)mid16_31 << 16) | low16;
+                    out_match.last_java_pc_placeholder_offset = offset;
+                    out_match.last_java_pc_adr_offset = offset + 8;
+
+                    // Verify same virtual_offset
+                    if (out_match.virtual_offset == 0) {
+                        out_match.virtual_offset = low16;
+                    } else if (out_match.virtual_offset != low16) {
+                        // Mismatched virtual_offsets - this is a critical error
+                        assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                        return false;  // Early exit in all builds
+                    }
+                    found_ljpc = true;
                 }
-                found_call_target = true;
-              }
             }
-          }
         }
-      }
+    }
+
+    // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
+    // movz   x8, #0x20, lsl #0
+    // movk   x8, #0xbeef, lsl #16
+    // movk   x8, #0xbeef, lsl #32
+    // or
+    // mov    x8, #0x20
+    // movk   x8, #0xbeef, lsl #16
+    // movk   x8, #0xbeef, lsl #32
+    bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
+    bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64) && ((inst >> 21) & 0x3) == 0;
+    if (is_mov_64 || is_movz_64) {
+        uint32_t low16 = (inst >> 5) & 0xFFFF;
+
+        // Check next instruction for movk
+        uint32_t next_inst = *(uint32_t*)(code_buffer + offset + 4);
+        if ((next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+            uint32_t next_shift = (next_inst >> 21) & 0x3;
+            if (next_shift == 1) {
+                uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                // Check virtual address for call target
+                if (mid16_31 == 0xBEEF) {
+                    uint32_t next_next_inst = *(uint32_t*)(code_buffer + offset + 8);
+                    // Check another movk instruction
+                    if ((next_next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+                        uint32_t next_next_shift = (next_next_inst >> 21) & 0x3;
+                        if (next_next_shift == 2) {
+                            uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
+                            if (mid32_47 == 0xBEEF) {
+                                // Found call target placeholder
+                                out_match.call_target_va = ((uint64_t)mid32_47 << 32) | ((uint64_t)mid16_31 << 16) | low16;
+                                out_match.call_target_placeholder_offset = offset;
+
+                                // Verify same virtual_offset
+                                if (out_match.virtual_offset == 0) {
+                                    out_match.virtual_offset = low16;
+                                } else if (out_match.virtual_offset != low16) {
+                                    // Mismatched virtual_offsets - this is a critical error
+                                    assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                                    return false;  // Early exit in all builds
+                                }
+                                found_call_target = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     // Stop if we found both placeholders
@@ -116,20 +172,7 @@ bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
   return false;
 }
 
-uint64_t YuhuVirtualAddressScanner::extract_virtual_address_from_movz_movk(
-  const uint8_t* code_buffer,
-  uint64_t movz_offset
-) {
-  uint32_t movz_inst = *(uint32_t*)(code_buffer + movz_offset);
-  uint32_t movk_inst = *(uint32_t*)(code_buffer + movz_offset + 4);
-  
-  uint32_t high16 = (movz_inst >> 5) & 0xFFFF;
-  uint32_t low16 = (movk_inst >> 5) & 0xFFFF;
-  
-  return ((uint64_t)high16 << 32) | low16;
-}
-
-void YuhuVirtualAddressScanner::patch_movz_movk_instructions(
+void YuhuVirtualAddressScanner::patch_call_target_instructions(
   uint8_t* code_buffer,
   uint64_t movz_offset,
   uint64_t new_value
@@ -138,120 +181,45 @@ void YuhuVirtualAddressScanner::patch_movz_movk_instructions(
   uint16_t imm0 = (new_value >> 0) & 0xFFFF;   // Bits 15-0
   uint16_t imm1 = (new_value >> 16) & 0xFFFF;  // Bits 31-16
   uint16_t imm2 = (new_value >> 32) & 0xFFFF;  // Bits 47-32
-  uint16_t imm3 = (new_value >> 48) & 0xFFFF;  // Bits 63-48
-  
-  // For AArch64, we need to patch the existing movz/movk pair
-  // Current pattern: movz (lsl #32) + movk (no shift)
-  // This covers bits 47-32 and 15-0
-  // We need to add movk for bits 31-16 and 63-48 if they're non-zero
+
+    // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
+    // movz   x8, #0x20, lsl #0
+    // movk   x8, #0xbeef, lsl #16
+    // movk   x8, #0xbeef, lsl #32
+    // or
+    // mov    x8, #0x20
+    // movk   x8, #0xbeef, lsl #16
+    // movk   x8, #0xbeef, lsl #32
   
   uint32_t* instructions = (uint32_t*)(code_buffer + movz_offset);
   
-  // Patch movz (bits 47-32, lsl #32)
+  // Patch movz (bits 15-0, lsl #0)
+  // MOVZ 64-bit: 0xD2800000 | (imm16 << 5) | (shift << 21) | rd
+  // shift #0 = 0b00 = 0
   uint32_t movz_inst = instructions[0];
-  movz_inst = (movz_inst & ~(0xFFFF << 5)) | (imm2 << 5);  // Replace imm16
+  // Verify this is a movz with lsl #0
+  assert((movz_inst & MOVZ_MASK) == MOVZ_PATTERN_64 && ((movz_inst >> 21) & 0x3) == 0,
+         "Expected movz instruction with lsl #0");
+  movz_inst = (movz_inst & ~(0xFFFF << 5)) | (imm0 << 5);  // Replace imm16
   instructions[0] = movz_inst;
   
-  // Patch movk (bits 15-0, no shift)
-  uint32_t movk_inst = instructions[1];
-  movk_inst = (movk_inst & ~(0xFFFF << 5)) | (imm0 << 5);  // Replace imm16
-  instructions[1] = movk_inst;
-  
-  // If bits 31-16 or 63-48 are non-zero, we need to insert additional movk instructions
-  // This is more complex and would require code relocation
-  // For now, we assume virtual addresses fit in 48 bits (imm1 and imm3 are zero)
-  assert(imm1 == 0 && imm3 == 0, "Virtual addresses must fit in 48 bits for simple patching");
-}
+  // Patch first movk (bits 31-16, lsl #16)
+  // MOVK 64-bit: 0xF2800000 | (imm16 << 5) | (shift << 21) | rd
+  // shift #16 = 0b01 = 1
+  uint32_t movk_inst1 = instructions[1];
+  assert((movk_inst1 & MOVK_MASK) == MOVK_PATTERN_64 && ((movk_inst1 >> 21) & 0x3) == 1,
+         "Expected movk instruction with lsl #16");
+  movk_inst1 = (movk_inst1 & ~(0xFFFF << 5)) | (imm1 << 5);  // Replace imm16
+  instructions[1] = movk_inst1;
 
-uint64_t YuhuVirtualAddressScanner::scan_for_marker(
-  const uint8_t* code_buffer,
-  uint64_t search_start_offset,
-  uint64_t max_scan_distance
-) {
-  // Scan for any marker with 0xDEAD magic (regardless of virtual_offset)
-  const uint32_t MOV_W19_IMM_MASK = 0xFFE0001F;
-  const uint32_t MOV_W19_IMM_PATTERN = 0x52800013;  // movz w19, #imm16
-  
-  const uint32_t MOVK_W19_MASK = 0xFFE0001F;
-  
-  // Scan backwards from search_start_offset
-  uint64_t scan_end = (search_start_offset > max_scan_distance) 
-                      ? search_start_offset - max_scan_distance : 0;
-  
-  for (uint64_t offset = search_start_offset; offset + 8 >= scan_end && offset >= 8; offset -= 4) {
-    // Read two consecutive instructions
-    uint32_t inst1 = *(uint32_t*)(code_buffer + offset);
-    uint32_t inst2 = *(uint32_t*)(code_buffer + offset + 4);
-    
-    // Check first instruction: movz w19, #0xDEAD
-    if ((inst1 & MOV_W19_IMM_MASK) == MOV_W19_IMM_PATTERN) {
-      uint32_t imm16 = (inst1 >> 5) & 0xFFFF;
-      
-      // Check if it's the marker magic (0xDEAD)
-      if (imm16 == 0xDEAD) {
-        // Check second instruction: movk w19, #virtual_offset, lsl #16
-        if ((inst2 & MOVK_W19_MASK) == 0xF2A00013) {  // movk with lsl #16
-          uint32_t shift = (inst2 >> 21) & 0x3;
-          
-          // Check if shift is lsl #16
-          if (shift == 1) {
-            // Found a marker!
-            return offset;
-          }
-        }
-      }
-    }
-  }
-  
-  // Marker not found
-  return UINT64_MAX;
-}
-
-uint64_t YuhuVirtualAddressScanner::scan_for_marker_with_offset(
-  const uint8_t* code_buffer,
-  uint64_t search_start_offset,
-  uint64_t max_scan_distance,
-  uint64_t expected_virtual_offset
-) {
-  // Scan for marker with specific virtual_offset
-  const uint32_t MOV_W19_IMM_MASK = 0xFFE0001F;
-  const uint32_t MOV_W19_IMM_PATTERN = 0x52800013;  // movz w19, #imm16
-  
-  const uint32_t MOVK_W19_MASK = 0xFFE0001F;
-  const uint32_t MOVK_W19_LSL16_PATTERN = 0xF2A00013;  // movk w19, #imm16, lsl #16
-  
-  // Scan backwards from search_start_offset
-  uint64_t scan_end = (search_start_offset > max_scan_distance) 
-                      ? search_start_offset - max_scan_distance : 0;
-  
-  for (uint64_t offset = search_start_offset; offset + 8 >= scan_end && offset >= 8; offset -= 4) {
-    // Read two consecutive instructions
-    uint32_t inst1 = *(uint32_t*)(code_buffer + offset);
-    uint32_t inst2 = *(uint32_t*)(code_buffer + offset + 4);
-    
-    // Check first instruction: movz w19, #0xDEAD
-    if ((inst1 & MOV_W19_IMM_MASK) == MOV_W19_IMM_PATTERN) {
-      uint32_t imm16_high = (inst1 >> 5) & 0xFFFF;
-      
-      // Check if it's the marker magic (0xDEAD)
-      if (imm16_high == 0xDEAD) {
-        // Check second instruction: movk w19, #virtual_offset, lsl #16
-        if ((inst2 & MOVK_W19_MASK) == MOVK_W19_LSL16_PATTERN) {
-          uint32_t virtual_offset = (inst2 >> 5) & 0xFFFF;
-          uint32_t shift = (inst2 >> 21) & 0x3;
-          
-          // Check if shift is lsl #16 and virtual_offset matches
-          if (shift == 1 && virtual_offset == expected_virtual_offset) {
-            // Found the marker with matching virtual_offset!
-            return offset;
-          }
-        }
-      }
-    }
-  }
-  
-  // Marker with expected virtual_offset not found
-  return UINT64_MAX;
+  // Patch second movk (bits 47-32, lsl #32)
+  // MOVK 64-bit: 0xF2800000 | (imm16 << 5) | (shift << 21) | rd
+  // shift #32 = 0b10 = 2
+  uint32_t movk_inst2 = instructions[2];
+  assert((movk_inst2 & MOVK_MASK) == MOVK_PATTERN_64 && ((movk_inst2 >> 21) & 0x3) == 2,
+         "Expected movk instruction with lsl #32");
+  movk_inst2 = (movk_inst2 & ~(0xFFFF << 5)) | (imm2 << 5);  // Replace imm16
+  instructions[2] = movk_inst2;
 }
 
 void YuhuVirtualAddressScanner::patch_adr_instruction(

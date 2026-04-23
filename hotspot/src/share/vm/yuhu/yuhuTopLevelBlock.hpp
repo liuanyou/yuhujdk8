@@ -305,7 +305,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
     
     // Step 2: Create dual virtual addresses with same virtual_offset
     uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
+    uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
     
     // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;
@@ -324,6 +324,8 @@ class YuhuTopLevelBlock : public YuhuBlock {
       virtual_callee = builder()->CreateIntToPtr(
         llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
         callee->getType());
+
+      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address);
     }
     
     // Step 5: Store last_Java_pc placeholder (will be patched later)
