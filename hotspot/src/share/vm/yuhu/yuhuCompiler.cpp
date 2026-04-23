@@ -317,7 +317,7 @@ YuhuCompiler::YuhuCompiler()
 
     llvm::orc::SymbolMap SymMap;
     auto& ES = _jit->getExecutionSession();
-    SymMap[ES.intern("gc.safepoint_poll")] =
+    SymMap[ES.intern("_gc.safepoint_poll")] =
             llvm::orc::ExecutorSymbolDef(
                     llvm::orc::ExecutorAddr::fromPtr(&gc_safepoint_poll),
                     llvm::JITSymbolFlags::Callable);

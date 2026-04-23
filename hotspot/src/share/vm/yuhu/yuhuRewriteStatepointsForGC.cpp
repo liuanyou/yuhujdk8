@@ -116,19 +116,19 @@
 using namespace llvm;
 
 // Print the liveset found at the insert location
-static cl::opt<bool> PrintLiveSet("spp-print-liveset", cl::Hidden,
+static cl::opt<bool> PrintLiveSet("yuhu-spp-print-liveset", cl::Hidden,
                                   cl::init(false));
-static cl::opt<bool> PrintLiveSetSize("spp-print-liveset-size", cl::Hidden,
+static cl::opt<bool> PrintLiveSetSize("yuhu-spp-print-liveset-size", cl::Hidden,
                                       cl::init(false));
 
 // Print out the base pointers for debugging
-static cl::opt<bool> PrintBasePointers("spp-print-base-pointers", cl::Hidden,
+static cl::opt<bool> PrintBasePointers("yuhu-spp-print-base-pointers", cl::Hidden,
                                        cl::init(false));
 
 // Cost threshold measuring when it is profitable to rematerialize value instead
 // of relocating it
 static cl::opt<unsigned>
-        RematerializationThreshold("spp-rematerialization-threshold", cl::Hidden,
+        RematerializationThreshold("yuhu-spp-rematerialization-threshold", cl::Hidden,
                                    cl::init(6));
 
 #ifdef EXPENSIVE_CHECKS
@@ -137,15 +137,15 @@ static bool ClobberNonLive = true;
 static bool ClobberNonLive = false;
 #endif
 
-static cl::opt<bool, true> ClobberNonLiveOverride("rs4gc-clobber-non-live",
+static cl::opt<bool, true> ClobberNonLiveOverride("yuhu-rs4gc-clobber-non-live",
                                                   cl::location(ClobberNonLive),
                                                   cl::Hidden);
 
 static cl::opt<bool>
-        AllowStatepointWithNoDeoptInfo("rs4gc-allow-statepoint-with-no-deopt-info",
+        AllowStatepointWithNoDeoptInfo("yuhu-rs4gc-allow-statepoint-with-no-deopt-info",
                                        cl::Hidden, cl::init(true));
 
-static cl::opt<bool> RematDerivedAtUses("rs4gc-remat-derived-at-uses",
+static cl::opt<bool> RematDerivedAtUses("yuhu-rs4gc-remat-derived-at-uses",
                                         cl::Hidden, cl::init(true));
 
 /// The IR fed into RewriteStatepointsForGC may have had attributes and
@@ -3078,6 +3078,9 @@ bool YuhuRewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
 
     auto NeedsRewrite = [&TLI](Instruction &I) {
         if (const auto *Call = dyn_cast<CallBase>(&I)) {
+            // make sure inline asm being used doesn't need GC support, otherwise it is a big miss for GC
+            if (isa<InlineAsm>(Call->getCalledOperand()))
+                return false;
             if (isa<GCStatepointInst>(Call))
                 return false;
             if (callsGCLeafFunction(Call, TLI))
