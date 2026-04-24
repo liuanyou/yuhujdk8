@@ -138,31 +138,30 @@ llvm::Error MachineCodePrinterPlugin::dumpMachineCode(llvm::jitlink::LinkGraph &
     return Error::success();
 }
 
-void OopMapExtractorPlugin::notifyLoaded(llvm::orc::MaterializationResponsibility &MR) {
+void CallSiteExtractorPlugin::notifyLoaded(llvm::orc::MaterializationResponsibility &MR) {
 }
 
-llvm::Error OopMapExtractorPlugin::notifyEmitted(llvm::orc::MaterializationResponsibility &MR) {
+llvm::Error CallSiteExtractorPlugin::notifyEmitted(llvm::orc::MaterializationResponsibility &MR) {
     return Error::success();
 
 }
 
-llvm::Error OopMapExtractorPlugin::notifyFailed(llvm::orc::MaterializationResponsibility &MR) {
+llvm::Error CallSiteExtractorPlugin::notifyFailed(llvm::orc::MaterializationResponsibility &MR) {
     return Error::success();
 
 }
 
-llvm::Error OopMapExtractorPlugin::notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) {
+llvm::Error CallSiteExtractorPlugin::notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) {
     return Error::success();
 }
 
-void OopMapExtractorPlugin::notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
+void CallSiteExtractorPlugin::notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
                                                            llvm::orc::ResourceKey SrcKey) {
 }
 
-// OopMapExtractorPlugin implementation
+// CallSiteExtractorPlugin implementation
 // Scans for movz/movk/blr patterns and extracts VM call site information
-
-void OopMapExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
+void CallSiteExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
                                               llvm::jitlink::LinkGraph &LG,
                                               llvm::jitlink::PassConfiguration &PassConfig) {
     // After dead code is emitted, and after relocation happens, as we don't need to take care of edge update
@@ -174,128 +173,211 @@ void OopMapExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsib
         });
 }
 
-llvm::Error OopMapExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
+llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                                                       llvm::orc::MaterializationResponsibility &MR) {
     // Iterate over all sections looking for code sections
     for (auto &Section : G.sections()) {
         // Only process executable sections (code)
         // Section.getName() returns in format of segment,section
-        if (Section.getName().ends_with("__text")) {
-            // Iterate over all blocks in this section
-            for (auto *Block : Section.blocks()) {
-                // Get mutable content so we can patch it
-                auto Content = Block->getMutableContent(G);
-                uint64_t BaseAddr = Block->getAddress().getValue();
-                size_t Size = Block->getSize();
-                
-                if (Size < 20) continue;  // Need at least 5 instructions for dual placeholders
-                
-                uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
+        if (!Section.getName().ends_with("__text"))
+            continue;
 
-                // For now, scan for call instructions (blr) and look backwards for placeholders
-                
-                // Simple approach: scan for blr instructions and look backwards
-                for (size_t offset = 12; offset + 4 <= Size; offset += 4) {
-                    uint32_t inst = *(uint32_t*)(CodeData + offset);
-                    
-                    // Check if this is a blr instruction: 0xD63F0000 | rn
-                    if ((inst & 0xFFFFFC1F) == 0xD63F0000) {
-                        // Found a blr instruction, scan backwards for placeholders
-                        VirtualAddressMatch match;
-                        
-                        bool found = YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
-                            CodeData,
-                            offset,
-                            50,  // Max scan distance: 50 instructions
-                            match
-                        );
-                        
-                        if (found) {
-                            // Validate 1-1-1 relationship
-                            if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "[OopMap Extractor] ERROR: Missing placeholders at offset " 
-                                           << format_hex(offset, 8) << "\n";
-                                }
-                                continue;
-                            }
-                            
-                            // Extract virtual_offset and validate
-                            uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
-                            uint64_t ct_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_call_target(match.call_target_va);
-                            
-                            if (ljpc_offset != ct_offset) {
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "[OopMap Extractor] ERROR: Mismatched virtual_offsets at offset " 
-                                           << format_hex(offset, 8) << "\n";
-                                    errs() << "  last_Java_pc offset: " << ljpc_offset << "\n";
-                                    errs() << "  call_target offset: " << ct_offset << "\n";
-                                }
-                                continue;
-                            }
-                            
-                            uint64_t virtual_offset = ljpc_offset;
-                            
+        // Iterate over all blocks in this section
+        for (auto *Block : Section.blocks()) {
+            // Get mutable content so we can patch it
+            auto Content = Block->getMutableContent(G);
+            uint64_t BaseAddr = Block->getAddress().getValue();
+            size_t Size = Block->getSize();
+
+            if (Size < 20) continue;  // Need at least 5 instructions for dual placeholders
+
+            uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
+
+            // For now, scan for call instructions (blr) and look backwards for placeholders
+
+            // Simple approach: scan for blr instructions and look backwards
+            for (size_t offset = 12; offset + 4 <= Size; offset += 4) {
+                uint32_t inst = *(uint32_t*)(CodeData + offset);
+
+                // Check if this is a blr instruction: 0xD63F0000 | rn
+                if ((inst & 0xFFFFFC1F) == 0xD63F0000) {
+                    // Found a blr instruction, scan backwards for placeholders
+                    VirtualAddressMatch match;
+
+                    bool found = YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
+                        CodeData,
+                        offset,
+                        200,  // Max scan distance: 200 bytes ~ 50 instructions
+                        match
+                    );
+
+                    if (found) {
+                        // Validate 1-1-1 relationship
+                        if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[OopMap Extractor] Found dual placeholders:\n";
-                                errs() << "  Statepoint call offset: " << format_hex(offset, 8) << "\n";
-                                errs() << "  Virtual offset: " << virtual_offset << "\n";
-                                errs() << "  last_Java_pc VA: " << format_hex(match.last_java_pc_va, 16) 
-                                       << " at " << format_hex(match.last_java_pc_placeholder_offset, 8) << "\n";
-                                errs() << "  call_target VA: " << format_hex(match.call_target_va, 16) 
-                                       << " at " << format_hex(match.call_target_placeholder_offset, 8) << "\n";
+                                errs() << "[OopMap Extractor] ERROR: Missing placeholders at offset "
+                                       << format_hex(offset, 8) << "\n";
                             }
-                            
-                            // Calculate actual offsets for patching
-                            // The return address is the instruction AFTER the bl
-                            uint64_t return_pc_offset = offset + 4;
-                            
-                            // Look up the actual helper address from virtual_offset mapping
-                            uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-                            if (helper_addr == 0) {
-                                if (YuhuTraceMachineCode) {
-                                    errs() << "[OopMap Extractor] ERROR: No helper address for virtual_offset " 
-                                           << virtual_offset << "\n";
-                                }
-                                continue;
-                            }
-
-                            // update return_pc_offset by virtual_offsets
-                            YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, return_pc_offset);
-
-                            // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
-                            uint64_t adr_offset = match.last_java_pc_adr_offset;
-                            
-                            // Calculate absolute addresses for patching
-                            // BaseAddr is the load address of this section (from JITLink)
-                            uint64_t adr_absolute_address = BaseAddr + adr_offset;
-                            uint64_t return_absolute_address = BaseAddr + return_pc_offset;
-                            
-                            // Patch the adr instruction with correct PC-relative offset
-                            YuhuVirtualAddressScanner::patch_adr_instruction(
-                                CodeData,
-                                adr_offset,
-                                adr_absolute_address,      // Address of adr instruction
-                                return_absolute_address    // Target address (return after bl)
-                            );
-
-                            YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
-                                                                                      YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset));
-                            
-                            if (YuhuTraceMachineCode) {
-                                errs() << "  [OK] Patched adr instruction at offset " << adr_offset 
-                                       << " to point to return address at offset " << return_pc_offset << "\n";
-                                errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
-                            }
-                            
-                            // Skip past this blr instruction
-                            // (don't skip, as there might be multiple blr instructions in sequence)
+                            continue;
                         }
+
+                        // Extract virtual_offset and validate
+                        uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
+                        uint64_t ct_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_call_target(match.call_target_va);
+
+                        if (ljpc_offset != ct_offset) {
+                            if (YuhuTraceMachineCode) {
+                                errs() << "[OopMap Extractor] ERROR: Mismatched virtual_offsets at offset "
+                                       << format_hex(offset, 8) << "\n";
+                                errs() << "  last_Java_pc offset: " << ljpc_offset << "\n";
+                                errs() << "  call_target offset: " << ct_offset << "\n";
+                            }
+                            continue;
+                        }
+
+                        uint64_t virtual_offset = ljpc_offset;
+
+                        if (YuhuTraceMachineCode) {
+                            errs() << "[OopMap Extractor] Found dual placeholders:\n";
+                            errs() << "  Statepoint call offset: " << format_hex(offset, 8) << "\n";
+                            errs() << "  Virtual offset: " << virtual_offset << "\n";
+                            errs() << "  last_Java_pc VA: " << format_hex(match.last_java_pc_va, 16)
+                                   << " at " << format_hex(match.last_java_pc_placeholder_offset, 8) << "\n";
+                            errs() << "  call_target VA: " << format_hex(match.call_target_va, 16)
+                                   << " at " << format_hex(match.call_target_placeholder_offset, 8) << "\n";
+                        }
+
+                        // Calculate actual offsets for patching
+                        // The return address is the instruction AFTER the bl
+                        uint64_t return_pc_offset = offset + 4;
+
+                        // Look up the actual helper address from virtual_offset mapping
+                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
+                        if (helper_addr == 0) {
+                            if (YuhuTraceMachineCode) {
+                                errs() << "[OopMap Extractor] ERROR: No helper address for virtual_offset "
+                                       << virtual_offset << "\n";
+                            }
+                            continue;
+                        }
+
+                        // update return_pc_offset by virtual_offsets
+                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, return_pc_offset);
+
+                        // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
+                        uint64_t adr_offset = match.last_java_pc_adr_offset;
+
+                        // Calculate absolute addresses for patching
+                        // BaseAddr is the load address of this section (from JITLink)
+                        uint64_t adr_absolute_address = BaseAddr + adr_offset;
+                        uint64_t return_absolute_address = BaseAddr + return_pc_offset;
+
+                        // Patch the adr instruction with correct PC-relative offset
+                        YuhuVirtualAddressScanner::patch_adr_instruction(
+                            CodeData,
+                            adr_offset,
+                            adr_absolute_address,      // Address of adr instruction
+                            return_absolute_address    // Target address (return after bl)
+                        );
+
+                        YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
+                                                                                  YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset));
+
+                        if (YuhuTraceMachineCode) {
+                            errs() << "  [OK] Patched adr instruction at offset " << adr_offset
+                                   << " to point to return address at offset " << return_pc_offset << "\n";
+                            errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
+                        }
+
+                        // Skip past this blr instruction
+                        // (don't skip, as there might be multiple blr instructions in sequence)
                     }
                 }
             }
         }
     }
     
+    return Error::success();
+}
+
+void GOTAndPLTHandlerPlugin::notifyLoaded(llvm::orc::MaterializationResponsibility &MR) {
+}
+
+llvm::Error GOTAndPLTHandlerPlugin::notifyEmitted(llvm::orc::MaterializationResponsibility &MR) {
+    return Error::success();
+
+}
+
+llvm::Error GOTAndPLTHandlerPlugin::notifyFailed(llvm::orc::MaterializationResponsibility &MR) {
+    return Error::success();
+
+}
+
+llvm::Error GOTAndPLTHandlerPlugin::notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) {
+    return Error::success();
+}
+
+void GOTAndPLTHandlerPlugin::notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
+                                                          llvm::orc::ResourceKey SrcKey) {
+}
+
+void GOTAndPLTHandlerPlugin::modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
+                                               llvm::jitlink::LinkGraph &LG,
+                                               llvm::jitlink::PassConfiguration &PassConfig) {
+    // The correct phase order:
+    // PrePrunePasses - mark live/discard symbols
+    // Dead stripping happens
+    // PostPrunePasses ← GOT/PLT building belongs here
+    // Memory allocation + address assignment
+    // PreFixupPasses - late optimizations
+    // Fixups applied (relocations resolved)
+    // PostFixupPasses - testing/validatio
+    PassConfig.PostPrunePasses.push_back(
+            [this, &MR](
+                    jitlink::LinkGraph &G
+            ) -> Error {
+//                jitlink::aarch64::GOTTableManager GOT(G);
+//                jitlink::aarch64::PLTTableManager PLT(G, GOT);
+//                jitlink::visitExistingEdges(G, GOT, PLT);
+                return visitEdges(G, MR);
+            });
+}
+
+llvm::Error GOTAndPLTHandlerPlugin::visitEdges(llvm::jitlink::LinkGraph &G,
+                                                      llvm::orc::MaterializationResponsibility &MR) {
+    jitlink::aarch64::GOTTableManager GOT(G);
+    jitlink::aarch64::PLTTableManager PLT(G, GOT);
+
+    // Iterate all blocks
+    for (auto *Block : G.blocks()) {
+        for (auto &Edge : Block->edges()) {
+            auto Kind = Edge.getKind();
+            errs() << "Before fixing " << G.getEdgeKindName(Kind) << " edge at "
+                   << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
+                   << formatv("{0:x}", Edge.getOffset()) << ")\n";
+            if (Kind >= llvm::jitlink::Edge::GenericEdgeKind::FirstRelocation &&
+                (Kind == llvm::jitlink::aarch64::Page21 ||
+                 Kind == llvm::jitlink::aarch64::PageOffset12 ||
+                 Kind == llvm::jitlink::aarch64::GotPageOffset15 ||
+                 Kind == llvm::jitlink::aarch64::Delta32 ||
+                 (Kind == llvm::jitlink::aarch64::Branch26PCRel && !Edge.getTarget().isDefined()))) {
+                // skip already processed Edges
+                errs() << "Skip already processed Edges" << "\n";
+                continue;
+            }
+            if (GOT.visitEdge(G, Block, Edge)) {
+                errs() << "GOT fixing " << G.getEdgeKindName(Kind) << " edge at "
+                       << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
+                       << formatv("{0:x}", Edge.getOffset()) << ")\n";
+            } else if (PLT.visitEdge(G, Block, Edge)) {
+                errs() << "PLT fixing " << G.getEdgeKindName(Kind) << " edge at "
+                       << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
+                       << formatv("{0:x}", Edge.getOffset()) << ")\n";
+            }
+            errs() << "After fixing " << G.getEdgeKindName(Kind) << " edge at "
+                   << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
+                   << formatv("{0:x}", Edge.getOffset()) << ")\n";
+        }
+    }
     return Error::success();
 }

@@ -261,7 +261,7 @@ Value *result = builder()->CreateCall(func_type, native_function, param_values);
 1. **Last Java PC placeholder** (`0xDEADxxxx`): Stored to `thread->last_Java_pc`
 2. **Call target placeholder** (`0xBEEFxxxx`): Used as the call target address
 
-Both placeholders share the same `virtual_offset` to establish a 1-1-1 relationship with the statepoint ID.
+Both placeholders share the same `virtual_offset` to establish correlation between the last_Java_pc location and the call target for JITLink patching.
 
 #### Dual Virtual Address Encoding
 
@@ -277,7 +277,7 @@ uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // e.g., 0xBEEF1000
 **Why different magic numbers**:
 - `0xDEADxxxx`: Magic for last_Java_pc placeholders (easily identifiable when scanning backwards from statepoint)
 - `0xBEEFxxxx`: Magic for call target placeholders (easily identifiable when patching call instructions)
-- Same `xxxx` (virtual_offset): Guarantees 1-1-1 relationship between last_Java_pc, call target, and statepoint
+- Same `xxxx` (virtual_offset): Correlates last_Java_pc placeholder with call target for JITLink patching
 
 #### 1. VM Runtime Calls via `call_vm()`
 

@@ -59,10 +59,10 @@ private:
     llvm::Error dumpMachineCode(llvm::jitlink::LinkGraph &G);
 };
 
-// OopMapExtractorPlugin - Extract OopMap information from compiled machine code
-// This plugin scans for dual virtual address placeholders (0xDEADxxxx and 0xBEEFxxxx)
-// and patches them with actual values, then registers OopMaps at correct return addresses
-class OopMapExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
+// CallSiteExtractorPlugin - Extract call site information from compiled machine code
+// This plugin scans for dual virtual address placeholders (0xDEADxxxx and 0xBEEFBEEFxxxx)
+// and patches them with actual values, then update call site with correct return pc addresses
+class CallSiteExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
 public:
     void notifyLoaded(llvm::orc::MaterializationResponsibility &MR) override;
 
@@ -81,6 +81,32 @@ public:
 
 private:
     llvm::Error extractCallSites(llvm::jitlink::LinkGraph &G,
+                                 llvm::orc::MaterializationResponsibility &MR);
+};
+
+// GOTAndPLTHandlerPlugin - handle edge
+// 1. LLVM generates edges like RequestGOTAndTransformToPage21 and RequestGOTAndTransformToPageOffset12
+// 2. GOTTableManager::visitEdge() transforms these edges to point to GOT entries
+// 3. GOTTableManager::createEntry() creates GOT entries populated with the resolved symbol address
+class GOTAndPLTHandlerPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
+public:
+    void notifyLoaded(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyEmitted(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyFailed(llvm::orc::MaterializationResponsibility &MR) override;
+
+    llvm::Error notifyRemovingResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey K) override;
+
+    void notifyTransferringResources(llvm::orc::JITDylib &JD, llvm::orc::ResourceKey DstKey,
+                                     llvm::orc::ResourceKey SrcKey) override;
+
+    void modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
+                          llvm::jitlink::LinkGraph &LG,
+                          llvm::jitlink::PassConfiguration &PassConfig) override;
+private:
+private:
+    llvm::Error visitEdges(llvm::jitlink::LinkGraph &G,
                                  llvm::orc::MaterializationResponsibility &MR);
 };
 

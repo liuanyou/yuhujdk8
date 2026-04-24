@@ -138,6 +138,7 @@
 #include <llvm/Support/Error.h>  // For handleAllErrors, ErrorInfoBase
 // Keep ExecutionEngine.h for forward declarations if needed
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/ExecutionEngine/JITLink/aarch64.h>
 
 #include <llvm/Support/Threading.h>
 #include <llvm/Support/TargetSelect.h>

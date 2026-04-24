@@ -36,6 +36,35 @@ void declareGCSafepointPoll(Module& M) {
     }
 }
 
+static void saveIRToFile(Module &M) {
+    std::string ir_filename = std::string("/tmp/yuhu_ir_after_gc.ll");
+    // Replace invalid filename characters
+    for (size_t i = 0; i < ir_filename.length(); i++) {
+        if (ir_filename[i] == ':' || ir_filename[i] == '/' || ir_filename[i] == ' ') {
+            ir_filename[i] = '_';
+        }
+    }
+
+    std::error_code EC;
+    llvm::raw_fd_ostream ir_file(ir_filename, EC, llvm::sys::fs::OF_Text);
+    if (!EC) {
+        // Print the entire module (not just the function) to include metadata definitions
+        // This ensures metadata nodes used by llvm.read_register are properly serialized
+        llvm::Module* mod = &M;
+        if (mod != NULL) {
+            mod->print(ir_file, nullptr);
+        }
+        ir_file.flush();
+        tty->print_cr("Yuhu: IR written to %s (use 'opt -verify %s' to analyze)",
+                      ir_filename.c_str(), ir_filename.c_str());
+        tty->flush();
+    } else {
+        tty->print_cr("Yuhu: Failed to write IR to %s: %s",
+                      ir_filename.c_str(), EC.message().c_str());
+        tty->flush();
+    }
+}
+
 llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm::orc::ThreadSafeModule TSM,
                                        llvm::orc::MaterializationResponsibility &MR) {
     TSM.withModuleDo([](Module &M) {
@@ -86,6 +115,10 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
         // 7. 验证 IR
         if (verifyModule(M, &errs())) {
             errs() << "Module verification failed after GC passes!\n";
+        }
+
+        if (YuhuDumpIRToFile) {
+            saveIRToFile(M);
         }
 
         errs() << "=== GC passes completed ===\n";

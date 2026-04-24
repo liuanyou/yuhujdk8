@@ -262,13 +262,16 @@ YuhuCompiler::YuhuCompiler()
   auto CreateObjectLinkingLayer = [&](orc::ExecutionSession &ES, const llvm::Triple &TT) {
     auto MemMgr = std::make_unique<jitlink::InProcessMemoryManager>(sysconf(_SC_PAGESIZE));
     auto Layer = std::make_unique<orc::ObjectLinkingLayer>(ES, std::move(MemMgr));
+
+    // Add GOTAndPLTHandlerPlugin to fix edge before we patch
+//    Layer->addPlugin(std::make_unique<GOTAndPLTHandlerPlugin>());
     
+    // Add CallSiteExtractorPlugin to scan for virtual address placeholders and update return pc addresses
+    Layer->addPlugin(std::make_unique<CallSiteExtractorPlugin>());
+
     // Add MachineCodePrinterPlugin to trace generated machine code
     Layer->addPlugin(std::make_unique<MachineCodePrinterPlugin>());
-    
-    // Add OopMapExtractorPlugin to scan for virtual address placeholders and register OopMaps
-    Layer->addPlugin(std::make_unique<OopMapExtractorPlugin>());
-    
+
     return Layer;
   };
 
