@@ -1218,12 +1218,15 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   return NULL;
 }
 
-Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method) {
+Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_addr) {
   // Generate call to static call stub that returns the _from_compiled_entry directly
   // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
   // the problematic field access in the generated LLVM IR
   // Pass both the target method and the current method being compiled
   address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method, target());
+  if (out_stub_addr != NULL) {
+      *out_stub_addr = stub_addr;
+  }
   
   // Return the stub address as an integer constant
   // This will be used to access the compiled entry point
@@ -1234,130 +1237,41 @@ Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method) {
 }
 
 Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
-                                              int vtable_index) {
-  Value *klass = builder()->CreateValueOfStructEntry(
-    receiver->jobject_value(),
-    in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(), // klass object is allocated in meta-space, no GC
-    "klass");
-
-  return builder()->CreateLoad(
-    YuhuType::Method_type(),  // Explicitly pass type for LLVM 20+
-    builder()->CreateArrayAddress(
-      klass,
-      YuhuType::Method_type(),
-      vtableEntry::size() * wordSize,
-      in_ByteSize(InstanceKlass::vtable_start_offset() * wordSize),
-      LLVMValue::intptr_constant(vtable_index)),
-    "callee");
+                                              ciMethod* call_method,
+                                              int vtable_index,
+                                              address* out_stub_addr) {
+  // Generate a virtual call stub that performs vtable lookup at runtime.
+  // The stub address becomes the compile-time constant call target.
+  // call_method is the statically declared target from the bytecode.
+  address stub_addr = YuhuCompiler::compiler()->generate_virtual_call_stub(
+    call_method, target(), vtable_index);
+  if (out_stub_addr != NULL) {
+      *out_stub_addr = stub_addr;
+  }
+  
+  // Return the stub address as an integer constant
+  return builder()->CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)stub_addr),
+    YuhuType::intptr_type(),
+    "virtual_callee_stub");
 }
 
 Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
-                                                ciMethod*   method) {
-  BasicBlock *loop       = function()->CreateBlock("loop");
-  BasicBlock *got_null   = function()->CreateBlock("got_null");
-  BasicBlock *not_null   = function()->CreateBlock("not_null");
-  BasicBlock *next       = function()->CreateBlock("next");
-  BasicBlock *got_entry  = function()->CreateBlock("got_entry");
-
-  // Locate the receiver's itable
-  Value *object_klass = builder()->load_klass_from_object(receiver->jobject_value());
-
-  Value *vtable_start = builder()->CreateAdd(
-    builder()->CreatePtrToInt(object_klass, YuhuType::intptr_type()),
-    LLVMValue::intptr_constant(
-      InstanceKlass::vtable_start_offset() * HeapWordSize),
-    "vtable_start");
-
-  Value *vtable_length = builder()->CreateValueOfStructEntry(
-    object_klass,
-    in_ByteSize(InstanceKlass::vtable_length_offset() * HeapWordSize),
-    YuhuType::jint_type(),
-    "vtable_length");
-  vtable_length =
-    builder()->CreateIntCast(vtable_length, YuhuType::intptr_type(), false);
-
-  bool needs_aligning = HeapWordsPerLong > 1;
-  Value *itable_start = builder()->CreateAdd(
-    vtable_start,
-    builder()->CreateShl(
-      vtable_length,
-      LLVMValue::intptr_constant(exact_log2(vtableEntry::size() * wordSize))),
-    needs_aligning ? "" : "itable_start");
-  if (needs_aligning) {
-    itable_start = builder()->CreateAnd(
-      builder()->CreateAdd(
-        itable_start, LLVMValue::intptr_constant(BytesPerLong - 1)),
-      LLVMValue::intptr_constant(~(BytesPerLong - 1)),
-      "itable_start");
+                                                ciMethod*   call_method,
+                                                address* out_stub_addr) {
+  // Generate an interface call stub that performs itable lookup at runtime.
+  // The stub address becomes the compile-time constant call target.
+  address stub_addr = YuhuCompiler::compiler()->generate_interface_call_stub(
+    call_method, target());
+  if (out_stub_addr != NULL) {
+      *out_stub_addr = stub_addr;
   }
-
-  // Locate this interface's entry in the table
-  Value *iklass = builder()->CreateInlineMetadata(method->holder(), YuhuType::klass_type());
-  BasicBlock *loop_entry = builder()->GetInsertBlock();
-  builder()->CreateBr(loop);
-  builder()->SetInsertPoint(loop);
-  PHINode *itable_entry_addr = builder()->CreatePHI(
-    YuhuType::intptr_type(), 0, "itable_entry_addr");
-  itable_entry_addr->addIncoming(itable_start, loop_entry);
-
-  Value *itable_entry = builder()->CreateIntToPtr(
-    itable_entry_addr, YuhuType::itableOffsetEntry_type(), "itable_entry");
-
-  Value *itable_iklass = builder()->CreateValueOfStructEntry(
-    itable_entry,
-    in_ByteSize(itableOffsetEntry::interface_offset_in_bytes()),
-    YuhuType::klass_type(),
-    "itable_iklass");
-
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(itable_iklass, LLVMValue::nullKlass()),
-    got_null, not_null);
-
-  // A null entry means that the class doesn't implement the
-  // interface, and wasn't the same as the class checked when
-  // the interface was resolved.
-  builder()->SetInsertPoint(got_null);
-  builder()->CreateUnimplemented(__FILE__, __LINE__);
-  builder()->CreateUnreachable();
-
-  builder()->SetInsertPoint(not_null);
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(itable_iklass, iklass),
-    got_entry, next);
-
-  builder()->SetInsertPoint(next);
-  Value *next_entry = builder()->CreateAdd(
-    itable_entry_addr,
-    LLVMValue::intptr_constant(itableOffsetEntry::size() * wordSize));
-  builder()->CreateBr(loop);
-  itable_entry_addr->addIncoming(next_entry, next);
-
-  // Locate the method pointer
-  builder()->SetInsertPoint(got_entry);
-  Value *offset = builder()->CreateValueOfStructEntry(
-    itable_entry,
-    in_ByteSize(itableOffsetEntry::offset_offset_in_bytes()),
-    YuhuType::jint_type(),
-    "offset");
-  offset =
-    builder()->CreateIntCast(offset, YuhuType::intptr_type(), false);
-
-  return builder()->CreateLoad(
-    YuhuType::Method_type(),  // Explicitly pass type for LLVM 20+
-    builder()->CreateIntToPtr(
-      builder()->CreateAdd(
-        builder()->CreateAdd(
-          builder()->CreateAdd(
-            builder()->CreatePtrToInt(
-              object_klass, YuhuType::intptr_type()),
-            offset),
-          LLVMValue::intptr_constant(
-            method->itable_index() * itableMethodEntry::size() * wordSize)),
-        LLVMValue::intptr_constant(
-          itableMethodEntry::method_offset_in_bytes())),
-      PointerType::getUnqual(YuhuType::Method_type())),
-    "callee");
+  
+  // Return the stub address as an integer constant
+  return builder()->CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)stub_addr),
+    YuhuType::intptr_type(),
+    "interface_callee_stub");
 }
 
 void YuhuTopLevelBlock::do_call() {
@@ -1381,6 +1295,31 @@ void YuhuTopLevelBlock::do_call() {
   // method is a virtual method in java.lang.Object.
   // javac doesn't generate code like that, but there's
   // no reason a compliant Java compiler might not.
+
+  // Precise definitions:
+  // holder_klass: The class that declares/owns the method being called
+  // klass: The declared type of the receiver object (from the bytecode)
+  // Case #1:
+  //  interface List {
+  //          void add(Object x);  // ← declared in List
+  //  }
+  //  class ArrayList implements List {
+  //          void add(Object x) { ... }  // ← implementation
+  //  }
+  //  void test() {
+  //      List obj = new ArrayList();  // ← declared type is List
+  //      obj.add("item");              // ← invokeinterface List.add
+  //  }
+  //  At the invokeinterface instruction:
+  //  holder_klass = List (where add() is declared)
+  //  klass = List (the declared type of obj)
+  // Case #2:
+  //  void test() {
+  //      ArrayList obj = new ArrayList();  // ← declared type is ArrayList
+  //      ((List)obj).toString();            // ← invokeinterface List.toString
+  //  }
+  //  holder_klass = Object (where toString() is actually declared - List doesn't declare it)
+  //  klass = List (the type after the cast)
   ciInstanceKlass *holder_klass  = dest_method->holder();
   assert(holder_klass->is_loaded(), "scan_for_traps responsibility");
   assert(holder_klass->is_interface() ||
@@ -1428,37 +1367,29 @@ void YuhuTopLevelBlock::do_call() {
 
   // Find the method we are calling
   Value *callee;
+  address compiled_entry_address = 0;
   if (call_is_virtual) {
     if (is_virtual || is_forced_virtual) {
       assert(klass->is_linked(), "scan_for_traps responsibility");
       int vtable_index = call_method->resolve_vtable_index(
         target()->holder(), klass);
       assert(vtable_index >= 0, "should be");
-      callee = get_virtual_callee(receiver, vtable_index);
+      callee = get_virtual_callee(receiver, call_method, vtable_index, &compiled_entry_address);
     }
     else {
       assert(is_interface, "should be");
-      callee = get_interface_callee(receiver, call_method);
+      callee = get_interface_callee(receiver, call_method, &compiled_entry_address);
     }
   }
   else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
     // which now returns the stub address that jumps to _from_compiled_entry
-    callee = get_direct_callee(call_method);
+    callee = get_direct_callee(call_method, &compiled_entry_address);
   }
 
-  Value *from_compiled_entry;
-  if (call_is_virtual) {
-    // For virtual/interface calls, load _from_compiled_entry from Method
-    from_compiled_entry = builder()->CreateValueOfStructEntry(
-      callee,
-      Method::from_compiled_offset(),
-      YuhuType::intptr_type(),
-      "from_compiled_entry");
-  } else {
-    // For direct calls, callee is already the compiled entry address from stub
-    from_compiled_entry = callee;
-  }
+  // All callees (direct, virtual, interface) now return stub addresses
+  // The stub handles loading _from_compiled_entry internally
+  Value *from_compiled_entry = callee;
 
   // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
   // decache will pop all arguments from the stack via xpop(),
@@ -1552,23 +1483,11 @@ void YuhuTopLevelBlock::do_call() {
   uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
   uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
   
-  // NEW: Extract actual compiled entry address from from_compiled_entry
-  uint64_t compiled_entry_address = 0;
-  if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(from_compiled_entry)) {
-    if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
-      if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
-        compiled_entry_address = IntConst->getZExtValue();
-      }
-    }
-  }
-  
   // NEW: Store last_Java_pc placeholder
   stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
   
   // NEW: Register call site for later patching
-  if (compiled_entry_address != 0) {
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, compiled_entry_address);
-  }
+  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address);
 
   // Save callee-saved registers that Yuhu uses but interpreter may corrupt
   builder()->CreateSaveCalleeSavedRegisters();
@@ -1607,19 +1526,11 @@ void YuhuTopLevelBlock::do_call() {
 
   // NEW: Use virtual address placeholder as call target if we extracted the real address
   Value *compiled_entry_ptr;
-  if (compiled_entry_address != 0) {
     llvm::Module* mod = builder()->GetInsertBlock()->getModule();
     compiled_entry_ptr = builder()->CreateIntToPtr(
       llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
       PointerType::getUnqual(compiled_ftype),
       "compiled_entry_virtual");
-  } else {
-    // Fallback: use original from_compiled_entry (for virtual/interface calls)
-    compiled_entry_ptr = builder()->CreateIntToPtr(
-      from_compiled_entry,
-      PointerType::getUnqual(compiled_ftype),
-      "compiled_entry");
-  }
 
   // Call the compiled entry and get the actual return value
   // Note: decache_for_Java_call() was already called above (line 1566)

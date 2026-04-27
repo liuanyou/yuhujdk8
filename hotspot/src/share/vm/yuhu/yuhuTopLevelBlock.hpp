@@ -483,9 +483,9 @@ class YuhuTopLevelBlock : public YuhuBlock {
                                  ciInstanceKlass* klass,
                                  ciMethod*        dest_method,
                                  ciType*          receiver_type);
-  llvm::Value* get_direct_callee(ciMethod* method);
-  llvm::Value* get_virtual_callee(YuhuValue* receiver, int vtable_index);
-  llvm::Value* get_interface_callee(YuhuValue* receiver, ciMethod* method);
+  llvm::Value* get_direct_callee(ciMethod* method, address* out_stub_addr);
+  llvm::Value* get_virtual_callee(YuhuValue* receiver, ciMethod* call_method, int vtable_index, address* out_stub_addr);
+  llvm::Value* get_interface_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr);
 
   void do_call();
 

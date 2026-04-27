@@ -97,6 +97,11 @@ class YuhuCompiler : public AbstractCompiler {
 
   // Generate static call stub for direct method calls
   address generate_static_call_stub(ciMethod* target_method, ciMethod* current_method);
+  
+  // Generate virtual call stub for virtual/interface method calls
+  // This stub performs vtable/itable lookup at runtime and jumps to _from_compiled_entry
+  address generate_virtual_call_stub(ciMethod* target_method, ciMethod* current_method, int vtable_index);
+  address generate_interface_call_stub(ciMethod* target_method, ciMethod* current_method);
 
   // Free compiled methods (and native wrappers)
   void free_compiled_method(address code);

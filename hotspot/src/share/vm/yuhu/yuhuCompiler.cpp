@@ -1487,6 +1487,182 @@ address YuhuCompiler::generate_static_call_stub(ciMethod* target_method, ciMetho
   return stub_addr;
 }
 
+// Generate a virtual call stub for virtual method calls
+// This stub performs vtable lookup at runtime and jumps to _from_compiled_entry
+// Stub layout:
+//   - ldr x9, [x0, #klass_offset]          (4 bytes) - Load klass from receiver
+//   - ldr x9, [x9, #vtable_start + N*8]   (4 bytes) - Load Method* from vtable[N]
+//   - mov x12, x9                          (4 bytes) - Move Method* to x12 for c2i adapter
+//   - ldr x9, [x9, #from_compiled_offset] (4 bytes) - Load _from_compiled_entry
+//   - br x9                                (4 bytes) - Jump to compiled code
+address YuhuCompiler::generate_virtual_call_stub(ciMethod* target_method, ciMethod* current_method, int vtable_index) {
+  const int stub_size = 64;
+  
+  ResourceMark rm;
+  
+  BufferBlob* stub_blob = BufferBlob::create("yuhu_virtual_call_stub", stub_size);
+  if (stub_blob == NULL) {
+    fatal("CodeCache is full - cannot allocate virtual call stub");
+    return NULL;
+  }
+  
+  CodeBuffer stub_buffer(stub_blob);
+  YuhuMacroAssembler masm(&stub_buffer);
+  
+  // AArch64 virtual call stub:
+  // Input: x1 = receiver object (per Yuhu calling convention - x0 is unused dummy)
+  // Compile-time known: vtable_index
+  
+  // Step 1: Load klass from receiver object
+  // x1 contains receiver, load klass pointer from offset oopDesc::klass_offset_in_bytes()
+  masm.write_insts_load_klass(YuhuMacroAssembler::x9, YuhuMacroAssembler::x1);
+  
+  // Step 2: Load Method* from vtable[vtable_index]
+  // vtable starts at InstanceKlass::vtable_start_offset() * wordSize
+  // Each entry is vtableEntry::size() * wordSize bytes
+  int vtable_offset = InstanceKlass::vtable_start_offset() * wordSize + 
+                      vtable_index * vtableEntry::size() * wordSize;
+  masm.write_inst_ldr(YuhuMacroAssembler::x9, 
+                      YuhuAddress(YuhuMacroAssembler::x9, in_ByteSize(vtable_offset)));
+  
+  // Step 3: Move Method* to x12 register (x_method_in_constant_pool) for c2i adapter
+  masm.write_inst_mov_reg(YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
+  
+  // Step 4: Load _from_compiled_entry from Method*
+  masm.write_inst_ldr(YuhuMacroAssembler::x9, 
+                      YuhuAddress(YuhuMacroAssembler::x9, Method::from_compiled_offset()));
+  
+  // Step 5: Jump to compiled entry
+  masm.write_inst_br(YuhuMacroAssembler::x9);
+  
+  address stub_addr = stub_buffer.insts_begin();
+  
+  if (YuhuTraceInstalls) {
+    tty->print_cr("Yuhu: Generated virtual call stub at " PTR_FORMAT " for target method %s (vtable_index=%d)",
+                  p2i(stub_addr), target_method->name()->as_utf8(), vtable_index);
+  }
+  
+  return stub_addr;
+}
+
+// Generate an interface call stub for interface method calls
+// This stub performs itable lookup at runtime and jumps to _from_compiled_entry
+//
+// Stub algorithm:
+//   Step 1: Calculate itable start position
+//     - Load receiver's klass from oop header
+//     - Calculate: itable_start = vtable_start + (vtable_length << 3)
+//     - Note: vtableEntry::size() is always 1 on 64-bit, so vtable_length * wordSize = vtable_length << 3
+//
+//   Step 2: Linear search through itable entries
+//     - Each itableOffsetEntry contains: { Klass* _interface, int _offset }
+//     - Compare entry's interface klass with target interface klass
+//     - If match found: go to Step 3
+//     - If entry is NULL: interface not implemented → throw IncompatibleClassChangeError
+//     - Otherwise: advance to next entry (itableOffsetEntry::size() * wordSize bytes)
+//
+//   Step 3: Load method pointer
+//     - Load itable offset from matching entry (offset is in bytes from klass)
+//     - Calculate: method_table = klass + offset
+//     - Calculate: target_method = method_table + (itable_index * sizeof(itableMethodEntry))
+//     - Load Method* from itableMethodEntry::_method field
+//
+//   Step 4: Jump to compiled code
+//     - Move Method* to x12 (x_method_in_constant_pool) for c2i adapter
+//     - Load _from_compiled_entry from Method*
+//     - Jump to compiled entry point
+//
+// Register usage:
+//   x1  - receiver object (input, per Yuhu calling convention)
+//   x8  - temporary: vtable length / itable offset / temporary calculations
+//   x9  - temporary: klass pointer / method table address / _from_compiled_entry
+//   x11 - receiver's klass
+//   x12 - target interface klass (loaded from external address) → Method* (for c2i adapter)
+//
+// Parameters:
+//   target_method - The interface method being called (e.g., List.add())
+//   current_method - The method being compiled (the caller)
+//
+// Returns: address of the generated stub
+address YuhuCompiler::generate_interface_call_stub(ciMethod* target_method, ciMethod* current_method) {
+  const int stub_size = 128;
+  
+  ResourceMark rm;
+  
+  BufferBlob* stub_blob = BufferBlob::create("yuhu_interface_call_stub", stub_size);
+  if (stub_blob == NULL) {
+    fatal("CodeCache is full - cannot allocate interface call stub");
+    return NULL;
+  }
+  
+  CodeBuffer stub_buffer(stub_blob);
+  YuhuMacroAssembler masm(&stub_buffer);
+  ciInstanceKlass* ci_interface_klass = target_method->holder();
+  InstanceKlass* interface_klass = ci_interface_klass->get_instanceKlass();
+  int itable_index = target_method->itable_index();
+  // Step 1: locate the start of itable
+  // get interface class
+  masm.write_insts_lea(YuhuMacroAssembler::x12, YuhuExternalAddress((address)interface_klass));
+  // get receiver class
+  masm.write_insts_load_klass(YuhuMacroAssembler::x11, YuhuMacroAssembler::x1);
+  // get vtable length from klass
+  masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x11, in_ByteSize(InstanceKlass::vtable_length_offset())));
+  // get start_of_vtable
+  masm.write_insts_lea(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::x11, in_ByteSize(InstanceKlass::vtable_start_offset())));
+  // vtableEntry::size() is always 1, and now x8 is start_of_itable, itable is right after vtable
+  masm.write_insts_lea(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, YuhuMacroAssembler::x8, YuhuAddress::lsl(3)));
+
+  // Step 2: search logic
+    YuhuLabel search, found_method, L_no_such_interface;
+
+    for (int peel = 1; peel >= 0; peel--) {
+        masm.write_inst_ldr(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::x8, itableOffsetEntry::interface_offset_in_bytes()));
+        masm.write_inst_regs("cmp %s, %s", YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
+
+        if (peel) {
+            masm.write_inst_b(YuhuMacroAssembler::eq, found_method);
+        } else {
+            masm.write_inst_b(YuhuMacroAssembler::ne, search);
+        }
+
+        if (!peel)  break;
+
+        masm.pin_label(search);
+
+        // Check that the previous entry is non-null.  A null entry means that
+        // the receiver class doesn't implement the interface, and wasn't the
+        // same as when the caller was compiled.
+        masm.write_inst_cbz(YuhuMacroAssembler::x9, L_no_such_interface);
+        masm.write_inst("add %s, %s, #%d", YuhuMacroAssembler::x8, YuhuMacroAssembler::x8, itableOffsetEntry::size() * wordSize);
+    }
+    // Step 3: load method instructions
+    masm.pin_label(found_method);
+    masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x8, itableOffsetEntry::offset_offset_in_bytes()));
+    masm.write_insts_lea(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::x11, YuhuMacroAssembler::x8, YuhuAddress::uxtw(0)));
+    masm.write_inst("add %s, %s, #%d", YuhuMacroAssembler::x9, YuhuMacroAssembler::x9, itable_index * sizeof(itableMethodEntry));
+    masm.write_inst_ldr(YuhuMacroAssembler::x12, YuhuAddress(YuhuMacroAssembler::x9, itableMethodEntry::method_offset_in_bytes()));
+    // Step 4: Load _from_compiled_entry from Method*
+    masm.write_inst_ldr(YuhuMacroAssembler::x9,
+                        YuhuAddress(YuhuMacroAssembler::x9, Method::from_compiled_offset()));
+
+    // Step 5: Jump to compiled entry
+    masm.write_inst_br(YuhuMacroAssembler::x9);
+
+    masm.pin_label(L_no_such_interface);
+
+    // At L_no_such_interface:
+    masm.write_inst_b(StubRoutines::throw_IncompatibleClassChangeError_entry());
+  
+  address stub_addr = stub_buffer.insts_begin();
+  
+  if (YuhuTraceInstalls) {
+    tty->print_cr("Yuhu: Generated interface call stub at " PTR_FORMAT " for target method %s",
+                  p2i(stub_addr), target_method->name()->as_utf8());
+  }
+  
+  return stub_addr;
+}
+
 // Register a stub that needs patching when the target method is compiled
 void YuhuCompiler::register_stub_for_patching(ciMethod* target_method, address stub_addr) {
   // Find if we already have entries for this method
