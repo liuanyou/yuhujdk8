@@ -444,42 +444,6 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
   return (int)(end - start);
 }
 
-// Helper function: Scan LLVM code from end to find actual code size (excluding trailing udf #0)
-// AArch64 'udf #0' encoding: 0x00000000 (all zeros)
-// Returns the number of bytes from code_start to the last non-udf instruction
-static size_t calculate_effective_code_size(address code_start, size_t total_size) {
-  if (total_size == 0) return 0;
-  
-  // Scan forward from code_start to find effective code size
-  // Look for consecutive udf #0 instructions (encoding: 0x00000000)
-  // When we find 20 consecutive udf #0 (80 bytes), assume code ends there
-  address scan_end = code_start + total_size;
-  address pc = code_start;
-  size_t zero_count = 0;
-  address last_non_zero = code_start;
-  const size_t CONTINUOUS_ZERO_THRESHOLD = 80;  // 20 instructions * 4 bytes
-  
-  while (pc + 4 <= scan_end) {
-    uint32_t inst = *(uint32_t*)pc;
-    
-    if (inst == 0x00000000) {
-      zero_count += 4;
-      if (zero_count >= CONTINUOUS_ZERO_THRESHOLD) {
-        // Found enough consecutive zeros, code likely ends at last non-zero instruction
-        return (last_non_zero + 4) - code_start;
-      }
-    } else {
-      zero_count = 0;
-      last_non_zero = pc;
-    }
-    
-    pc += 4;
-  }
-  
-  // If no sufficient continuous zeros found, return total_size
-  return total_size;
-}
-
 // Measure adapter size for normal (non-OSR) method compilation.
 // Returns the exact byte size needed for the parameter adapter stub.
 int YuhuCompiler::measure_normal_adapter_size() {
@@ -691,8 +655,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     address code_start = entry->code_start();
     llvm_code_size = entry->code_limit() - code_start;
-    // Calculate effective code size by scanning for trailing udf #0 instructions
-    effective_code_size = calculate_effective_code_size(entry->code_start(), llvm_code_size);
+    // the code size is exactly calculated in ORC plugins
+    effective_code_size = llvm_code_size;
   }
 
   bool is_osr = (entry_bci != InvocationEntryBci);
@@ -1220,6 +1184,8 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
     
     // Debug: Try to get mangled name
     auto MangledName = jit()->mangle(func_name);
+
+    YuhuDebugInformationRecorder::get()->set_mangled_func_name(MangledName);
     
     // Try to lookup the function
     auto Sym = jit()->lookup(func_name);
@@ -1308,25 +1274,15 @@ void YuhuCompiler::generate_native_code(YuhuEntry* entry,
   } else {
     // For ORC JIT stage 1, we don't have CodeCache integration yet
     // Use code address directly (will be fixed in stage 2)
+    size_t code_size = YuhuDebugInformationRecorder::get()->get_func_size();
     if (YuhuTraceInstalls) {
         tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
         tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
+        tty->print_cr("ORC JIT: code_size=%d", code_size);
     }
     entry->set_entry_point(code);
-    
-    // Estimate code size based on function structure (temporary solution for stage 1)
-    // Use basic block count to estimate size
-    // In LLVM 20, use size() method instead of getBasicBlockList().size()
-    size_t bb_count = function->size();  // size() returns the number of basic blocks
-    size_t estimated_size = bb_count * 128;  // Estimate ~128 bytes per basic block
-    if (estimated_size < 512) estimated_size = 512;  // Minimum 512 bytes
-    if (estimated_size > 65536) estimated_size = 65536;  // Maximum 64KB (safety limit)
-
-    entry->set_code_limit((address)(code + estimated_size));
-    if (YuhuTraceInstalls) {
-        tty->print_cr("ORC JIT: Estimated code size: %zu bytes (%zu basic blocks)",
-                      estimated_size, bb_count);
-    }
+    // use func size to calculate code limit
+    entry->set_code_limit((address)(code + code_size));
   }
   entry->set_function(function);
   entry->set_context(context());

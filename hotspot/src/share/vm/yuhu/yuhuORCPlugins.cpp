@@ -182,6 +182,29 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
         if (!Section.getName().ends_with("__text"))
             continue;
 
+        // Search function symbol
+        llvm::jitlink::Symbol* found_func;
+        for (auto *Sym : Section.symbols()) {
+            if (!Sym->hasName()) {
+                continue;
+            }
+            if (YuhuDebugInformationRecorder::get()->get_mangled_func_name() == ((*(Sym->getName())).str())) {
+                found_func = Sym;
+                if (YuhuTraceMachineCode) {
+                    errs() << "[CallSite Extractor] Sym: " << *(Sym->getName())
+                           << ", address: " << Sym->getAddress().getValue()
+                           << ", start: " << Sym->getRange().Start.getValue()
+                           << ", end: " << Sym->getRange().End.getValue() << "\n";
+                }
+                // Populate func size
+                YuhuDebugInformationRecorder::get()->set_func_size(Sym->getRange().End.getValue() - Sym->getRange().Start.getValue());
+                break;
+            }
+        }
+        if (!found_func) {
+            continue;
+        }
+
         // Iterate over all blocks in this section
         for (auto *Block : Section.blocks()) {
             // Get mutable content so we can patch it
@@ -189,7 +212,14 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             uint64_t BaseAddr = Block->getAddress().getValue();
             size_t Size = Block->getSize();
 
-            if (Size < 20) continue;  // Need at least 5 instructions for dual placeholders
+            if (Size < 32) continue;  // Need at least 8 instructions for dual placeholders, 4 for last java pc and 4 for call target
+
+            if (!(BaseAddr >= found_func->getRange().Start.getValue() && (BaseAddr + Block->getSize()) <= found_func->getRange().End.getValue())) {
+                // Skip if block doesn't fall into the function code range
+                continue;
+            }
+
+            size_t block_offset = BaseAddr - found_func->getRange().Start.getValue();
 
             uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
 
@@ -215,7 +245,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         // Validate 1-1-1 relationship
                         if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[OopMap Extractor] ERROR: Missing placeholders at offset "
+                                errs() << "[CallSite Extractor] ERROR: Missing placeholders at offset "
                                        << format_hex(offset, 8) << "\n";
                             }
                             continue;
@@ -227,7 +257,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                         if (ljpc_offset != ct_offset) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[OopMap Extractor] ERROR: Mismatched virtual_offsets at offset "
+                                errs() << "[CallSite Extractor] ERROR: Mismatched virtual_offsets at offset "
                                        << format_hex(offset, 8) << "\n";
                                 errs() << "  last_Java_pc offset: " << ljpc_offset << "\n";
                                 errs() << "  call_target offset: " << ct_offset << "\n";
@@ -238,8 +268,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         uint64_t virtual_offset = ljpc_offset;
 
                         if (YuhuTraceMachineCode) {
-                            errs() << "[OopMap Extractor] Found dual placeholders:\n";
-                            errs() << "  Statepoint call offset: " << format_hex(offset, 8) << "\n";
+                            errs() << "[CallSite Extractor] Found dual placeholders:\n";
+                            errs() << "  call offset: " << format_hex(offset, 8) << "\n";
                             errs() << "  Virtual offset: " << virtual_offset << "\n";
                             errs() << "  last_Java_pc VA: " << format_hex(match.last_java_pc_va, 16)
                                    << " at " << format_hex(match.last_java_pc_placeholder_offset, 8) << "\n";
@@ -255,14 +285,14 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
                         if (helper_addr == 0) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[OopMap Extractor] ERROR: No helper address for virtual_offset "
+                                errs() << "[CallSite Extractor] ERROR: No helper address for virtual_offset "
                                        << virtual_offset << "\n";
                             }
                             continue;
                         }
 
                         // update return_pc_offset by virtual_offsets
-                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, return_pc_offset);
+                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, block_offset + return_pc_offset);
 
                         // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
                         uint64_t adr_offset = match.last_java_pc_adr_offset;

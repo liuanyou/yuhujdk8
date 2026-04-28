@@ -1,6 +1,8 @@
 #ifndef SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP
 #define SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP
 
+#include <utility>
+
 #include "code/debugInfoRec.hpp"
 #include "compiler/oopMap.hpp"
 #include "ci/ciMethod.hpp"
@@ -42,6 +44,10 @@ private:
   GrowableArray<GrowableArray<uint8_t>*>* _stack_map_location_kinds;
   GrowableArray<GrowableArray<uint32_t>*>* _stack_map_location_reg_nums;
   GrowableArray<GrowableArray<int32_t>*>* _stack_map_location_offsets; // 0 is populated for Register kind
+
+  // Mangled function name
+  std::string _mangled_func_name;
+  size_t _func_size;
 
   // LLVM Module reference for embedding metadata
   llvm::Module* _module;
@@ -134,6 +140,22 @@ public:
 
   // stack map related functions
   void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset);
+
+  void set_mangled_func_name(std::string mangled_func_name) {
+      _mangled_func_name = mangled_func_name;
+  }
+
+  std::string get_mangled_func_name() {
+      return _mangled_func_name;
+  }
+
+  void set_func_size(size_t func_size) {
+      _func_size = func_size;
+  }
+
+  size_t get_func_size() {
+      return _func_size;
+  }
 
   void quick_sort_by_actual_offset(int left, int right, YuhuOffsetMapper* offset_mapper) {
       if (left >= right) return;
