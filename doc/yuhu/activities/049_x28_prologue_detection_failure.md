@@ -201,7 +201,7 @@ Update comments in `yuhu_globals.hpp`:
 // Reserve space for ALL callee-saved registers (x19-x28 = 10 regs = 80 bytes)
 // This covers the MAXIMUM possible spills. Individual methods may use fewer registers.
 // Since we statically reserve this space, NO runtime patching of register offsets is needed.
-const int yuhu_llvm_spill_slots = 10;  // 80 bytes - absolute maximum for AArch64
+const int YUHU_LLVM_SPILL_SLOTS = 10;  // 80 bytes - absolute maximum for AArch64
 ```
 
 ---

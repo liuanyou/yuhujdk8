@@ -330,7 +330,7 @@ void YuhuFunction::generate_deoptimization_stub() {
   address start = masm.current_pc();
 
   // === 计算 locals 区域地址 ===
-  int header_words  = yuhu_frame_header_words;  // 6
+  int header_words  = YUHU_FRAME_HEADER_WORDS;  // 6
   int monitor_words = max_monitors() * frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
   int frame_words   = header_words + monitor_words + stack_words;
@@ -864,7 +864,7 @@ Per-Function Stub 的优势：
 ```
 
 **关键**：
-- `header_size = yuhu_frame_header_words = 6`
+- `header_size = YUHU_FRAME_HEADER_WORDS = 6`
 - `extended_frame_size = header_size + monitor_words + stack_words + locals_words`
 - 参数在 `sp + header_size*8` 开始的连续区域
 
@@ -945,7 +945,7 @@ Per-Function Stub 的优势：
 - `hotspot/src/share/vm/yuhu/yuhuCompiler.cpp`
 - `hotspot/src/share/vm/yuhu/yuhuStack.cpp`
 
-- ✅ 添加 `yuhu_frame_header_words = 6` 全局常量
+- ✅ 添加 `YUHU_FRAME_HEADER_WORDS = 6` 全局常量
 - ✅ YuhuCompiler 和 YuhuStack 都引用这个常量
 - ✅ 消除硬编码的 `int header_words = 6;`
 
@@ -1069,9 +1069,9 @@ jhsdb clhsdb
 - ✅ `hotspot/src/share/vm/yuhu/yuhuBuilder.cpp` - 修改 deoptimized_entry_point()
 - ✅ `hotspot/src/share/vm/yuhu/yuhuBuilder.hpp` - 添加 YuhuFunction* 引用
 - ✅ `hotspot/src/share/vm/yuhu/yuhuTopLevelBlock.cpp` - 使用 builder()->deoptimized_entry_point()
-- ✅ `hotspot/src/share/vm/yuhu/yuhu_globals.hpp` - 添加 yuhu_frame_header_words 常量
-- ✅ `hotspot/src/share/vm/yuhu/yuhuCompiler.cpp` - 使用 yuhu_frame_header_words 常量
-- ✅ `hotspot/src/share/vm/yuhu/yuhuStack.cpp` - 使用 yuhu_frame_header_words 常量
+- ✅ `hotspot/src/share/vm/yuhu/yuhu_globals.hpp` - 添加 YUHU_FRAME_HEADER_WORDS 常量
+- ✅ `hotspot/src/share/vm/yuhu/yuhuCompiler.cpp` - 使用 YUHU_FRAME_HEADER_WORDS 常量
+- ✅ `hotspot/src/share/vm/yuhu/yuhuStack.cpp` - 使用 YUHU_FRAME_HEADER_WORDS 常量
 
 ### 相关的 HotSpot 文件
 - `hotspot/src/cpu/aarch64/vm/sharedRuntime_aarch64.cpp` - generate_deopt_blob() (参考)
@@ -1155,7 +1155,7 @@ jhsdb clhsdb
 2. ✅ **修改 ScopeDescriptor** - 标记参数为 REGISTER location，正确标记类型
 3. ✅ **修改 YuhuBuilder** - 集成 per-function stub
 4. ✅ **时序修复** - 在 initialize() 中生成 stub（IR 生成之前）
-5. ✅ **提取全局常量** - yuhu_frame_header_words
+5. ✅ **提取全局常量** - YUHU_FRAME_HEADER_WORDS
 
 ### 待完成（建议修复）
 
@@ -1204,5 +1204,5 @@ jhsdb clhsdb
   - 添加 generate_deoptimization_stub()
   - 修改 ScopeDescriptor 生成（REGISTER location + 类型标记）
   - 修改 YuhuBuilder 集成
-  - 提取 yuhu_frame_header_words 全局常量
+  - 提取 YUHU_FRAME_HEADER_WORDS 全局常量
   - 修复时序问题（在 initialize() 中生成 stub）

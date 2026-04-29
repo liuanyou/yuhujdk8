@@ -146,15 +146,15 @@ The fix reserves space for ALL possible LLVM spills within the Yuhu frame:
 
 ```cpp
 // yuhu_globals.hpp
-const int yuhu_llvm_spill_slots = 10;  // 80 bytes (x19-x28)
+const int YUHU_LLVM_SPILL_SLOTS = 10;  // 80 bytes (x19-x28)
 
 // yuhuFunction.cpp - Force LLVM prologue to allocate 80 bytes
 llvm::AllocaInst* spill_reservation = builder()->CreateAlloca(
-  llvm::ArrayType::get(YuhuType::intptr_type(), yuhu_llvm_spill_slots),
+  llvm::ArrayType::get(YuhuType::intptr_type(), YUHU_LLVM_SPILL_SLOTS),
   nullptr, "llvm_spill_reservation");
 
 // yuhuStack.cpp - Yuhu frame also reserves 80 bytes
-_extended_frame_size = frame_words + locals_words + yuhu_llvm_spill_slots;
+_extended_frame_size = frame_words + locals_words + YUHU_LLVM_SPILL_SLOTS;
 ```
 
 **How This Fixes It**:
@@ -167,7 +167,7 @@ _extended_frame_size = frame_words + locals_words + yuhu_llvm_spill_slots;
 
 ## Files Modified
 
-- **hotspot/src/share/vm/yuhu/yuhu_globals.hpp** - Added `yuhu_llvm_spill_slots` constant (80 bytes)
+- **hotspot/src/share/vm/yuhu/yuhu_globals.hpp** - Added `YUHU_LLVM_SPILL_SLOTS` constant (80 bytes)
 - **hotspot/src/share/vm/yuhu/yuhuFunction.cpp** - Create 80-byte alloca to force LLVM prologue allocation
 - **hotspot/src/share/vm/yuhu/yuhuStack.cpp** - Extended frame size by 80 bytes for spill reservation
 - **hotspot/src/share/vm/yuhu/yuhuCompiler.cpp** - Include spill space in frame_size calculation

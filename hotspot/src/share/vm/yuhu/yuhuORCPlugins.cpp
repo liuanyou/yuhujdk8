@@ -230,7 +230,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                 uint32_t inst = *(uint32_t*)(CodeData + offset);
 
                 // Check if this is a blr instruction: 0xD63F0000 | rn
-                if ((inst & 0xFFFFFC1F) == 0xD63F0000) {
+                if ((inst & BLR_MASK) == BLR_PATTERN) {
                     // Found a blr instruction, scan backwards for placeholders
                     VirtualAddressMatch match;
 

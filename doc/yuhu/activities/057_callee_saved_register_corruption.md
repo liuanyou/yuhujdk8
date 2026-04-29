@@ -273,7 +273,7 @@ builder()->CreateRestoreCalleeSavedRegisters() ; Restore from [sp, #80]
 4. **Selective preservation**: Only save 5 registers (x19, x20, x23, x25, x27) that Yuhu actually uses
 
 **Modified Files:**
-- `yuhu_globals.hpp`: Added `yuhu_callee_saved_save_area = 6` constant
+- `yuhu_globals.hpp`: Added `YUHU_CALLEE_SAVED_SAVE_AREA = 6` constant
 - `yuhuStack.cpp`: Updated frame size calculation (+6 words)
 - `yuhuCompiler.cpp`: Updated frame size calculation (+6 words)
 - `yuhuBuilder.hpp`: Added save/restore method declarations

@@ -27,10 +27,7 @@
 
 #include "memory/allocation.hpp"
 #include "utilities/globalDefinitions.hpp"
-
-// Virtual address magic numbers for placeholder identification
-static const uint64_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;
-static const uint64_t CALL_TARGET_MAGIC = 0xBEEFBEEF0000;
+#include "yuhu/yuhu_globals.hpp"
 
 // Information about matched placeholders for a single statepoint
 struct VirtualAddressMatch {

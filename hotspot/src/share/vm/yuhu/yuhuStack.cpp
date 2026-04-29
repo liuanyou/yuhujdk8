@@ -45,10 +45,10 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   //   - frame_marker (1 word)
   //   - frame_pointer_addr (1 word)
   // This matches SharkFrame::header_words = 6 and yuhu_frame_header_words
-  int header_words  = yuhu_frame_header_words;
+  int header_words  = YUHU_FRAME_HEADER_WORDS;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
-  int frame_words   = header_words + monitor_words + stack_words + yuhu_callee_saved_save_area + yuhu_llvm_spill_slots;
+  int frame_words   = header_words + monitor_words + stack_words + YUHU_CALLEE_SAVED_SAVE_AREA + YUHU_LLVM_SPILL_SLOTS;
 
   // Reserve space for ALL callee-saved registers (x19-x28 = 10 regs = 80 bytes)
   // This is the MAXIMUM LLVM could possibly need for register spills.
@@ -111,7 +111,7 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
     "frame");
   int offset = 0;
 
-  offset += yuhu_llvm_spill_slots + yuhu_callee_saved_save_area;
+  offset += YUHU_LLVM_SPILL_SLOTS + YUHU_CALLEE_SAVED_SAVE_AREA;
 
   // Expression stack
   _stack_slots_offset = offset;
@@ -518,7 +518,7 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholder(int virtual_offset) {
     // Store PLACEHOLDER for PC - will be patched by JITLink plugin
     // Encode virtual_offset in the placeholder: 0xDEAD0000 | virtual_offset
     // This makes it easy to identify and patch later
-    uint32_t placeholder = 0xDEAD0000 | (virtual_offset & 0xFFFF);
+    uint32_t placeholder = LAST_JAVA_PC_MAGIC | (virtual_offset & 0xFFFF);
 
     llvm::Value *pc_addr_i64 = builder()->CreatePtrToInt(last_Java_pc_addr(), YuhuType::intptr_type(), "pc_addr_i64");
 

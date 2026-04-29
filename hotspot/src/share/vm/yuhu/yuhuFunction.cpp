@@ -615,7 +615,7 @@ void YuhuFunction::generate_deoptimization_stub() {
 
   address start = masm.current_pc();
 
-  int header_words  = yuhu_frame_header_words;
+  int header_words  = YUHU_FRAME_HEADER_WORDS;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
   int frame_words   = header_words + monitor_words + stack_words;

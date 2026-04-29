@@ -25,12 +25,14 @@
 #include "precompiled.hpp"
 #include "yuhu/yuhuVirtualAddressPatcher.hpp"
 #include "utilities/debug.hpp"
+#include "yuhu/yuhu_globals.hpp"
 
 // AArch64 instruction encodings
 // movz (move with zero): 0xD2800000 | (imm16 << 5) | rd | (shift << 21)
 //   shift: 0=lsl #0, 1=lsl #16, 2=lsl #32, 3=lsl #48
 // movk (move and keep):  0xF2800000 | (imm16 << 5) | rd | (shift << 21)
-
+// these mask and pattern are not that exact, still needs to check shift,
+// so put them in specific file instead of yuhu_globals.hpp
 static const uint32_t MOVZ_MASK = 0xFF800000;
 static const uint32_t MOVZ_PATTERN_64 = 0xD2800000;
 static const uint32_t MOVZ_PATTERN_32 = 0x52800000;
@@ -43,9 +45,6 @@ static const uint32_t MOVK_PATTERN_32 = 0x72800000;
 static const uint32_t MOV_IMM_MASK = 0xFF800000;
 static const uint32_t MOV_IMM_PATTERN_32 = 0x2A000000;
 static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
-
-static const uint32_t BLR_MASK = 0xFFFFFC1F;
-static const uint32_t BLR_PATTERN = 0xD63F0000;
 
 bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
   const uint8_t* code_buffer,

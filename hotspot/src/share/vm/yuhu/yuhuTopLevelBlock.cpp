@@ -1480,8 +1480,8 @@ void YuhuTopLevelBlock::do_call() {
   int virtual_offset = code_buffer()->create_unique_offset();
   
   // NEW: Create dual virtual addresses with same virtual_offset
-  uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
+  uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+  uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
   
   // NEW: Store last_Java_pc placeholder
   stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
