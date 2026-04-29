@@ -669,7 +669,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   //   header_words = 6
   //   extra_locals = max_locals - size_of_parameters
   //   frame_size (words) = frame_words + extra_locals
-  int header_words = yuhu_frame_header_words;
+  int header_words = YUHU_FRAME_HEADER_WORDS;
   
   // Calculate max_monitors using flow analysis (similar to YuhuTargetInvariants::count_monitors)
   int max_monitors = 0;
@@ -685,7 +685,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
   int frame_words = header_words + monitor_words + stack_words +
-          yuhu_callee_saved_save_area + yuhu_llvm_spill_slots;
+                    YUHU_CALLEE_SAVED_SAVE_AREA + YUHU_LLVM_SPILL_SLOTS;
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();
@@ -755,7 +755,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // scan the machine code and modify it. The oop marker scanning generates HotSpot
       // relocation records that will be processed during register_method.
       combined_cb.initialize_oop_recorder(env->oop_recorder());
-      builder.scan_for_oop_markers_and_generate_relocation(&combined_cb, combined_base, combined_size);
+//      builder.scan_for_oop_markers_and_generate_relocation(&combined_cb, combined_base, combined_size);
+      builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);

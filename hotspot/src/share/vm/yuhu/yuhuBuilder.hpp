@@ -289,6 +289,15 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Oop marker scanning and relocation generation
   void scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size);
 
+  // hotspot stores relocation points in unsigned short.
+  // Layout:
+  // Bits [15:12] = relocType (4 bits)
+  // Bits [11:1]  = offset (11 bits)
+  // Bit [0]      = format
+  // it requires offset to be positive, otherwise locs_point assertion fails.
+  // Handle all relocations in one method, including oop_relocation, poll_relocation and so on.
+  void scan_and_generate_all_relocations(address llvm_code_start, size_t llvm_code_size, CodeBuffer* cb, address code_start, size_t adapter_size);
+
   // Callee-saved register preservation across Java method calls
   public:
   void CreateSaveCalleeSavedRegisters();  // Save x19, x20, x23, x25, x27 to [sp, #80]
