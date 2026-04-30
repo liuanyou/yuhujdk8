@@ -18,8 +18,8 @@ void YuhuDebugInfo::generate_minimal_debug_info(DebugInformationRecorder* record
   // These were collected during IR generation with virtual PC offsets
   // After machine code generation, we now have the actual PC offsets from offset markers
   if (function != NULL) {
-    GrowableArray<int>* deferred_offsets = function->deferred_offsets();
-    GrowableArray<OopMap*>* deferred_oopmaps = function->deferred_oopmaps();
+    GrowableArray<int>* deferred_offsets = new GrowableArray<int>();
+    GrowableArray<OopMap*>* deferred_oopmaps = new GrowableArray<OopMap*>();
     GrowableArray<int>* deferred_frame_offsets = function->deferred_frame_offsets();
     GrowableArray<ciMethod*>* deferred_frame_targets = function->deferred_frame_targets();
     GrowableArray<int>* deferred_frame_bcis = function->deferred_frame_bcis();

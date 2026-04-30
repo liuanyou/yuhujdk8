@@ -89,10 +89,6 @@ void YuhuFunction::initialize(const char *name) {
   _fp_offset_from_sp = 0;  // Will be analyzed on first return
   _deoptimization_stub = NULL;  // Will be generated below
 
-  // Initialize deferred OopMap collections
-  _deferred_oopmaps = NULL;
-  _deferred_offsets = NULL;
-
   // Initialize deferred frame collections
   _deferred_frame_offsets = NULL;
   _deferred_frame_targets = NULL;
@@ -112,9 +108,6 @@ void YuhuFunction::initialize(const char *name) {
   _arg_base = NULL;
   _arg_count = NULL;
   _fp_offset_from_sp = 0;  // Will be analyzed on first return
-  // Initialize deferred OopMap collections
-  _deferred_oopmaps = NULL;
-  _deferred_offsets = NULL;
 
   // Initialize deferred frame collections
   _deferred_frame_offsets = NULL;
@@ -505,88 +498,6 @@ void YuhuFunction::add_deferred_zero_check(YuhuTopLevelBlock* block,
 void YuhuFunction::do_deferred_zero_checks() {
   for (int i = 0; i < deferred_zero_checks()->length(); i++)
     deferred_zero_checks()->at(i)->process();
-}
-
-void YuhuFunction::process_deferred_oopmaps() {
-  // Add deferred OopMaps to the YuhuDebugInformationRecorder instead of directly to DebugInformationRecorder
-  // This allows us to handle virtual offsets that will be converted to real offsets later
-  if (_deferred_oopmaps != NULL && _deferred_offsets != NULL) {
-    if (_debug_info_recorder != NULL) {
-      // Build locals array for ScopeDesc
-      // For deoptimization to work, we need to provide locals information
-      int max_locals = target()->max_locals();
-      int num_params = target()->arg_size();  // Number of parameters (including 'this' for non-static methods)
-      ciSignature* sig = target()->signature();
-      GrowableArray<ScopeValue*>* locals = new GrowableArray<ScopeValue*>(max_locals);
-
-      // Create a LocationValue for each local variable
-      // Parameters (locals[0] to locals[num_params-1]) are in registers x0-x7
-      // Real local variables (locals[num_params] to locals[max_locals-1]) are on stack
-      for (int i = 0; i < max_locals; i++) {
-        Location loc;
-        if (i < num_params) {
-          // Determine parameter type to set correct Location::Type
-          ciType* param_type = NULL;
-          if (is_static()) {
-            // Static method: locals[0] = first parameter
-            param_type = sig->type_at(i);
-          } else {
-            // Non-static method: locals[0] = this, locals[1+] = parameters
-            if (i == 0) {
-              param_type = target()->holder();  // 'this' type
-            } else {
-              param_type = sig->type_at(i - 1);
-            }
-          }
-
-          // Determine Location::Type based on parameter type
-          Location::Type loc_type;
-          BasicType bt = param_type->basic_type();
-          if (bt == T_OBJECT || bt == T_ARRAY) {
-            loc_type = Location::oop;  // Object reference (needs GC scanning)
-          } else if (bt == T_LONG) {
-            loc_type = Location::lng;  // Long type
-          } else if (bt == T_DOUBLE) {
-            loc_type = Location::dbl;  // Double type
-          } else {
-            loc_type = Location::normal;  // int, float, short, byte, boolean, etc.
-          }
-
-          // Parameters are in registers x0, x1, x2, ...
-          // Use as_Register(i) to get the Register, then as_VMReg() to get VMReg
-          VMReg reg = as_Register(i)->as_VMReg();
-          loc = Location::new_reg_loc(loc_type, reg);
-        } else {
-          // Real local variables are on stack (spilled by LLVM/Yuhu)
-          // TODO: Should also determine type for real locals, but use 'normal' for now
-          int stack_offset = i * wordSize;
-          loc = Location::new_stk_loc(Location::normal, stack_offset);
-        }
-        locals->append(new LocationValue(loc));
-      }
-
-      for (int i = 0; i < _deferred_oopmaps->length(); i++) {
-        OopMap* oopmap = _deferred_oopmaps->at(i);
-        int pc_offset = _deferred_offsets->at(i);
-        // Add the OopMap to the YuhuDebugInformationRecorder
-        _debug_info_recorder->add_safepoint(pc_offset, oopmap);
-        _debug_info_recorder->describe_scope(
-          pc_offset,
-          target(),  // Use the current method
-          0,         // bci = 0
-          false,     // reexecute
-          false,     // rethrow_exception
-          false,     // is_method_handle_invoke
-          locals,
-          (GrowableArray<ScopeValue*>*)NULL,
-          (GrowableArray<MonitorValue*>*)NULL);
-        _debug_info_recorder->end_safepoint(pc_offset);
-      }
-    }
-  }
-
-  // Note: Deoptimization stub is now generated in initialize()
-  // before IR generation starts, so deoptimized_entry_point() can find it
 }
 
 // Generate per-function deoptimization stub using YuhuMacroAssembler

@@ -798,6 +798,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + effective_code_size);
     offsets.set_value(CodeOffsets::Exceptions, 0);
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
+
+    // Register oop map
+    YuhuDebugInformationRecorder::get()->convert_and_add_to_real_recorder(env->debug_info(), target, adapter_size, frame_size);
     
     env->register_method(target,
                          entry_bci,
@@ -888,7 +891,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     DebugInformationRecorder* debug_info = env->debug_info();
     if (debug_info != NULL) {
       tty->print_cr("Yuhu: Generating minimal scope descriptor for OSR method");
-      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
+//      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
     }
     
     env->register_method(target,

@@ -259,7 +259,7 @@ Value *result = builder()->CreateCall(func_type, native_function, param_values);
 
 **Key Change**: For each call site, we create **two** virtual addresses encoded with the **same** virtual offset but **different magic numbers**:
 1. **Last Java PC placeholder** (`0xDEADxxxx`): Stored to `thread->last_Java_pc`
-2. **Call target placeholder** (`0xBEEFxxxx`): Used as the call target address
+2. **Call target placeholder** (`0xBEEFBEEFxxxx`): Used as the call target address
 
 Both placeholders share the same `virtual_offset` to establish correlation between the last_Java_pc location and the call target for JITLink patching.
 
@@ -271,12 +271,12 @@ int virtual_offset = code_buffer()->create_unique_offset();  // e.g., 0x1000, 0x
 
 // Two virtual addresses with different magic numbers, same virtual_offset
 uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // e.g., 0xDEAD1000
-uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // e.g., 0xBEEF1000
+uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // e.g., 0xBEEFBEEF1000
 ```
 
 **Why different magic numbers**:
 - `0xDEADxxxx`: Magic for last_Java_pc placeholders (easily identifiable when scanning backwards from statepoint)
-- `0xBEEFxxxx`: Magic for call target placeholders (easily identifiable when patching call instructions)
+- `0xBEEFBEEFxxxx`: Magic for call target placeholders (easily identifiable when patching call instructions)
 - Same `xxxx` (virtual_offset): Correlates last_Java_pc placeholder with call target for JITLink patching
 
 #### 1. VM Runtime Calls via `call_vm()`
@@ -292,7 +292,7 @@ llvm::CallInst* call_vm(llvm::Value* callee, ...) {
   
   // 2. Create dual virtual addresses with same virtual_offset
   uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;   // For call target
+  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;   // For call target
   
   // 3. Store virtual address as placeholder for last_Java_pc
   Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
@@ -325,7 +325,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index, const char* name
   
   // 2. Create dual virtual addresses
   uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;
-  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;
+  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;
   
   // 3. Store placeholder for last_Java_pc
   Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
@@ -361,7 +361,7 @@ void YuhuNativeWrapper::initialize() {
   
   // 2. Create dual virtual addresses
   uint64_t last_java_pc_va = 0xDEAD0000 | virtual_offset;
-  uint64_t call_target_va = 0xBEEF0000 | virtual_offset;
+  uint64_t call_target_va = 0xBEEFBEEF0000 | virtual_offset;
   
   // 3. Store placeholder for last_Java_pc
   Value* ljpc_placeholder = ConstantInt::get(i64_ty, last_java_pc_va);
@@ -394,7 +394,7 @@ void YuhuNativeWrapper::initialize() {
 1. Get unique virtual offset: `code_buffer()->create_unique_offset()`
 2. Create dual virtual addresses:
    - `last_java_pc_va = 0xDEAD0000 | virtual_offset`
-   - `call_target_va = 0xBEEF0000 | virtual_offset`
+   - `call_target_va = 0xBEEFBEEF0000 | virtual_offset`
 3. Store `last_java_pc_va` as placeholder for `last_Java_pc`
 4. Use `call_target_va` as the call target (via `CreateIntToPtr`)
 5. Create deferred OopMap: `function()->add_deferred_oopmap(virtual_offset, oopmap)`
@@ -479,7 +479,7 @@ struct StackMapRecord {
 1. For each `StackMapRecord.InstructionOffset` (e.g., 0x114, points to `blr`)
 2. Scan backwards in machine code to find **both** placeholders:
    - `0xDEADxxxx` (last_Java_pc placeholder)
-   - `0xBEEFxxxx` (call target placeholder)
+   - `0xBEEFBEEFxxxx` (call target placeholder)
 3. Verify they share the same `virtual_offset` (low 16 bits match)
 4. Now we have the complete 1-1-1 mapping:
    - `virtual_offset 0x1000 → StatepointID 5 → InstructionOffset 0x114`
@@ -514,7 +514,7 @@ Offset N+8: str xR, [x0, #last_Java_pc_offset]  ; Store to thread->last_Java_pc
 struct PlaceholderInfo {
   uint64_t last_java_pc_va;         // e.g., 0xDEAD1000
   uint64_t last_java_pc_offset;     // Offset of movz instruction
-  uint64_t call_target_va;          // e.g., 0xBEEF1000
+  uint64_t call_target_va;          // e.g., 0xBEEFBEEF1000
   uint64_t call_target_offset;      // Offset of movz instruction
   uint64_t virtual_offset;          // e.g., 0x1000 (shared by both)
 };
@@ -554,7 +554,7 @@ PlaceholderInfo scan_backwards_for_placeholders(
             result.virtual_offset = low16;
             found_ljpc = true;
           }
-        } else if (imm16 == 0xBEEF) {
+        } else if (imm16 == 0xBEEFBEEF) {
           // Found call target placeholder's movz
           uint32_t movk_inst = *(uint32_t*)(code_buffer + offset + 4);
           if ((movk_inst & 0xFF800000) == 0xF2800000) {  // movk
@@ -612,7 +612,7 @@ void match_statepoints_to_virtual_offsets() {
     
     assert(ljpc_virtual_offset == call_virtual_offset);
     assert((info.last_java_pc_va & 0xFFFF0000) == 0xDEAD0000);
-    assert((info.call_target_va & 0xFFFF0000) == 0xBEEF0000);
+    assert((info.call_target_va & 0xFFFF0000) == 0xBEEFBEEF0000);
     
     // Build 1-1-1 mapping
     mapping[ljpc_virtual_offset] = {
@@ -767,14 +767,14 @@ void patch_call_target_placeholders() {
     );
     
     // Example:
-    // Before: movz x9, #0xBEEF, lsl #32 / movk x9, #0x1000
+    // Before: movz x9, #0xBEEFBEEF, lsl #32 / movk x9, #0x1000
     // After:  movz x9, #0x1234, lsl #32 / movk x9, #0x5678
     //         (real_helper_addr = 0x12345678, e.g., yuhu_resolve_static_field)
   }
 }
 ```
 
-**Why patch?**: The call target placeholder (0xBEEF1000) is not a valid function address. We must replace it with the actual helper function address obtained via `dlsym()` or lookup table.
+**Why patch?**: The call target placeholder (0xBEEFBEEF1000) is not a valid function address. We must replace it with the actual helper function address obtained via `dlsym()` or lookup table.
 
 #### Task 3: Register OopMaps at Exact Offsets
 
@@ -804,7 +804,7 @@ void register_oopmaps() {
 
 **Key workflow**:
 1. Parse `__llvm_stackmaps` section → get StatepointID + InstructionOffset
-2. Scan backwards from InstructionOffset → find BOTH placeholders (0xDEADxxxx + 0xBEEFxxxx)
+2. Scan backwards from InstructionOffset → find BOTH placeholders (0xDEADxxxx + 0xBEEFBEEFxxxx)
 3. Verify they share the same virtual_offset (1-1-1 relationship)
 4. Patch last_Java_pc placeholder with actual return offset
 5. Patch call target placeholder with actual helper function address

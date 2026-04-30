@@ -50,8 +50,6 @@ class YuhuFunction : public YuhuTargetInvariants {
                                ciTypeFlow*   flow,
                                const char*   name) {
     YuhuFunction function(env, builder, flow, name);
-    // Process any deferred OopMaps before function goes out of scope
-//    function.process_deferred_oopmaps();
     return function.function();
   }
 
@@ -76,12 +74,6 @@ class YuhuFunction : public YuhuTargetInvariants {
 
   // Prologue analysis data
   int _fp_offset_from_sp;  // Offset from SP to FP (imm in "add x29, sp, #imm")
-
-  // YuhuDebugInformationRecorder to collect virtual OopMap information
-  YuhuDebugInformationRecorder*    _debug_info_recorder;
-  // Collection for deferred OopMaps to implement delayed safepoint addition
-  GrowableArray<OopMap*>*           _deferred_oopmaps;
-  GrowableArray<int>*               _deferred_offsets;
 
   // Per-function deoptimization stub
   address                           _deoptimization_stub;
@@ -125,30 +117,6 @@ class YuhuFunction : public YuhuTargetInvariants {
   // Prologue analysis: get/set FP offset from SP
   int fp_offset_from_sp() const { return _fp_offset_from_sp; }
   void set_fp_offset_from_sp(int offset) { _fp_offset_from_sp = offset; }
-  
-  // Methods for deferred OopMap handling
-  void add_deferred_oopmap(int pc_offset, OopMap* oopmap) {
-    if (_deferred_oopmaps == NULL) {
-      _deferred_oopmaps = new GrowableArray<OopMap*>();
-      _deferred_offsets = new GrowableArray<int>();
-    }
-    _deferred_oopmaps->append(oopmap);
-    _deferred_offsets->append(pc_offset);
-  }
-  
-  GrowableArray<OopMap*>* deferred_oopmaps() const { return _deferred_oopmaps; }
-  GrowableArray<int>* deferred_offsets() const { return _deferred_offsets; }
-  
-  // Look up OopMap by virtual_offset
-  OopMap* get_deferred_oopmap(int virtual_offset) const {
-    if (_deferred_offsets == NULL) return NULL;
-    for (int i = 0; i < _deferred_offsets->length(); i++) {
-      if (_deferred_offsets->at(i) == virtual_offset) {
-        return _deferred_oopmaps->at(i);
-      }
-    }
-    return NULL;
-  }
   
   // Methods for deferred frame handling
   void add_deferred_frame(int pc_offset, ciMethod* target, int bci,

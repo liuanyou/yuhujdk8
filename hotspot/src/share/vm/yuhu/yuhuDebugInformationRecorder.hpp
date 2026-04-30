@@ -10,6 +10,7 @@
 #include "yuhu/yuhuOffsetMapper.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "runtime/threadLocalStorage.hpp"
+#include "yuhu/yuhuStack.hpp"
 
 namespace llvm {
     class Module;
@@ -190,62 +191,37 @@ public:
   // 将虚拟 PC offset 转换为真实 PC offset，并将结果添加到真实的 DebugInformationRecorder
   void convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                        ciMethod* method,
-                                       YuhuOffsetMapper* offset_mapper,
-                                       int plus_offset) {
-    // 按照真实的pc offset排序virtual offset
-    if (_virtual_offsets->length() > 1) {
-        quick_sort_by_actual_offset(0, _virtual_offsets->length() - 1, offset_mapper);
-    }
+                                       int plus_offset,
+                                       int frame_size) {
+      for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
+          // instruction_offset here is offset in llvm machine code
+          uint32_t instruction_offset = _stack_map_instruction_offsets->at(i);
+          int arg_count = 0;
+          if (method->arg_size() > 8) {
+              arg_count = method->arg_size() - 8;
+          }
+          auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
+                                    YuhuStack::oopmap_slot_munge(arg_count));
+          for (int j = 8; j < method->arg_size(); ++j) {
+              ciType* type = method->signature()->type_at(j);
+              if (!type->is_primitive_type()) {
+                  VMReg reg = VMRegImpl::stack2reg((j - 8) * 2);
+                  oopmap->set_oop(reg);
+              }
+          }
 
-    int last_real_offset = -1;
-    
-    // 处理 OopMap 信息
-    for (int i = 0; i < _virtual_offsets->length(); i++) {
-      int virtual_offset = _virtual_offsets->at(i);
-      OopMap* oopmap = _oopmaps->at(i);
-      
-      // 使用 offset_mapper 将虚拟 offset 转换为真实 offset
-      int real_offset = offset_mapper->get_actual_offset(virtual_offset) + plus_offset;
-      
-      if (real_offset != -1) {  // -1 表示未找到映射
           if (YuhuTraceOffset) {
-              tty->print_cr("Yuhu: Converted virtual offset=%d to real offset=%d", virtual_offset, real_offset);
+              if (_call_site_return_pc_offset->contains(instruction_offset)) {
+                  tty->print_cr("Yuhu: Found call site by instruction offset=%d", instruction_offset);
+              } else {
+                  tty->print_cr("Yuhu: Found no call site by instruction offset=%d", instruction_offset);
+              }
           }
-        if (last_real_offset == real_offset) {
-            continue;
-        }
-        
-        // 添加到真实的 recorder
-        real_recorder->add_safepoint(real_offset, oopmap);
-        last_real_offset = real_offset;
-        
-        // 查找对应的帧信息
-        for (int j = 0; j < _virtual_frame_offsets->length(); j++) {
-          if (_virtual_frame_offsets->at(j) == virtual_offset) {
-            ciMethod* target = _frame_targets->at(j);
-            int bci = _frame_bcis->at(j);
-            GrowableArray<ScopeValue*>* locals = _frame_locals->at(j);
-            GrowableArray<ScopeValue*>* expressions = _frame_expressions->at(j);
-            GrowableArray<MonitorValue*>* monitors = _frame_monitors->at(j);
-            
-            real_recorder->describe_scope(
-              real_offset,
-              target != NULL ? target : method,  // 如果没有特定目标，则使用主方法
-              bci,
-              false,  // reexecute
-              false,  // rethrow_exception
-              false,  // is_method_handle_invoke
-              real_recorder->create_scope_values(locals),
-              real_recorder->create_scope_values(expressions),
-              real_recorder->create_monitor_values(monitors));
-              
-            real_recorder->end_safepoint(real_offset);
-            break;
-          }
-        }
-      } else {
+          // add plus_offset to get offset in code cache
+          int pc_offset = instruction_offset + plus_offset;
+          real_recorder->add_safepoint(pc_offset, oopmap);
+          real_recorder->end_safepoint(pc_offset);
       }
-    }
   }
 };
 

@@ -92,26 +92,6 @@ class YuhuCodeBuffer : public StackObj {
     masm().code_section()->set_end(masm().code_section()->end() + 4);
     return offset;
   }
-  
-  // Insert an offset marker with virtual offset information
-  // This allows mapping between virtual offsets (from IR stage) and actual offsets (from machine code)
-  // The marker creates a distinctive pattern in the machine code that can be identified
-  // during post-processing to establish the virtual-to-actual offset mapping
-  int insert_offset_marker(int virtual_offset) {
-    // Record the actual offset at this position before inserting the marker
-    int actual_offset = masm().offset();
-    
-    // Insert a distinctive marker instruction that can be identified later
-    // This uses a specific no-op pattern that's unique and recognizable
-    // For AArch64, we use a specific instruction pattern that doesn't affect execution
-    // but creates a recognizable signature in the machine code
-    _masm.nop();  // Insert a no-op as a distinctive marker
-    
-    // Add the mapping to the offset mapper if available
-    _offset_mapper.add_mapping(virtual_offset, actual_offset);
-    
-    return actual_offset;
-  }
 
   // Get current offset in the macro assembler
  public:

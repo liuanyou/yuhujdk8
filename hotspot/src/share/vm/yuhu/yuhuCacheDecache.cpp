@@ -41,21 +41,6 @@ void YuhuDecacher::start_frame() {
   } else {
     _pc_offset = code_buffer()->create_unique_offset();
   }
-  
-  // NOTE: We NO LONGER create offset markers!
-  // The dual virtual address approach handles correlation:
-  // - 0xDEADxxxx placeholder for last_Java_pc
-  // - 0xBEEFxxxx placeholder for call target
-  // Both share the same virtual_offset for 1-1-1 mapping
-  
-  _oopmap = new OopMap(
-    oopmap_slot_munge(stack()->oopmap_frame_size()),
-    oopmap_slot_munge(arg_size()));
-    
-  // Store the oopmap for later processing
-  // We do NOT call debug_info()->add_safepoint() here because virtual offsets
-  // may not be in proper order. We'll process them after machine code generation.
-  function()->add_deferred_oopmap(_pc_offset, oopmap());
 }
 
 void YuhuDecacher::start_stack(int stack_depth) {
@@ -83,11 +68,6 @@ void YuhuDecacher::process_stack_slot(int          index,
       adjusted_offset(value, offset));
   }
 
-  // Record the value in the oopmap if necessary
-  if (stack_slot_needs_oopmap(index, value)) {
-    oopmap()->set_oop(slot2reg(offset));
-  }
-
   // Record the value in the debuginfo if necessary
   if (stack_slot_needs_debuginfo(index, value)) {
     exparray()->append(slot2lv(offset, stack_location_type(index, addr)));
@@ -100,9 +80,7 @@ void YuhuDecacher::start_monitors(int num_monitors) {
 }
 
 void YuhuDecacher::process_monitor(int index, int box_offset, int obj_offset) {
-  oopmap()->set_oop(slot2reg(obj_offset));
-
-  monarray()->append(new MonitorValue(
+    monarray()->append(new MonitorValue(
     slot2lv (obj_offset, Location::oop),
     slot2loc(box_offset, Location::normal)));
 }
@@ -114,8 +92,6 @@ void YuhuDecacher::process_oop_tmp_slot(Value** value, int offset) {
       YuhuType::oop_addrspace1_type(), // FIXED - oop tmp is heap object
       *value,
       offset);
-
-    oopmap()->set_oop(slot2reg(offset));
   }
 }
 
@@ -150,11 +126,6 @@ void YuhuDecacher::process_local_slot(int          index,
       YuhuType::to_stackType(value->basic_type()),
       value->generic_value(),
       adjusted_offset(value, offset));
-  }
-
-  // Record the value in the oopmap if necessary
-  if (local_slot_needs_oopmap(index, value)) {
-    oopmap()->set_oop(slot2reg(offset));
   }
 
   // Record the value in the debuginfo if necessary
