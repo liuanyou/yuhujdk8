@@ -161,75 +161,75 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   CreateStoreFramePointer(
     builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
   
-  // Get addresses for last_Java_sp, last_Java_fp, and last_Java_pc
-  Value *last_sp_addr = last_Java_sp_addr();
-  Value *last_fp_addr = last_Java_fp_addr();
-  Value *last_pc_addr = builder()->CreateAddressOfStructEntry(
-    thread(),
-    JavaThread::last_Java_pc_offset(),
-    llvm::PointerType::getUnqual(YuhuType::intptr_type()),
-    "last_Java_pc_addr");
-  
-  // Convert addresses to i64 for inline assembly (AArch64 uses 64-bit addresses)
-  Value *sp_addr_i64 = builder()->CreatePtrToInt(last_sp_addr, YuhuType::intptr_type(), "sp_addr_i64");
-  Value *fp_addr_i64 = builder()->CreatePtrToInt(last_fp_addr, YuhuType::intptr_type(), "fp_addr_i64");
-  Value *pc_addr_i64 = builder()->CreatePtrToInt(last_pc_addr, YuhuType::intptr_type(), "pc_addr_i64");
-  
-  // Create inline assembly to store last_Java_sp
-  // "str $1, [$0]" stores the value in $1 to the address in $0
-  // "r" constraint means input from a general-purpose register
-  // "memory" clobber prevents LLVM from optimizing memory operations
-  YuhuContext& ctx = YuhuContext::current();
-  llvm::FunctionType* store_asm_type = llvm::FunctionType::get(
-    llvm::Type::getVoidTy(ctx),
-    {YuhuType::intptr_type(), YuhuType::intptr_type()},  // addr, value
-    false);
-  
-  llvm::InlineAsm* store_sp_asm = llvm::InlineAsm::get(
-    store_asm_type,
-    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-    true,            // Has side effects: yes (writes to memory)
-    false,           // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
-  
-  // Call inline assembly to store last_Java_sp
-  // stack_pointer is already intptr_type (i64), no conversion needed
-  std::vector<Value*> store_sp_args;
-  store_sp_args.push_back(sp_addr_i64);
-  store_sp_args.push_back(stack_pointer);
-  builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
-
-  llvm::InlineAsm* store_fp_asm = llvm::InlineAsm::get(
-    store_asm_type,
-    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-    true,            // Has side effects: yes (writes to memory)
-    false,           // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
-
-  std::vector<Value*> store_fp_args;
-  store_fp_args.push_back(fp_addr_i64);
-  store_fp_args.push_back(current_fp);  // Use LLVM prologue's sp, where x29/x30 are saved
-  builder()->CreateCall(store_asm_type, store_fp_asm, store_fp_args);
-
-  Value* current_pc = builder()->CreateReadCurrentPC();
-
-  llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
-    store_asm_type,
-    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-    true,            // Has side effects: yes (writes to memory)
-    false,           // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
-
-  std::vector<Value*> store_pc_args;
-  store_pc_args.push_back(pc_addr_i64);
-  store_pc_args.push_back(current_pc);
-  builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
+//  // Get addresses for last_Java_sp, last_Java_fp, and last_Java_pc
+//  Value *last_sp_addr = last_Java_sp_addr();
+//  Value *last_fp_addr = last_Java_fp_addr();
+//  Value *last_pc_addr = builder()->CreateAddressOfStructEntry(
+//    thread(),
+//    JavaThread::last_Java_pc_offset(),
+//    llvm::PointerType::getUnqual(YuhuType::intptr_type()),
+//    "last_Java_pc_addr");
+//
+//  // Convert addresses to i64 for inline assembly (AArch64 uses 64-bit addresses)
+//  Value *sp_addr_i64 = builder()->CreatePtrToInt(last_sp_addr, YuhuType::intptr_type(), "sp_addr_i64");
+//  Value *fp_addr_i64 = builder()->CreatePtrToInt(last_fp_addr, YuhuType::intptr_type(), "fp_addr_i64");
+//  Value *pc_addr_i64 = builder()->CreatePtrToInt(last_pc_addr, YuhuType::intptr_type(), "pc_addr_i64");
+//
+//  // Create inline assembly to store last_Java_sp
+//  // "str $1, [$0]" stores the value in $1 to the address in $0
+//  // "r" constraint means input from a general-purpose register
+//  // "memory" clobber prevents LLVM from optimizing memory operations
+//  YuhuContext& ctx = YuhuContext::current();
+//  llvm::FunctionType* store_asm_type = llvm::FunctionType::get(
+//    llvm::Type::getVoidTy(ctx),
+//    {YuhuType::intptr_type(), YuhuType::intptr_type()},  // addr, value
+//    false);
+//
+//  llvm::InlineAsm* store_sp_asm = llvm::InlineAsm::get(
+//    store_asm_type,
+//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
+//    true,            // Has side effects: yes (writes to memory)
+//    false,           // Is align stack: no
+//    llvm::InlineAsm::AD_ATT
+//  );
+//
+//  // Call inline assembly to store last_Java_sp
+//  // stack_pointer is already intptr_type (i64), no conversion needed
+//  std::vector<Value*> store_sp_args;
+//  store_sp_args.push_back(sp_addr_i64);
+//  store_sp_args.push_back(stack_pointer);
+//  builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
+//
+//  llvm::InlineAsm* store_fp_asm = llvm::InlineAsm::get(
+//    store_asm_type,
+//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
+//    true,            // Has side effects: yes (writes to memory)
+//    false,           // Is align stack: no
+//    llvm::InlineAsm::AD_ATT
+//  );
+//
+//  std::vector<Value*> store_fp_args;
+//  store_fp_args.push_back(fp_addr_i64);
+//  store_fp_args.push_back(current_fp);  // Use LLVM prologue's sp, where x29/x30 are saved
+//  builder()->CreateCall(store_asm_type, store_fp_asm, store_fp_args);
+//
+//  Value* current_pc = builder()->CreateReadCurrentPC();
+//
+//  llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
+//    store_asm_type,
+//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
+//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
+//    true,            // Has side effects: yes (writes to memory)
+//    false,           // Is align stack: no
+//    llvm::InlineAsm::AD_ATT
+//  );
+//
+//  std::vector<Value*> store_pc_args;
+//  store_pc_args.push_back(pc_addr_i64);
+//  store_pc_args.push_back(current_pc);
+//  builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
 }
 
 // Stack overflow check for AArch64
@@ -544,6 +544,8 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholder(int virtual_offset) {
 }
 void YuhuStack::CreateResetLastJavaFrame() {
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_sp_addr());
+    builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_fp_addr());
+    builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_pc_addr());
 }
 
 Value* YuhuStack::CreatePopFrame(int result_slots) {

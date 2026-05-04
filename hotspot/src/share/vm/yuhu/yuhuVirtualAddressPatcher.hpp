@@ -32,8 +32,6 @@
 // Information about matched placeholders for a single statepoint
 struct VirtualAddressMatch {
   uint64_t virtual_offset;              // The shared virtual offset (e.g., 0x1000)
-  uint64_t statepoint_id;               // LLVM statepoint ID
-  uint64_t instruction_offset;          // Actual offset of the statepoint call (bl instruction)
   
   uint64_t last_java_pc_va;             // Last Java PC placeholder (e.g., 0xDEAD1000)
   uint64_t last_java_pc_placeholder_offset;  // Offset of movz instruction for last_Java_pc
@@ -41,6 +39,7 @@ struct VirtualAddressMatch {
   
   uint64_t call_target_va;              // Call target placeholder (e.g., 0xBEEF1000)
   uint64_t call_target_placeholder_offset;   // Offset of movz instruction for call target
+  bool safepoint_poll_call; // true means it is safepoint poll call, otherwise, normal java calls, VM calls, and helper calls
 };
 
 // Scanner for finding dual virtual address placeholders in machine code

@@ -103,7 +103,7 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
         FPM.addPass(SimplifyCFGPass());
         // PlaceSafepointsPass inserts gc.safepoint_poll for loops,
         // then YuhuRewriteStatepointsForGC converts to gc.statepoint
-        FPM.addPass(PlaceSafepointsPass());
+//        FPM.addPass(PlaceSafepointsPass());
 
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 

@@ -46,6 +46,9 @@
 
 using namespace llvm;
 
+// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
+extern "C" void gc_safepoint_poll();
+
 // Generate function signature for normal entry based on Java method parameters
 // According to 021 design: LLVM function parameters directly correspond to Java method parameters
 // For static methods: first parameter is NULL (x0), then Java parameters
@@ -416,6 +419,26 @@ void YuhuFunction::initialize(const char *name) {
 
       entry_state = locker->current_state();
     }
+  }
+
+  // Method entry safepoint poll: inserted after final SP allocation, last_Java_sp setup,
+  // and argument copying — before transitioning into bytecode blocks.
+  // This matches C2's sequence: build_frame() -> set_frame_complete() -> safepoint_poll.
+  if (!is_osr()) {
+    int virtual_offset = code_buffer()->create_unique_offset();
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
+    // call_target_va is not used in the CreateCall, just create one for no use
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll);
+    // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
+    // otherwise, poll_type relocation record can't be created. hence patching adr logic is a little different
+    // than call site in CallSiteExtractorPlugin
+    stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+    llvm::FunctionCallee poll_fn = mod->getOrInsertFunction("gc.safepoint_poll", poll_ftype);
+    builder()->CreateCall(poll_ftype, poll_fn.getCallee(), {});
+    stack()->CreateResetLastJavaFrame();
   }
 
   // Transition into the method proper
