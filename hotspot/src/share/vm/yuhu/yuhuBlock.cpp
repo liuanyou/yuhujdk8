@@ -1064,38 +1064,14 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
   // Perform the actual field access
   if (!is_get || value == NULL) {
     if (!is_field) {
-      // === GETSTATIC: Call runtime helper to get static field value ===
+      // === GETSTATIC: Load static field value directly from klass mirror ===
       int cp_index = iter()->get_field_index();
-      Value* field_result = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
+      Value* field_value = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
       
-      // Determine field type to handle the return value correctly
-      BasicType basic_type = field->type()->basic_type();
-      llvm::Type* field_type = YuhuType::to_arrayType(basic_type);
-      bool is_object_field = !field->type()->is_primitive_type();
-      
-      Value* field_value;
-      if (is_object_field) {
-        // Object field: yuhu_resolve_static_object_field returns void* (already a pointer)
-        // No need for inttoptr conversion - it's already oop_addrspace1_type
-        field_value = field_result;
-      } else if (basic_type == T_LONG || basic_type == T_DOUBLE) {
-        // Primitive field: yuhu_resolve_static_primitive_field returns jlong (i64)
-        // Already jlong/jdouble (64-bit), may need bitcast for double
-        if (basic_type == T_DOUBLE) {
-          field_value = builder()->CreateBitCast(field_result, field_type);
-        } else {
-          field_value = field_result;
-        }
-      } else {
-        // Truncate jlong to smaller primitive types (int, short, byte, char, boolean, float)
-        if (basic_type == T_FLOAT) {
-          field_value = builder()->CreateBitCast(
-            builder()->CreateTrunc(field_result, YuhuType::jint_type()), 
-            field_type);
-        } else {
-          field_value = builder()->CreateTrunc(field_result, field_type);
-        }
-      }
+      // CreateInlineOopForStaticField now returns the correct type directly:
+      // - Object fields: ptr addrspace(1)
+      // - Primitive fields: appropriate LLVM type (i64, i32, float, double, etc.)
+      // No conversion needed
       
       value = YuhuValue::create_generic(field->type(), field_value, false);
     } else {

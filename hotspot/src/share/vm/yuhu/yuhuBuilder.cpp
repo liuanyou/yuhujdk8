@@ -948,14 +948,15 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
                                                    YuhuStack* stack,
                                                    const char* name) {
   // Static field resolution:
-  // At compile time, resolve the field's Method* and offset,
-  // then embed them as constants in IR. Runtime helper directly
-  // reads the value from klass mirror - no CP lookup needed.
+  // Generate inline IR to load from klass mirror directly.
+  // No runtime helper call needed - eliminates safepoint vulnerability.
   //
   // Generated IR pattern:
-  //   %fn = inttoptr i64 <helper_addr> to ptr
-  //   %method = inttoptr i64 <Method*> to ptr
-  //   %oop = call ptr %fn(ptr %method, i32 <field_offset>)
+  //   %klass_ptr = inttoptr i64 <Klass*> to ptr
+  //   %mirror_addr = getelementptr ptr, ptr %klass_ptr, i64 <java_mirror_offset/8>
+  //   %mirror = load ptr addrspace(1), ptr %mirror_addr
+  //   %field_addr = getelementptr i8, ptr %mirror, i64 <field_offset>
+  //   %field_value = load <type>, ptr %field_addr
   
   llvm::Module* mod = GetInsertBlock()->getModule();
   llvm::Type* i32_ty = llvm::Type::getInt32Ty(mod->getContext());
@@ -978,50 +979,6 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   bool is_object_field = !field->type()->is_primitive_type();
   bool is_volatile = field->is_volatile();
   
-  // Select the correct helper function based on field type
-  void* helper_addr = NULL;
-  const char* helper_name = NULL;
-  llvm::FunctionType* func_ty = NULL;
-  llvm::Type* i1_ty = llvm::Type::getInt1Ty(mod->getContext());
-  
-  if (is_object_field) {
-    // Object field: returns void* (GC-tracked by RS4GC)
-    static void* object_helper = NULL;
-    if (object_helper == NULL) {
-      object_helper = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_object_field");
-      assert(object_helper != NULL, "yuhu_resolve_static_object_field must be resolvable via dlsym");
-    }
-    helper_addr = object_helper;
-    helper_name = "yuhu_resolve_static_object_field";
-    func_ty = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), {ptr_ty, i32_ty, i1_ty}, false);
-  } else {
-    // Primitive field: returns jlong (not GC-tracked)
-    static void* primitive_helper = NULL;
-    if (primitive_helper == NULL) {
-      primitive_helper = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_primitive_field");
-      assert(primitive_helper != NULL, "yuhu_resolve_static_primitive_field must be resolvable via dlsym");
-    }
-    helper_addr = primitive_helper;
-    helper_name = "yuhu_resolve_static_primitive_field";
-    func_ty = llvm::FunctionType::get(i64_ty, {ptr_ty, i32_ty, i1_ty}, false);
-  }
-  
-  // Step 1: Get unique virtual offset for this call site
-  int virtual_offset = code_buffer()->create_unique_offset();
-  
-  // Step 2: Create dual virtual addresses with same virtual_offset
-  uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
-  
-  // Step 2.5: Register the call site mapping (virtual_offset -> helper_address)
-  // This allows OopMapExtractorPlugin to look up the actual helper address during patching
-  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)(uintptr_t)helper_addr);
-  
-  // Step 3: Use call target placeholder instead of actual helper address
-  llvm::Value* fn_ptr = CreateIntToPtr(
-    llvm::ConstantInt::get(i64_ty, call_target_va),
-    ptr_ty);
-  
   // Convert ciInstanceKlass* to Klass*
   Klass* klass = field_holder->get_Klass();
   
@@ -1030,31 +987,59 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
     ptr_ty);
   
-  // Step 4: Store last_Java_pc placeholder BEFORE the call
-  stack->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
+  // Calculate java_mirror address: klass + java_mirror_offset
+  int mirror_offset_bytes = in_bytes(Klass::java_mirror_offset());
+  llvm::Value* mirror_offset = llvm::ConstantInt::get(i64_ty, mirror_offset_bytes);
+  llvm::Value* mirror_addr_int = CreateAdd(
+    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
+    mirror_offset);
+  llvm::Value* mirror_addr = CreateIntToPtr(mirror_addr_int, ptr_ty);
   
-  // Step 5: Create the call
-  llvm::CallInst* call;
+  // Load java_mirror (oop) from Klass
+  llvm::LoadInst* mirror_load = CreateLoad(
+    YuhuType::oop_addrspace1_type(),
+    mirror_addr,
+    "mirror");
+  
+  // Calculate field address: mirror + field_offset
+  llvm::Value* field_offset_val = llvm::ConstantInt::get(i64_ty, field_offset);
+  llvm::Value* field_addr_int = CreateAdd(
+    CreatePtrToInt(mirror_load, i64_ty),
+    field_offset_val);
+  llvm::Value* field_addr = CreateIntToPtr(field_addr_int, ptr_ty);
+  
+  // Load field value based on type
+  llvm::Value* field_value;
   if (is_object_field) {
-    // Object field call: (Klass*, int, bool) -> void*
-    call = CreateCall(func_ty, fn_ptr,
-                      {klass_ptr, 
-                       llvm::ConstantInt::get(i32_ty, field_offset),
-                       llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
-                      name ? name : "field_result");
+    // Object field: load as ptr addrspace(1)
+    llvm::LoadInst* load_inst = CreateLoad(
+      YuhuType::oop_addrspace1_type(),
+      field_addr,
+      name ? name : "field_value");
+    
+    // Set volatile ordering if needed
+    if (is_volatile) {
+        load_inst->setOrdering(llvm::AtomicOrdering::SequentiallyConsistent);
+    }
+    field_value = load_inst;
   } else {
-    // Primitive field call: (Klass*, int, bool) -> i64
-    call = CreateCall(func_ty, fn_ptr,
-                      {klass_ptr, 
-                       llvm::ConstantInt::get(i32_ty, field_offset),
-                       llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
-                      name ? name : "field_result");
+    // Primitive field: load as appropriate type
+    BasicType basic_type = field->type()->basic_type();
+    llvm::Type* field_type = YuhuType::to_arrayType(basic_type);
+    
+    llvm::LoadInst* load_inst = CreateLoad(
+      field_type,
+      field_addr,
+      name ? name : "field_value");
+    
+    // Set volatile ordering if needed
+    if (is_volatile) {
+      load_inst->setOrdering(llvm::AtomicOrdering::SequentiallyConsistent);
+    }
+    field_value = load_inst;
   }
   
-  // Step 7: Reset last_Java_frame AFTER the call
-  stack->CreateResetLastJavaFrame();
-  
-  return call;
+  return field_value;
 }
 
 Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {

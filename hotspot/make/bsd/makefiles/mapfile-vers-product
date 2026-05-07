@@ -29,9 +29,6 @@
                 _JNI_GetCreatedJavaVMs
                 _JNI_GetDefaultJavaVMInitArgs
 
-                # _yuhu runtime helpers
-                _yuhu_resolve_static_object_field
-                _yuhu_resolve_static_primitive_field
                 # _JVM
                 _JVM_Accept
                 _JVM_ActiveProcessorCount
