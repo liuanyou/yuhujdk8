@@ -962,11 +962,48 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   llvm::Type* ptr_ty = llvm::PointerType::get(mod->getContext(), 0);
   llvm::Type* i64_ty = llvm::Type::getInt64Ty(mod->getContext());
   
-  // Get the runtime helper address via dlsym
-  static void* helper_addr = NULL;
-  if (helper_addr == NULL) {
-    helper_addr = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_field");
-    assert(helper_addr != NULL, "yuhu_resolve_static_field must be resolvable via dlsym");
+  // Resolve the field at compile time to get Klass* and offset
+  // Use function()->target_method() which is the method being compiled
+  ciMethod* current_method = function()->target_method();
+  
+  // Get the field using ciEnv's API (uses GUARDED_VM_ENTRY internally)
+  ciInstanceKlass* accessor = current_method->holder();
+  ciField* field = function()->env()->get_field_by_index(accessor, cp_index);
+  
+  // Get the klass that holds the static field and the field offset
+  ciInstanceKlass* field_holder = field->holder();
+  int field_offset = field->offset();
+  
+  // Determine if this is an object reference field
+  bool is_object_field = !field->type()->is_primitive_type();
+  bool is_volatile = field->is_volatile();
+  
+  // Select the correct helper function based on field type
+  void* helper_addr = NULL;
+  const char* helper_name = NULL;
+  llvm::FunctionType* func_ty = NULL;
+  llvm::Type* i1_ty = llvm::Type::getInt1Ty(mod->getContext());
+  
+  if (is_object_field) {
+    // Object field: returns void* (GC-tracked by RS4GC)
+    static void* object_helper = NULL;
+    if (object_helper == NULL) {
+      object_helper = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_object_field");
+      assert(object_helper != NULL, "yuhu_resolve_static_object_field must be resolvable via dlsym");
+    }
+    helper_addr = object_helper;
+    helper_name = "yuhu_resolve_static_object_field";
+    func_ty = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), {ptr_ty, i32_ty, i1_ty}, false);
+  } else {
+    // Primitive field: returns jlong (not GC-tracked)
+    static void* primitive_helper = NULL;
+    if (primitive_helper == NULL) {
+      primitive_helper = dlsym(RTLD_DEFAULT, "yuhu_resolve_static_primitive_field");
+      assert(primitive_helper != NULL, "yuhu_resolve_static_primitive_field must be resolvable via dlsym");
+    }
+    helper_addr = primitive_helper;
+    helper_name = "yuhu_resolve_static_primitive_field";
+    func_ty = llvm::FunctionType::get(i64_ty, {ptr_ty, i32_ty, i1_ty}, false);
   }
   
   // Step 1: Get unique virtual offset for this call site
@@ -985,22 +1022,6 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     llvm::ConstantInt::get(i64_ty, call_target_va),
     ptr_ty);
   
-  // Resolve the field at compile time to get Klass* and offset
-  // Use function()->target_method() which is the method being compiled
-  ciMethod* current_method = function()->target_method();
-  
-  // Get the field using ciEnv's API (uses GUARDED_VM_ENTRY internally)
-  ciInstanceKlass* accessor = current_method->holder();
-  ciField* field = function()->env()->get_field_by_index(accessor, cp_index);
-  
-  // Get the klass that holds the static field and the field offset
-  ciInstanceKlass* field_holder = field->holder();
-  int field_offset = field->offset();
-  
-  // Determine if this is an object reference field
-  bool is_object_field = !field->type()->is_primitive_type();
-  bool is_volatile = field->is_volatile();
-  
   // Convert ciInstanceKlass* to Klass*
   Klass* klass = field_holder->get_Klass();
   
@@ -1009,21 +1030,26 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
     ptr_ty);
   
-  // Create function type: jlong (Klass*, int, bool, bool)
-  llvm::Type* i1_ty = llvm::Type::getInt1Ty(mod->getContext());
-  llvm::FunctionType* func_ty = llvm::FunctionType::get(
-    YuhuType::jlong_type(), {ptr_ty, i32_ty, i1_ty, i1_ty}, false);
-  
   // Step 4: Store last_Java_pc placeholder BEFORE the call
   stack->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
   
   // Step 5: Create the call
-  llvm::CallInst* call = CreateCall(func_ty, fn_ptr,
-                    {klass_ptr, 
-                     llvm::ConstantInt::get(i32_ty, field_offset),
-                     llvm::ConstantInt::get(i1_ty, is_object_field ? 1 : 0),
-                     llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
-                    name ? name : "field_result");
+  llvm::CallInst* call;
+  if (is_object_field) {
+    // Object field call: (Klass*, int, bool) -> void*
+    call = CreateCall(func_ty, fn_ptr,
+                      {klass_ptr, 
+                       llvm::ConstantInt::get(i32_ty, field_offset),
+                       llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
+                      name ? name : "field_result");
+  } else {
+    // Primitive field call: (Klass*, int, bool) -> i64
+    call = CreateCall(func_ty, fn_ptr,
+                      {klass_ptr, 
+                       llvm::ConstantInt::get(i32_ty, field_offset),
+                       llvm::ConstantInt::get(i1_ty, is_volatile ? 1 : 0)},
+                      name ? name : "field_result");
+  }
   
   // Step 7: Reset last_Java_frame AFTER the call
   stack->CreateResetLastJavaFrame();

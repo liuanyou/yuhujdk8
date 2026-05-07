@@ -263,10 +263,10 @@ extern "C" void gc_safepoint_poll() {
   }
 }
 
-// Resolve static field by Klass* and field offset
+// Resolve static object field by Klass* and field offset
 // Called from LLVM IR generated code with embedded Klass* pointer
-// Returns the field value directly (oop for references, jlong for primitives)
-JNIEXPORT jlong JNICALL yuhu_resolve_static_field(Klass* klass, int field_offset, bool is_object_field, bool is_volatile) {
+// Returns void* (oop pointer) - RS4GC will track this as GC root
+JNIEXPORT void* JNICALL yuhu_resolve_static_object_field(Klass* klass, int field_offset, bool is_volatile) {
   JavaThread* thread = JavaThread::current();
   
   // Transition from _thread_in_Java to _thread_in_vm for VM operations
@@ -275,21 +275,31 @@ JNIEXPORT jlong JNICALL yuhu_resolve_static_field(Klass* klass, int field_offset
   // Get the klass mirror (java mirror)
   oop mirror = klass->java_mirror();
   
-  // Read the field value based on its type and return as jlong (64-bit container)
-  if (is_object_field) {
-    // For object references: return the oop as jlong
-    if (is_volatile) {
-      return (jlong)(uintptr_t)mirror->obj_field_acquire(field_offset);
-    } else {
-      return (jlong)(uintptr_t)mirror->obj_field(field_offset);
-    }
+  // Read the object reference field
+  if (is_volatile) {
+    return (void*)mirror->obj_field_acquire(field_offset);
   } else {
-    // For primitive types: read the value and return as jlong
-    // The caller will bitcast/truncate to the correct type
-    if (is_volatile) {
-      return mirror->long_field_acquire(field_offset);
-    } else {
-      return mirror->long_field(field_offset);
-    }
+    return (void*)mirror->obj_field(field_offset);
+  }
+}
+
+// Resolve static primitive field by Klass* and field offset
+// Called from LLVM IR generated code with embedded Klass* pointer
+// Returns jlong for primitive types (not GC-tracked)
+JNIEXPORT jlong JNICALL yuhu_resolve_static_primitive_field(Klass* klass, int field_offset, bool is_volatile) {
+  JavaThread* thread = JavaThread::current();
+  
+  // Transition from _thread_in_Java to _thread_in_vm for VM operations
+  ThreadInVMfromJava __tiv(thread);
+  
+  // Get the klass mirror (java mirror)
+  oop mirror = klass->java_mirror();
+  
+  // Read the primitive field value as jlong (64-bit container)
+  // The caller will bitcast/truncate to the correct type
+  if (is_volatile) {
+    return mirror->long_field_acquire(field_offset);
+  } else {
+    return mirror->long_field(field_offset);
   }
 }

@@ -1068,17 +1068,18 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
       int cp_index = iter()->get_field_index();
       Value* field_result = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
       
-      // yuhu_resolve_static_field returns jlong (64-bit container)
-      // We need to convert it to the actual field type
+      // Determine field type to handle the return value correctly
       BasicType basic_type = field->type()->basic_type();
       llvm::Type* field_type = YuhuType::to_arrayType(basic_type);
+      bool is_object_field = !field->type()->is_primitive_type();
       
       Value* field_value;
-      if (basic_type == T_OBJECT || basic_type == T_ARRAY) {
-        // For static field object references, yuhu_resolve_static_field returns
-        // the decoded oop pointer directly (not compressed)
-        field_value = builder()->CreateIntToPtr(field_result, YuhuType::oop_addrspace1_type()); // FIXED - static field is allocated in heap
+      if (is_object_field) {
+        // Object field: yuhu_resolve_static_object_field returns void* (already a pointer)
+        // No need for inttoptr conversion - it's already oop_addrspace1_type
+        field_value = field_result;
       } else if (basic_type == T_LONG || basic_type == T_DOUBLE) {
+        // Primitive field: yuhu_resolve_static_primitive_field returns jlong (i64)
         // Already jlong/jdouble (64-bit), may need bitcast for double
         if (basic_type == T_DOUBLE) {
           field_value = builder()->CreateBitCast(field_result, field_type);
@@ -1086,7 +1087,7 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
           field_value = field_result;
         }
       } else {
-        // Truncate jlong to smaller types (int, short, byte, char, boolean, float)
+        // Truncate jlong to smaller primitive types (int, short, byte, char, boolean, float)
         if (basic_type == T_FLOAT) {
           field_value = builder()->CreateBitCast(
             builder()->CreateTrunc(field_result, YuhuType::jint_type()), 
