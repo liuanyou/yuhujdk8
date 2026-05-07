@@ -126,7 +126,7 @@ RS4GC iterates over all `CallBase` instructions and tries to:
 | 15 | `CreateSetLastJavaFrame()` | yuhuStack.cpp:220 | `str $1, [$0]` | Store last_Java_pc |
 | 16 | `CreateSetLastJavaFrameWithMarker()` | yuhuStack.cpp:434 | `str $1, [$0]` | Store last_Java_pc (with marker variant) |
 | 17 | `CreateSetLastJavaFrameWithPlaceholderPC()` | yuhuStack.cpp:495 | `mov w19, #0xDEAD`<br>`movk w19, #offset`<br>`adr x20, .+8`<br>`str x20, [$0]` | Store last_Java_pc with adr |
-| 18 | `CreateSetLastJavaFrameWithPlaceholder()` | yuhuStack.cpp:531 | `str $1, [$0]` | Store last_Java_pc placeholder |
+| 18 | `CreateSetLastJavaFrameWithPlaceholderNoPC()` | yuhuStack.cpp:531 | `str $1, [$0]` | Store last_Java_pc placeholder |
 | 19 | `YuhuStack::patch_last_java_pc()` | yuhuStack.cpp:495 | `movk x0, #...`<br>`str x0, [addr]` | Patch last_Java_pc address |
 
 **Why inline asm is used:**

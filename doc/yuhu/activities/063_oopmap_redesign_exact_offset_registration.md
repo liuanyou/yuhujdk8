@@ -1338,7 +1338,7 @@ llvm::CallInst* call_vm(llvm::Value* callee, ...) {
   
   // NEW: Get virtual offset and use placeholder mechanism
   int virtual_offset = code_buffer()->create_unique_offset();
-  stack()->CreateSetLastJavaFrameWithPlaceholder(virtual_offset);
+  stack()->CreateSetLastJavaFrameWithPlaceholderNoPC(virtual_offset);
   
   CallInst *res = builder()->CreateCall(func_type, callee, args);
   

@@ -48,6 +48,9 @@
 
 using namespace llvm;
 
+// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
+extern "C" void gc_safepoint_poll();
+
 void YuhuTopLevelBlock::scan_for_traps() {
   // If typeflow found a trap then don't scan past it
   int limit_bci = ciblock()->has_trap() ? ciblock()->trap_bci() : limit();
@@ -667,33 +670,20 @@ void YuhuTopLevelBlock::maybe_add_safepoint() {
   if (current_state()->has_safepointed())
     return;
 
-  BasicBlock *orig_block = builder()->GetInsertBlock();
-  YuhuState *orig_state = current_state()->copy();
-
-  BasicBlock *do_safepoint = function()->CreateBlock("do_safepoint");
-  BasicBlock *safepointed  = function()->CreateBlock("safepointed");
-
-  Value *state = builder()->CreateLoad(
-    YuhuType::jint_type(),  // Explicitly pass type for LLVM 20+
-    builder()->CreateIntToPtr(
-      LLVMValue::intptr_constant(
-        (intptr_t) SafepointSynchronize::address_of_state()),
-      PointerType::getUnqual(YuhuType::jint_type())),
-    "state");
-
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(
-      state,
-      LLVMValue::jint_constant(SafepointSynchronize::_synchronizing)),
-    do_safepoint, safepointed);
-
-  builder()->SetInsertPoint(do_safepoint);
-  call_vm(builder()->safepoint(), EX_CHECK_FULL);
-  BasicBlock *safepointed_block = builder()->GetInsertBlock();
-  builder()->CreateBr(safepointed);
-
-  builder()->SetInsertPoint(safepointed);
-  current_state()->merge(orig_state, orig_block, safepointed_block);
+    int virtual_offset = code_buffer()->create_unique_offset();
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
+    // call_target_va is not used in the CreateCall, just create one for no use
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll);
+    // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
+    // otherwise, poll_type relocation record can't be created. hence patching adr logic is a little different
+    // than call site in CallSiteExtractorPlugin
+    stack()->CreateSetLastJavaFrameWithPlaceholderNoPC(last_java_pc_va);
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+    llvm::FunctionCallee poll_fn = mod->getOrInsertFunction("gc.safepoint_poll", poll_ftype);
+    builder()->CreateCall(poll_ftype, poll_fn.getCallee(), {});
+    stack()->CreateResetLastJavaFrameWithNoPC();
 
   current_state()->set_has_safepointed(true);
 }

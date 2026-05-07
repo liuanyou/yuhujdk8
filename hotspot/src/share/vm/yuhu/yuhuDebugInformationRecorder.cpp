@@ -23,9 +23,19 @@
  */
 
 #include "precompiled.hpp"
-#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "runtime/os.hpp"
+
+#pragma push_macro("assert")
+#ifdef assert
+#undef assert
+#endif
+
 #include "yuhu/llvmHeaders.hpp"
+#include "llvm/Object/StackMapParser.h"
+
+#pragma pop_macro("assert")
+
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 
 // Initialize static TLS index
 int YuhuDebugInformationRecorder::_tls_index = -1;
@@ -188,4 +198,96 @@ void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offse
     _stack_map_location_kinds->at(index)->append(location_kind);
     _stack_map_location_reg_nums->at(index)->append(location_reg_num);
     _stack_map_location_offsets->at(index)->append(location_offset);
+}
+
+// 将虚拟 PC offset 转换为真实 PC offset，并将结果添加到真实的 DebugInformationRecorder
+void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
+                                      ciMethod* method,
+                                      int plus_offset,
+                                      int frame_size) {
+    using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
+    GrowableArray<uint32_t> processed_virtual_offsets;
+    // should iterate call sites, but instruction offsets are ascending, so iterate instruction offsets
+    for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
+        // instruction_offset here is offset in llvm machine code
+        uint32_t instruction_offset = _stack_map_instruction_offsets->at(i);
+        // since safepoint poll call is after stack frame is setup and arguments are copied,
+        // the 9th, 10th arguments before current stack frame shouldn't need GC support
+        int arg_count = 0;
+        auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
+                                  YuhuStack::oopmap_slot_munge(arg_count));
+
+        // If it is not a call site, then it should contain no live oops
+        if (!_call_site_return_pc_offset->contains(instruction_offset)) {
+            if (YuhuTraceOffset) {
+                tty->print_cr("Yuhu: Found no call site by instruction offset=%d", instruction_offset);
+            }
+            for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
+                uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
+                assert(kind != static_cast<uint8_t>(StackMapParser::LocationKind::Direct)
+                       && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Register)
+                       && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Indirect), "Should contain no live oops");
+            }
+            continue;
+        }
+
+        if (YuhuTraceOffset) {
+            tty->print_cr("Yuhu: Found call site by instruction offset=%d", instruction_offset);
+        }
+
+        // add plus_offset to get offset in code cache
+        int pc_offset = instruction_offset + plus_offset;
+        uint64_t helper_address = _call_site_helper_addresses->at(_call_site_return_pc_offset->find(instruction_offset));
+        if (helper_address == (uint64_t)&gc_safepoint_poll) {
+            if (YuhuTraceOffset) {
+                tty->print_cr("Yuhu: Call site is safepoint poll call");
+            }
+            pc_offset -= 8; // pc_offset should be ldr instruction, not adrp instruction
+        }
+
+        GrowableArray<int32_t> processed_stack_offsets;
+        GrowableArray<uint32_t> processed_register_nums;
+
+        for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
+            uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
+            if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct)) {
+                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                // Usually it should be sp register, sometimes it uses fp register,
+                // but don't know when, assume it is always sp register
+                assert(reg_num == 31, "Should be sp register");
+                // offset in bytes
+                int32_t offset_in_bytes = _stack_map_location_offsets->at(i)->at(j);
+                if (processed_stack_offsets.contains(offset_in_bytes)) {
+                    continue;
+                }
+                processed_stack_offsets.append(offset_in_bytes);
+                oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
+            } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                if (processed_register_nums.contains(reg_num)) {
+                    continue;
+                }
+                processed_register_nums.append(reg_num);
+                oopmap->set_oop(VMRegImpl::as_VMReg(reg_num << 1));
+            } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                assert(reg_num == 31, "Should be sp register");
+                // offset in bytes
+                int32_t offset_in_bytes = _stack_map_location_offsets->at(i)->at(j);
+                if (processed_stack_offsets.contains(offset_in_bytes)) {
+                    continue;
+                }
+                processed_stack_offsets.append(offset_in_bytes);
+                oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
+            }
+        }
+        // call sites need an oopmap even there is no live oop
+        real_recorder->add_safepoint(pc_offset, oopmap);
+        real_recorder->end_safepoint(pc_offset);
+        // note down processed virtual offset
+        processed_virtual_offsets.append(_call_site_virtual_offsets->at(_call_site_return_pc_offset->find(instruction_offset)));
+    }
+    for (int i = 0; i < _call_site_virtual_offsets->length(); ++i) {
+        assert(processed_virtual_offsets.contains(_call_site_virtual_offsets->at(i)), "Every call site should be processed");
+    }
 }

@@ -157,11 +157,15 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
                     if (YuhuTraceMachineCode) {
                         errs() << "[StackMap] Ignore Constant" << "\n";
                     }
+                    // record every location, otherwise call site may not find corresponding stack map
+                    YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset, static_cast<uint8_t>(Kind), 0, 0);
                 } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
                     errs() << "[StackMap] ConstantIndex: " << LocationRecord.getConstantIndex() << "\n";
                     if (YuhuTraceMachineCode) {
                         errs() << "[StackMap] Ignore ConstantIndex" << "\n";
                     }
+                    // record every location, otherwise call site may not find corresponding stack map
+                    YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset, static_cast<uint8_t>(Kind), 0, 0);
                 }
             }
         }

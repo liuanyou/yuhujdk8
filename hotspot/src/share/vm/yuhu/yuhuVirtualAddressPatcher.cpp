@@ -147,7 +147,7 @@ bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
                     // Found last_Java_pc placeholder
                     out_match.last_java_pc_va = ((uint64_t)mid16_31 << 16) | low16;
                     out_match.last_java_pc_placeholder_offset = offset;
-                    out_match.last_java_pc_adr_offset = offset + 8;
+                    out_match.last_java_pc_adr_offset = offset + 8; // if it is safepoint poll call, there is no adr instruction, so last_java_pc_adr_offset is not used
 
                     // Verify same virtual_offset
                     if (out_match.virtual_offset == 0) {

@@ -1,8 +1,6 @@
 #ifndef SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP
 #define SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP
 
-#include <utility>
-
 #include "code/debugInfoRec.hpp"
 #include "compiler/oopMap.hpp"
 #include "ci/ciMethod.hpp"
@@ -11,10 +9,14 @@
 #include "yuhu/yuhu_globals.hpp"
 #include "runtime/threadLocalStorage.hpp"
 #include "yuhu/yuhuStack.hpp"
+#include "utilities/debug.hpp"
 
 namespace llvm {
     class Module;
 }
+
+// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
+extern "C" void gc_safepoint_poll();
 
 // YuhuDebugInformationRecorder: Thread-local recorder for collecting debug information
 // and call site metadata during LLVM IR generation
@@ -43,8 +45,8 @@ private:
   // Stack map statepoint locations
   GrowableArray<uint32_t>* _stack_map_instruction_offsets;
   GrowableArray<GrowableArray<uint8_t>*>* _stack_map_location_kinds;
-  GrowableArray<GrowableArray<uint32_t>*>* _stack_map_location_reg_nums;
-  GrowableArray<GrowableArray<int32_t>*>* _stack_map_location_offsets; // 0 is populated for Register kind
+  GrowableArray<GrowableArray<uint32_t>*>* _stack_map_location_reg_nums; // for Constant and ConstantIndex kind, it is 0
+  GrowableArray<GrowableArray<int32_t>*>* _stack_map_location_offsets; // for Register, Constant and ConstantIndex kind, it is 0
 
   // Mangled function name
   std::string _mangled_func_name;
@@ -188,41 +190,10 @@ public:
       _virtual_offsets->at_put(j, temp);
   }
 
-  // 将虚拟 PC offset 转换为真实 PC offset，并将结果添加到真实的 DebugInformationRecorder
   void convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                        ciMethod* method,
                                        int plus_offset,
-                                       int frame_size) {
-      for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
-          // instruction_offset here is offset in llvm machine code
-          uint32_t instruction_offset = _stack_map_instruction_offsets->at(i);
-          int arg_count = 0;
-          if (method->arg_size() > 8) {
-              arg_count = method->arg_size() - 8;
-          }
-          auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
-                                    YuhuStack::oopmap_slot_munge(arg_count));
-          for (int j = 8; j < method->arg_size(); ++j) {
-              ciType* type = method->signature()->type_at(j);
-              if (!type->is_primitive_type()) {
-                  VMReg reg = VMRegImpl::stack2reg((j - 8) * 2);
-                  oopmap->set_oop(reg);
-              }
-          }
-
-          if (YuhuTraceOffset) {
-              if (_call_site_return_pc_offset->contains(instruction_offset)) {
-                  tty->print_cr("Yuhu: Found call site by instruction offset=%d", instruction_offset);
-              } else {
-                  tty->print_cr("Yuhu: Found no call site by instruction offset=%d", instruction_offset);
-              }
-          }
-          // add plus_offset to get offset in code cache
-          int pc_offset = instruction_offset + plus_offset;
-          real_recorder->add_safepoint(pc_offset, oopmap);
-          real_recorder->end_safepoint(pc_offset);
-      }
-  }
+                                       int frame_size);
 };
 
 #endif // SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP

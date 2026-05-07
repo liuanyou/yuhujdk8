@@ -39,6 +39,7 @@
 #include "yuhu/yuhuValue.hpp"
 
 class YuhuTopLevelBlock : public YuhuBlock {
+ friend class YuhuFunction;
  public:
   YuhuTopLevelBlock(YuhuFunction* function, ciTypeFlow::Block* ciblock)
     : YuhuBlock(function),

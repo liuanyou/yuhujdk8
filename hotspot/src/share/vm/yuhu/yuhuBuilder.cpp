@@ -1455,6 +1455,32 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return imm << 12;
     };
 
+    auto patch_new_adrp_polling_page = [](uint32_t* instr, uint64_t function_address) -> bool {
+        // Calculate new page offset for function_address
+        uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
+
+        uint64_t adrp_addr = (uint64_t)instr;  // Address of ADRP instruction in CodeCache
+        uint64_t func_page = function_address & ~0xFFFULL;  // Function's page address
+        uint64_t new_pc_page = adrp_addr & ~0xFFFULL;  // ADRP's PC page
+
+        int64_t page_diff = (int64_t)(func_page - new_pc_page) >> 12;  // Page difference
+
+        // Encode new ADRP
+        uint32_t new_adrp = (instr[0] & 0x9F000000) | rd;  // Keep opcode and Rd
+        new_adrp |= (page_diff & 0x3) << 29;  // immlo (bits [30:29])
+        new_adrp |= ((page_diff >> 2) & 0x7FFFF) << 5;  // immhi (bits [23:5])
+
+        instr[0] = new_adrp;
+
+        // Patch ldr instruction
+        uint32_t ldr_wzr = 0xB9400000 | 31 | (rd << 5); // Rd = wzr (31), Rn = rd
+
+        instr[1] = ldr_wzr;
+
+        instr[2] = 0xD503201F; // nop instruction
+        return true;
+    };
+
     auto patch_new_adrp = [](uint32_t* instr, uint64_t function_address) -> bool {
         // Calculate new page offset for function_address
         uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
@@ -1547,28 +1573,39 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(is_adrp_pattern(instr), "should be adrp instructions");
 
-            // Before patch :
-            //
-            // adrp   x8, <GOT_page>           # Points to GOT
-            // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
-            // <nop or other>
-            // blr    x8                       # Branches to function
-
-            // After patch :
-            //
-            // adrp   x8, <function_page>      # Points to function's page
-            // add    x8, x8, #<page_offset>   # Add offset within page
-            // <nop or other>
-            // blr    x8                       # Branches to function
-
-            // Patch adrp instruction
-            bool new_adrp_patched = patch_new_adrp(instr, function_address);
-            assert(new_adrp_patched, "should patch successfully");
             // Create relocation record
             uint64_t safepoint_poll_addr = (uint64_t)&gc_safepoint_poll;
             if (function_address == safepoint_poll_addr) {
+                // Before patch :
+                //
+                // adrp   x8, <GOT_page>           # Points to GOT
+                // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
+                // blr    x8                       # Branches to function
+
+                // After patch :
+                //
+                // adrp   x8, <polling_page>       # Points to polling page
+                // ldr    wzr, [x8]                # Loads polling page
+                // nop                             # nop
+
+                // Patch adrp instruction
+                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page());
+                assert(new_adrp_polling_page_patched, "should patch successfully");
                 cb->relocate((address)instr, relocInfo::poll_type);
             } else {
+                // Before patch :
+                //
+                // adrp   x8, <GOT_page>           # Points to GOT
+                // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
+                // blr    x8                       # Branches to function
+
+                // After patch :
+                //
+                // adrp   x8, <function_page>      # Points to function's page
+                // add    x8, x8, #<page_offset>   # Add offset within page
+                // blr    x8                       # Branches to function
+                bool new_adrp_patched = patch_new_adrp(instr, function_address);
+                assert(new_adrp_patched, "should patch successfully");
                 cb->relocate((address)instr, relocInfo::runtime_call_type);
             }
             adrp_count++;

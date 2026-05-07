@@ -110,11 +110,8 @@ class YuhuStack : public YuhuCompileInvariants {
 
  public:
   void CreateSetLastJavaFrame();
-  
-  // OLD: CreateSetLastJavaFrameWithPlaceholder - stores a placeholder value
-  // that will be patched by JITLink plugin with the actual return address
-  // DEPRECATED: Use CreateSetLastJavaFrameWithPlaceholderPC() instead
-  void CreateSetLastJavaFrameWithPlaceholder(int virtual_offset);
+
+  void CreateSetLastJavaFrameWithPlaceholderNoPC(uint64_t virtual_address);
   
   // NEW: CreateSetLastJavaFrameWithPlaceholderPC - stores a 64-bit virtual address placeholder
   // that will be patched by JITLink plugin with the actual return address
@@ -122,6 +119,8 @@ class YuhuStack : public YuhuCompileInvariants {
   void CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address);
   
   void CreateResetLastJavaFrame();
+
+  void CreateResetLastJavaFrameWithNoPC();
 
  private:
   void CreateAssertLastJavaSPIsNull() const PRODUCT_RETURN;
