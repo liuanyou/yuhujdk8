@@ -302,11 +302,11 @@ class YuhuTopLevelBlock : public YuhuBlock {
                           int           exception_action,
                           llvm::Type*   return_type) {
     // NEW: Get unique virtual offset for this call site (MUST be before decache)
-    int virtual_offset = code_buffer()->create_unique_offset();
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
     
     // Step 2: Create dual virtual addresses with same virtual_offset
     uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
     
     // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;

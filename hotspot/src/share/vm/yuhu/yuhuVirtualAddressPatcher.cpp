@@ -82,13 +82,13 @@ bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
 
   auto is_mov_64_or_movz_64 = [](uint32_t inst) -> bool {
       // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
-      // movz   x8, #0x20, lsl #0
-      // movk   x8, #0xbeef, lsl #16
-      // movk   x8, #0xbeef, lsl #32
+      // movz   x8, #0xbeef, lsl #0
+      // movk   x8, #0x20, lsl #16
+      // movk   x8, #0x20, lsl #32
       // or
-      // mov    x8, #0x20
-      // movk   x8, #0xbeef, lsl #16
-      // movk   x8, #0xbeef, lsl #32
+      // mov    x8, #0xbeef
+      // movk   x8, #0x20, lsl #16
+      // movk   x8, #0x20, lsl #32
       bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
       bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64) && ((inst >> 21) & 0x3) == 0;
       return is_mov_64 || is_movz_64;
@@ -166,33 +166,31 @@ bool YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
 
         // Check next instruction for movk
         uint32_t next_inst = instr[1];
-        if ((next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+        if (low16 == 0xBEEF && (next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
             uint32_t next_shift = (next_inst >> 21) & 0x3;
             if (next_shift == 1) {
                 uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
-                // Check virtual address for call target
-                if (mid16_31 == 0xBEEF) {
-                    uint32_t next_next_inst = instr[2];
-                    // Check another movk instruction
-                    if ((next_next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
-                        uint32_t next_next_shift = (next_next_inst >> 21) & 0x3;
-                        if (next_next_shift == 2) {
-                            uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
-                            if (mid32_47 == 0xBEEF) {
-                                // Found call target placeholder
-                                out_match.call_target_va = ((uint64_t)mid32_47 << 32) | ((uint64_t)mid16_31 << 16) | low16;
-                                out_match.call_target_placeholder_offset = offset;
 
-                                // Verify same virtual_offset
-                                if (out_match.virtual_offset == 0) {
-                                    out_match.virtual_offset = low16;
-                                } else if (out_match.virtual_offset != low16) {
-                                    // Mismatched virtual_offsets - this is a critical error
-                                    assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
-                                    return false;  // Early exit in all builds
-                                }
-                                found_call_target = true;
+                uint32_t next_next_inst = instr[2];
+                // Check another movk instruction
+                if ((next_next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+                    uint32_t next_next_shift = (next_next_inst >> 21) & 0x3;
+                    if (next_next_shift == 2) {
+                        uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
+                        if (mid32_47 == mid16_31) {
+                            // Found call target placeholder
+                            out_match.call_target_va = ((uint64_t)mid32_47 << 32) | ((uint64_t)mid16_31 << 16) | low16;
+                            out_match.call_target_placeholder_offset = offset;
+
+                            // Verify same virtual_offset
+                            if (out_match.virtual_offset == 0) {
+                                out_match.virtual_offset = mid16_31;
+                            } else if (out_match.virtual_offset != mid16_31) {
+                                // Mismatched virtual_offsets - this is a critical error
+                                assert(out_match.virtual_offset == mid16_31, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                                return false;  // Early exit in all builds
                             }
+                            found_call_target = true;
                         }
                     }
                 }
@@ -237,13 +235,13 @@ void YuhuVirtualAddressScanner::patch_call_target_instructions(
   uint16_t imm2 = (new_value >> 32) & 0xFFFF;  // Bits 47-32
 
     // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
-    // movz   x8, #0x20, lsl #0
-    // movk   x8, #0xbeef, lsl #16
-    // movk   x8, #0xbeef, lsl #32
+    // movz   x8, #0xbeef, lsl #0
+    // movk   x8, #0x20, lsl #16
+    // movk   x8, #0x20, lsl #32
     // or
-    // mov    x8, #0x20
-    // movk   x8, #0xbeef, lsl #16
-    // movk   x8, #0xbeef, lsl #32
+    // mov    x8, #0xbeef
+    // movk   x8, #0x20, lsl #16
+    // movk   x8, #0x20, lsl #32
   
   uint32_t* instructions = (uint32_t*)(code_buffer + movz_offset);
   

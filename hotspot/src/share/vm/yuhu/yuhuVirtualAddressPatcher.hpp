@@ -77,17 +77,13 @@ class YuhuVirtualAddressScanner : public AllStatic {
     return (va & 0xFFFF0000) == LAST_JAVA_PC_MAGIC;
   }
   
-  static bool is_call_target_placeholder(uint64_t va) {
-    return (va & 0xFFFFFFFF0000) == CALL_TARGET_MAGIC;
-  }
-  
   // Extract virtual_offset from a virtual address
   static uint64_t extract_virtual_offset_from_virtual_last_java_pc(uint64_t va) {
     return va & 0x0000FFFF;
   }
 
   static uint64_t extract_virtual_offset_from_virtual_call_target(uint64_t va) {
-    return va & 0x00000000FFFF;
+    return (va & 0x0000FFFF0000) >> 16;
   }
 };
 

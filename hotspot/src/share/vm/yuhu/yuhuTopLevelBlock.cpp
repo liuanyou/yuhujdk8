@@ -670,9 +670,9 @@ void YuhuTopLevelBlock::maybe_add_safepoint() {
   if (current_state()->has_safepointed())
     return;
 
-    int virtual_offset = code_buffer()->create_unique_offset();
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
     uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
     // call_target_va is not used in the CreateCall, just create one for no use
     YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll);
     // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
@@ -1467,11 +1467,11 @@ void YuhuTopLevelBlock::do_call() {
   decache_for_Java_call(call_method);
 
   // NEW: Get unique virtual offset for this call site (MUST be before creating placeholders)
-  int virtual_offset = code_buffer()->create_unique_offset();
+  uint64_t virtual_offset = code_buffer()->create_unique_offset();
   
   // NEW: Create dual virtual addresses with same virtual_offset
   uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = CALL_TARGET_MAGIC | virtual_offset;   // For call target
+  uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
   
   // NEW: Store last_Java_pc placeholder
   stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
