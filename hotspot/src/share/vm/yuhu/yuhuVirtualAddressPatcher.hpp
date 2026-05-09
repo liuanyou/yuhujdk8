@@ -29,16 +29,35 @@
 #include "utilities/globalDefinitions.hpp"
 #include "yuhu/yuhu_globals.hpp"
 
+// AArch64 instruction encodings
+// movz (move with zero): 0xD2800000 | (imm16 << 5) | rd | (shift << 21)
+//   shift: 0=lsl #0, 1=lsl #16, 2=lsl #32, 3=lsl #48
+// movk (move and keep):  0xF2800000 | (imm16 << 5) | rd | (shift << 21)
+// these mask and pattern are not that exact, still needs to check shift,
+// so put them in specific file instead of yuhu_globals.hpp
+static const uint32_t MOVZ_MASK = 0xFF800000;
+static const uint32_t MOVZ_PATTERN_64 = 0xD2800000;
+static const uint32_t MOVZ_PATTERN_32 = 0x52800000;
+
+static const uint32_t MOVK_MASK = 0xFF800000;
+static const uint32_t MOVK_PATTERN_64 = 0xF2800000;
+static const uint32_t MOVK_PATTERN_32 = 0x72800000;
+
+// MOV (immediate) is encoded as ORR (immediate)
+static const uint32_t MOV_IMM_MASK = 0xFF800000;
+static const uint32_t MOV_IMM_PATTERN_32 = 0x2A000000;
+static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
+
 // Information about matched placeholders for a single statepoint
 struct VirtualAddressMatch {
   uint64_t virtual_offset;              // The shared virtual offset (e.g., 0x1000)
   
   uint64_t last_java_pc_va;             // Last Java PC placeholder (e.g., 0xDEAD1000)
   uint64_t last_java_pc_placeholder_offset;  // Offset of movz instruction for last_Java_pc
-  uint64_t last_java_pc_adr_offset;     // Offset of adr instruction (for adr+marker approach)
   
   uint64_t call_target_va;              // Call target placeholder (e.g., 0xBEEF1000)
   uint64_t call_target_placeholder_offset;   // Offset of movz instruction for call target
+  uint64_t call_target_blr_offset; // Offset of blr instruction
   bool safepoint_poll_call; // true means it is safepoint poll call, otherwise, normal java calls, VM calls, and helper calls
 };
 
@@ -53,6 +72,15 @@ class YuhuVirtualAddressScanner : public AllStatic {
     uint64_t max_scan_distance,
     VirtualAddressMatch& out_match
   );
+
+    // Scan forwards from statepoint call to find both placeholders
+    // Returns true if both placeholders are found and share the same virtual_offset
+    static bool scan_forwards_for_call_targets(
+            const uint8_t* code_buffer,
+            uint64_t statepoint_call_offset,
+            uint64_t max_scan_distance,
+            VirtualAddressMatch& out_match
+    );
   
   // Patch call target movz/movk instructions with a new 64-bit value
   // Handles 3-instruction pattern: movz (lsl #48) + movk (lsl #16) + movk (no shift)
@@ -84,6 +112,43 @@ class YuhuVirtualAddressScanner : public AllStatic {
 
   static uint64_t extract_virtual_offset_from_virtual_call_target(uint64_t va) {
     return (va & 0x0000FFFF0000) >> 16;
+  }
+
+  static bool is_placeholder_pc_pattern(uint32_t* instr) {
+      auto is_mov_32_or_movz_32 = [](uint32_t inst) -> bool {
+          // expected instruction sequences for last java pc
+          // mov    w19, #0x20
+          // movk   w19, #0xdead, lsl #16
+          bool is_mov_32 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_32);
+          bool is_movz_32 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_32) && ((inst >> 21) & 0x3) == 0;
+          return is_mov_32 || is_movz_32;
+      };
+
+      if (instr == NULL) {
+          return false;
+      }
+
+      uint32_t inst = instr[0];
+
+      if (is_mov_32_or_movz_32(inst)) {
+          uint32_t low16 = (inst >> 5) & 0xFFFF;
+          if (low16 == 0xBEEF) {
+              return false;
+          }
+          // Check next instruction for movk
+          uint32_t next_inst = instr[1];
+          if ((next_inst & MOVK_MASK) == MOVK_PATTERN_32) {
+              uint32_t next_shift = (next_inst >> 21) & 0x3;
+              if (next_shift == 1) {
+                  uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                  // Check virtual address for last java pc
+                  if (mid16_31 == 0xDEAD) {
+                      return true;
+                  }
+              }
+          }
+      }
+      return false;
   }
 };
 

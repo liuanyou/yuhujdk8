@@ -15,6 +15,13 @@ namespace llvm {
     class Module;
 }
 
+struct CallSiteEntry {
+    uint64_t virtual_offset;
+    uint64_t virtual_address;
+    uint64_t helper_address;
+    uint64_t return_pc_offset;
+};
+
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
 
@@ -37,10 +44,7 @@ private:
 
   // Call site metadata for JITLink correlation
   // Maps virtual_offset → virtual_address → helper_address
-  GrowableArray<int>* _call_site_virtual_offsets;
-  GrowableArray<uint64_t>* _call_site_virtual_addresses;
-  GrowableArray<uint64_t>* _call_site_helper_addresses;
-  GrowableArray<uint64_t>* _call_site_return_pc_offset; // will be resolved later in OopMapExtractorPlugin
+  GrowableArray<CallSiteEntry*>* _call_site_entries;
 
   // Stack map statepoint locations
   GrowableArray<uint32_t>* _stack_map_instruction_offsets;
@@ -100,45 +104,51 @@ public:
   void embed_call_site_metadata();
   
   int get_call_site_count() const {
-    return _call_site_virtual_offsets ? _call_site_virtual_offsets->length() : 0;
+    return _call_site_entries ? _call_site_entries->length() : 0;
   }
   
   int get_call_site_virtual_offset(int index) const {
     assert(index < get_call_site_count(), "index out of bounds");
-    return _call_site_virtual_offsets->at(index);
+    return _call_site_entries->at(index)->virtual_offset;
   }
   
   uint64_t get_call_site_virtual_address(int index) const {
     assert(index < get_call_site_count(), "index out of bounds");
-    return _call_site_virtual_addresses->at(index);
+    return _call_site_entries->at(index)->virtual_address;
   }
   
   uint64_t get_call_site_helper_address(int index) const {
     assert(index < get_call_site_count(), "index out of bounds");
-    return _call_site_helper_addresses->at(index);
+    return _call_site_entries->at(index)->helper_address;
   }
   
   // NEW: Look up virtual address by virtual_offset (not array index)
-  uint64_t get_call_site_virtual_address_by_offset(int virtual_offset) const {
-    if (!_call_site_virtual_offsets) return 0;
-    int index = _call_site_virtual_offsets->find(virtual_offset);
+  uint64_t get_call_site_virtual_address_by_offset(uint64_t virtual_offset) const {
+    if (!_call_site_entries) return 0;
+      int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->virtual_offset;
+      });
     if (index == -1) return 0;
-    return _call_site_virtual_addresses->at(index);
+    return _call_site_entries->at(index)->virtual_address;
   }
   
   // NEW: Look up helper address by virtual_offset (not array index)
-  uint64_t get_call_site_helper_address_by_offset(int virtual_offset) const {
-    if (!_call_site_virtual_offsets) return 0;
-    int index = _call_site_virtual_offsets->find(virtual_offset);
+  uint64_t get_call_site_helper_address_by_offset(uint64_t virtual_offset) const {
+    if (!_call_site_entries) return 0;
+      int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->virtual_offset;
+      });
     if (index == -1) return 0;
-    return _call_site_helper_addresses->at(index);
+    return _call_site_entries->at(index)->helper_address;
   }
 
-  void update_call_site_return_pc_offset(int virtual_offset, uint64_t return_pc_offset) const {
-      if (!_call_site_virtual_offsets) return;
-      int index = _call_site_virtual_offsets->find(virtual_offset);
+  void update_call_site_return_pc_offset(uint64_t virtual_offset, uint64_t return_pc_offset) const {
+      if (!_call_site_entries) return;
+      int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->virtual_offset;
+      });
       if (index == -1) return;
-      _call_site_return_pc_offset->at_put(index, return_pc_offset);
+      _call_site_entries->at(index)->return_pc_offset = return_pc_offset;
   }
 
   // stack map related functions

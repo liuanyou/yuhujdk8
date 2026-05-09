@@ -226,22 +226,19 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
 
             // For now, scan for call instructions (blr) and look backwards for placeholders
+            for (size_t offset = 0; offset + 4 <= Size; offset += 4) {
 
-            // Simple approach: scan for blr instructions and look backwards
-            for (size_t offset = 12; offset + 4 <= Size; offset += 4) {
-                uint32_t inst = *(uint32_t*)(CodeData + offset);
-
-                // Check if this is a blr instruction: 0xD63F0000 | rn
-                if ((inst & BLR_MASK) == BLR_PATTERN) {
-                    // Found a blr instruction, scan backwards for placeholders
+                // Let's scan forward. Coz sometime llvm uses b instruction to jump to common machine code in order to share machine code for multiple call targets,
+                // and blr instruction is not always right after movz/movk sequences.
+                // Need 2 instructions at least.
+                if (offset + 8 <= Size && YuhuVirtualAddressScanner::is_placeholder_pc_pattern((uint32_t*)(CodeData + offset))) {
                     VirtualAddressMatch match;
 
-                    bool found = YuhuVirtualAddressScanner::scan_backwards_for_placeholders(
-                        CodeData,
-                        offset,
-                        200,  // Max scan distance: 200 bytes ~ 50 instructions
-                        match
-                    );
+                    bool found = YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
+                            CodeData,
+                            offset,
+                            offset + 200 <= Size ? 200 : Size - offset,
+                            match);
 
                     if (found && !match.safepoint_poll_call) {
                         // Validate 1-1-1 relationship
@@ -281,10 +278,10 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                         // Calculate actual offsets for patching
                         // The return address is the instruction AFTER the bl
-                        uint64_t return_pc_offset = offset + 4;
+                        uint64_t return_pc_offset = match.call_target_blr_offset + 4;
 
                         // Look up the actual helper address from virtual_offset mapping
-                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
+                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset);
                         if (helper_addr == 0) {
                             if (YuhuTraceMachineCode) {
                                 errs() << "[CallSite Extractor] ERROR: No helper address for virtual_offset "
@@ -294,10 +291,10 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         }
 
                         // update return_pc_offset by virtual_offsets
-                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, block_offset + return_pc_offset);
+                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset(virtual_offset, block_offset + return_pc_offset);
 
                         // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
-                        uint64_t adr_offset = match.last_java_pc_adr_offset;
+                        uint64_t adr_offset = match.last_java_pc_placeholder_offset + 8;
 
                         // Calculate absolute addresses for patching
                         // BaseAddr is the load address of this section (from JITLink)
@@ -313,7 +310,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         );
 
                         YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
-                                                                                  YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset));
+                                                                                  YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset));
 
                         if (YuhuTraceMachineCode) {
                             errs() << "  [OK] Patched adr instruction at offset " << adr_offset
@@ -332,7 +329,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         uint64_t virtual_offset = ljpc_offset;
                         // Calculate actual offsets for patching
                         // The return address is the instruction AFTER the bl
-                        uint64_t return_pc_offset = offset + 4;
+                        uint64_t return_pc_offset = match.call_target_blr_offset + 4;
 
                         // Look up the actual helper address from virtual_offset mapping
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);

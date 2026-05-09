@@ -495,7 +495,7 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address
     llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
         asm_type,
         asm_string,
-        "r",  // Constraint string
+        "r,~{x19},~{x20},~{memory}",  // Constraint string
         true, // hasSideEffects
         true  // isAlignStack
     );
@@ -549,7 +549,7 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholderNoPC(uint64_t virtual_addre
     llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "",  // Constraint string
+            "~{x19}",  // Constraint string
             true, // hasSideEffects
             true  // isAlignStack
     );

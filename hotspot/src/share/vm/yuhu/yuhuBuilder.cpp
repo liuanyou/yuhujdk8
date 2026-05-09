@@ -668,7 +668,7 @@ void YuhuBuilder::CreateSaveX0ToX22() {
   llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
     asm_type,
     "mov x22, x0",  // Move x0 to x22
-    "",             // No outputs
+    "~{x22}",             // No outputs
     true,           // Has side effects
     false,          // Is align stack: no
     llvm::InlineAsm::AD_ATT
@@ -740,9 +740,9 @@ void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {
   llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
     asm_type,
     "mov sp, $0",  // AArch64 assembly: move input to SP register (x31)
-    "r",           // Constraint: "r" means input from a general-purpose register
+    "r,~{sp}",           // Constraint: "r" means input from a general-purpose register
     true,          // Has side effects: yes (modifies SP)
-    false,         // Is align stack: no
+    true,         // Is align stack: no
     llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
   );
   
@@ -1718,7 +1718,7 @@ void YuhuBuilder::CreateSaveCalleeSavedRegisters() {
     "stp x19, x20, [sp, #80]\n\t"
     "stp x23, x25, [sp, #96]\n\t"
     "str x27, [sp, #112]",
-    "~{memory}", true, false, llvm::InlineAsm::AD_ATT);
+    "~{memory}", true, true, llvm::InlineAsm::AD_ATT);
   
   CreateCall(asm_type, save_asm, {});
 }
@@ -1733,7 +1733,7 @@ void YuhuBuilder::CreateRestoreCalleeSavedRegisters() {
     "ldr x27, [sp, #112]\n\t"
     "ldp x23, x25, [sp, #96]\n\t"
     "ldp x19, x20, [sp, #80]",
-    "~{memory}", true, false, llvm::InlineAsm::AD_ATT);
+    "~{x19},~{x20},~{x23},~{x25},~{x27},~{memory}", true, false, llvm::InlineAsm::AD_ATT);
   
   CreateCall(asm_type, restore_asm, {});
 }

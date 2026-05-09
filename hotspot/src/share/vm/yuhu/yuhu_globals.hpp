@@ -102,6 +102,8 @@ const int YUHU_CALLEE_SAVED_SAVE_AREA = 6;  // 48 bytes
 // AArch64 instruction encodings
 const uint32_t BLR_MASK = 0xFFFFFC1F;
 const uint32_t BLR_PATTERN = 0xD63F0000;
+const uint32_t B_MASK = 0xFC000000;
+const uint32_t B_PATTERN = 0x14000000;
 
 // Virtual address magic numbers for placeholder identification
 const uint64_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;

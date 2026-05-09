@@ -52,11 +52,8 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   _frame_locals = new GrowableArray<GrowableArray<ScopeValue*>*>();
   _frame_expressions = new GrowableArray<GrowableArray<ScopeValue*>*>();
   _frame_monitors = new GrowableArray<GrowableArray<MonitorValue*>*>();
-  
-  _call_site_virtual_offsets = new GrowableArray<int>();
-  _call_site_virtual_addresses = new GrowableArray<uint64_t>();
-  _call_site_helper_addresses = new GrowableArray<uint64_t>();
-  _call_site_return_pc_offset = new GrowableArray<uint64_t>();
+
+  _call_site_entries = new GrowableArray<CallSiteEntry*>();
 
   _stack_map_instruction_offsets = new GrowableArray<uint32_t>();
   _stack_map_location_kinds = new GrowableArray<GrowableArray<uint8_t>*>();
@@ -135,10 +132,12 @@ void YuhuDebugInformationRecorder::end_safepoint(int virtual_pc_offset) {
 void YuhuDebugInformationRecorder::register_call_site(int virtual_offset, 
                                                        uint64_t virtual_address, 
                                                        uint64_t helper_address) {
-  _call_site_virtual_offsets->append(virtual_offset);
-  _call_site_virtual_addresses->append(virtual_address);
-  _call_site_helper_addresses->append(helper_address);
-  _call_site_return_pc_offset->append(0);
+    CallSiteEntry* call_site_entry = new CallSiteEntry();
+    call_site_entry->virtual_offset = virtual_offset;
+    call_site_entry->virtual_address = virtual_address;
+    call_site_entry->helper_address = helper_address;
+    call_site_entry->return_pc_offset = 0;
+    _call_site_entries->append(call_site_entry);
 }
 
 // Embed call site mappings as LLVM named metadata
@@ -200,44 +199,43 @@ void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offse
     _stack_map_location_offsets->at(index)->append(location_offset);
 }
 
-// 将虚拟 PC offset 转换为真实 PC offset，并将结果添加到真实的 DebugInformationRecorder
 void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                       ciMethod* method,
                                       int plus_offset,
                                       int frame_size) {
     using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
-    GrowableArray<uint32_t> processed_virtual_offsets;
-    // should iterate call sites, but instruction offsets are ascending, so iterate instruction offsets
-    for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
-        // instruction_offset here is offset in llvm machine code
-        uint32_t instruction_offset = _stack_map_instruction_offsets->at(i);
+    GrowableArray<uint32_t> processed_instruction_offsets;
+
+    // sort by return_pc_offset, oopmap should be registered in ascending order
+    _call_site_entries->sort([](CallSiteEntry** a, CallSiteEntry** b) -> int {
+        if ((*a)->return_pc_offset < (*b)->return_pc_offset) return -1;
+        if ((*a)->return_pc_offset > (*b)->return_pc_offset) return  1;
+        return 0;
+    });;
+
+    for (int i = 0; i < _call_site_entries->length(); ++i) {
+        CallSiteEntry* call_site_entry = _call_site_entries->at(i);
+        uint64_t return_pc_offset = call_site_entry->return_pc_offset;
+
+        if (processed_instruction_offsets.contains(return_pc_offset)) {
+            continue;
+        }
+
         // since safepoint poll call is after stack frame is setup and arguments are copied,
-        // the 9th, 10th arguments before current stack frame shouldn't need GC support
+        // the 9th, 10th arguments before current stack frame need no GC support
         int arg_count = 0;
         auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
                                   YuhuStack::oopmap_slot_munge(arg_count));
 
-        // If it is not a call site, then it should contain no live oops
-        if (!_call_site_return_pc_offset->contains(instruction_offset)) {
-            if (YuhuTraceOffset) {
-                tty->print_cr("Yuhu: Found no call site by instruction offset=%d", instruction_offset);
-            }
-            for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
-                uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
-                assert(kind != static_cast<uint8_t>(StackMapParser::LocationKind::Direct)
-                       && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Register)
-                       && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Indirect), "Should contain no live oops");
-            }
-            continue;
-        }
+        assert(_stack_map_instruction_offsets->contains(return_pc_offset), "Call site should contain stack map");
 
         if (YuhuTraceOffset) {
-            tty->print_cr("Yuhu: Found call site by instruction offset=%d", instruction_offset);
+            tty->print_cr("Yuhu: Found stack map site by return pc offset=%d", return_pc_offset);
         }
 
         // add plus_offset to get offset in code cache
-        int pc_offset = instruction_offset + plus_offset;
-        uint64_t helper_address = _call_site_helper_addresses->at(_call_site_return_pc_offset->find(instruction_offset));
+        int pc_offset = return_pc_offset + plus_offset;
+        uint64_t helper_address = call_site_entry->helper_address;
         if (helper_address == (uint64_t)&gc_safepoint_poll) {
             if (YuhuTraceOffset) {
                 tty->print_cr("Yuhu: Call site is safepoint poll call");
@@ -248,32 +246,34 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         GrowableArray<int32_t> processed_stack_offsets;
         GrowableArray<uint32_t> processed_register_nums;
 
-        for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
-            uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
+        int smio_index = _stack_map_instruction_offsets->find(return_pc_offset);
+
+        for (int j = 0; j < _stack_map_location_kinds->at(smio_index)->length(); ++j) {
+            uint8_t kind = _stack_map_location_kinds->at(smio_index)->at(j);
             if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
                 // Usually it should be sp register, sometimes it uses fp register,
                 // but don't know when, assume it is always sp register
                 assert(reg_num == 31, "Should be sp register");
                 // offset in bytes
-                int32_t offset_in_bytes = _stack_map_location_offsets->at(i)->at(j);
+                int32_t offset_in_bytes = _stack_map_location_offsets->at(smio_index)->at(j);
                 if (processed_stack_offsets.contains(offset_in_bytes)) {
                     continue;
                 }
                 processed_stack_offsets.append(offset_in_bytes);
                 oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
             } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
                 if (processed_register_nums.contains(reg_num)) {
                     continue;
                 }
                 processed_register_nums.append(reg_num);
                 oopmap->set_oop(VMRegImpl::as_VMReg(reg_num << 1));
             } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(i)->at(j);
+                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
                 assert(reg_num == 31, "Should be sp register");
                 // offset in bytes
-                int32_t offset_in_bytes = _stack_map_location_offsets->at(i)->at(j);
+                int32_t offset_in_bytes = _stack_map_location_offsets->at(smio_index)->at(j);
                 if (processed_stack_offsets.contains(offset_in_bytes)) {
                     continue;
                 }
@@ -284,10 +284,21 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         // call sites need an oopmap even there is no live oop
         real_recorder->add_safepoint(pc_offset, oopmap);
         real_recorder->end_safepoint(pc_offset);
-        // note down processed virtual offset
-        processed_virtual_offsets.append(_call_site_virtual_offsets->at(_call_site_return_pc_offset->find(instruction_offset)));
+        // record processed instruction offset
+        processed_instruction_offsets.append(return_pc_offset);
     }
-    for (int i = 0; i < _call_site_virtual_offsets->length(); ++i) {
-        assert(processed_virtual_offsets.contains(_call_site_virtual_offsets->at(i)), "Every call site should be processed");
+
+    for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
+        if (processed_instruction_offsets.contains(_stack_map_instruction_offsets->at(i))) {
+            continue;
+        }
+
+        // If instruction offset is not processed, either it is not call site or it has no live oops
+        for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
+            uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
+            assert(kind != static_cast<uint8_t>(StackMapParser::LocationKind::Direct)
+                   && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Register)
+                   && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Indirect), "Should contain no live oops");
+        }
     }
 }
