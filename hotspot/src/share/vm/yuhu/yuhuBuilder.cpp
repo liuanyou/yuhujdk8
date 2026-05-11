@@ -947,18 +947,8 @@ Value* YuhuBuilder::code_buffer_address(int offset) {
 Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
                                                    YuhuStack* stack,
                                                    const char* name) {
-  // Static field resolution:
-  // Generate inline IR to load from klass mirror directly.
-  // No runtime helper call needed - eliminates safepoint vulnerability.
-  //
-  // Generated IR pattern:
-  //   %klass_ptr = inttoptr i64 <Klass*> to ptr
-  //   %mirror_addr = getelementptr ptr, ptr %klass_ptr, i64 <java_mirror_offset/8>
-  //   %mirror = load ptr addrspace(1), ptr %mirror_addr
-  //   %field_addr = getelementptr i8, ptr %mirror, i64 <field_offset>
-  //   %field_value = load <type>, ptr %field_addr
-  
   llvm::Module* mod = GetInsertBlock()->getModule();
+    LLVMContext& ctx = mod->getContext();
   llvm::Type* i32_ty = llvm::Type::getInt32Ty(mod->getContext());
   llvm::Type* ptr_ty = llvm::PointerType::get(mod->getContext(), 0);
   llvm::Type* i64_ty = llvm::Type::getInt64Ty(mod->getContext());
@@ -980,48 +970,88 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
   bool is_volatile = field->is_volatile();
   
   // Convert ciInstanceKlass* to Klass*
-  Klass* klass = field_holder->get_Klass();
-  
-  // Embed Klass* as inttoptr constant
-  llvm::Value* klass_ptr = CreateIntToPtr(
-    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
-    ptr_ty);
-  
-  // Calculate java_mirror address: klass + java_mirror_offset
-  int mirror_offset_bytes = in_bytes(Klass::java_mirror_offset());
-  llvm::Value* mirror_offset = llvm::ConstantInt::get(i64_ty, mirror_offset_bytes);
-  llvm::Value* mirror_addr_int = CreateAdd(
-    llvm::ConstantInt::get(i64_ty, (uint64_t)(uintptr_t)klass),
-    mirror_offset);
-  llvm::Value* mirror_addr = CreateIntToPtr(mirror_addr_int, ptr_ty);
-  
-  // Load java_mirror (oop) from Klass
-  llvm::LoadInst* mirror_load = CreateLoad(
-    YuhuType::oop_addrspace1_type(),
-    mirror_addr,
-    "mirror");
+  oop real_oop = field_holder->java_mirror()->get_oop();
+
+    ResetNoHandleMark resetNoHandleMark;
+
+    jobject jmirror = JNIHandles::make_local(real_oop);
+    int oop_id = _next_oop_id++;
+
+    // Record in pending_oops array indexed by oop_id
+    while (_pending_oops->length() <= oop_id) {
+        _pending_oops->append(NULL);
+    }
+    _pending_oops->at_put(oop_id, jmirror);
+
+    // Generate marker + placeholder using inline assembly
+    // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w20, #oop_id; nop; nop;
+    //          mov x0, #low16; movk x0, #mid-low16, lsl #16; movk x0, #mid-high16, lsl #32
+    // Total: 8 instructions (3 marker + 2 nops + 3 placeholder) - C1 compatible format
+    // Note: High 16 bits must be 0 (not 0xDEAF) because patch_oop only patches low 48 bits
+    // The oop_id in marker will be used to look up the real jobject during relocation phase
+    char asm_string[512];
+    uint64_t temp_placeholder = oop_id & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
+    snprintf(asm_string, sizeof(asm_string),
+             "mov w19, #0xCAFE\n"
+             "movk w19, #0xBABE, lsl #16\n"
+             "mov w20, #%d\n"                    // ← oop_id (not oop_index!)
+             "nop\n"
+             "nop\n"
+             "mov ${0:x}, #0x%04lx\n"
+             "movk ${0:x}, #0x%04lx, lsl #16\n"
+             "movk ${0:x}, #0x%04lx, lsl #32",
+             oop_id & 0xFFFF,  // oop_id for marker
+             (temp_placeholder >> 0) & 0xFFFF,   // low 16 bits
+             (temp_placeholder >> 16) & 0xFFFF,  // mid-low 16 bits
+             (temp_placeholder >> 32) & 0xFFFF); // mid-high 16 bits
+
+    llvm::FunctionType* asm_type = llvm::FunctionType::get(
+            llvm::Type::getInt64Ty(ctx), {}, false);
+
+    llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
+            asm_type,
+            asm_string,
+            "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+            true,            // Has side effects: yes (to prevent optimization)
+            false,           // Is align stack: no
+            llvm::InlineAsm::AD_ATT
+    );
+
+    // Emit the marker + placeholder assembly, return the pointer value
+    llvm::Value* mirror_oop = CreateIntToPtr(
+            CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
+            YuhuType::oop_addrspace1_type());
   
   // Calculate field address: mirror + field_offset
   llvm::Value* field_offset_val = llvm::ConstantInt::get(i64_ty, field_offset);
   llvm::Value* field_addr_int = CreateAdd(
-    CreatePtrToInt(mirror_load, i64_ty),
+    CreatePtrToInt(mirror_oop, i64_ty),
     field_offset_val);
   llvm::Value* field_addr = CreateIntToPtr(field_addr_int, ptr_ty);
   
   // Load field value based on type
   llvm::Value* field_value;
   if (is_object_field) {
-    // Object field: load as ptr addrspace(1)
-    llvm::LoadInst* load_inst = CreateLoad(
-      YuhuType::oop_addrspace1_type(),
-      field_addr,
-      name ? name : "field_value");
+      llvm::LoadInst* load_inst;
+      if (UseCompressedOops) {
+          load_inst = CreateLoad(i32_ty, field_addr, name ? name : "field_value");
+      } else {
+          // Object field: load as ptr addrspace(1)
+          load_inst = CreateLoad(
+                  YuhuType::oop_addrspace1_type(),
+                  field_addr,
+                  name ? name : "field_value");
+      }
     
     // Set volatile ordering if needed
     if (is_volatile) {
         load_inst->setOrdering(llvm::AtomicOrdering::SequentiallyConsistent);
     }
-    field_value = load_inst;
+    if (UseCompressedOops) {
+        field_value = CreateDecodeHeapOop(load_inst);
+    } else {
+        field_value = load_inst;
+    }
   } else {
     // Primitive field: load as appropriate type
     BasicType basic_type = field->type()->basic_type();
@@ -1054,10 +1084,13 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
 
   // Non-String oop (e.g. klass mirror): instance of java.lang.Class is allocated in heap
   oop real_oop = object->get_oop();
-  if (real_oop != NULL && real_oop->klass() != SystemDictionary::String_klass()) {
-    uint64_t oop_addr = (uint64_t)(uintptr_t)real_oop;
-    return CreateIntToPtr(llvm::ConstantInt::get(i64_ty, oop_addr), YuhuType::oop_addrspace1_type()); // FIXED - instance of java.lang.Class is allocated in heap
-  }
+  // Perhaps, for any class object, we can embed oop address in the IR and create oop relocation later
+//  if (real_oop != NULL && real_oop->klass() != SystemDictionary::String_klass()) {
+//    uint64_t oop_addr = (uint64_t)(uintptr_t)real_oop;
+//    return CreateIntToPtr(llvm::ConstantInt::get(i64_ty, oop_addr), YuhuType::oop_addrspace1_type()); // FIXED - instance of java.lang.Class is allocated in heap
+//  }
+
+    ResetNoHandleMark resetNoHandleMark;
 
   // String oop: allocate unique oop_id and generate marker for deferred oop_index allocation
   // Allocate jobject and assign unique oop_id (like C1 does, but deferred to relocation phase)
