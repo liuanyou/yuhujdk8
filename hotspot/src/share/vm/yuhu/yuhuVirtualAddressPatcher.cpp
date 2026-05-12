@@ -276,21 +276,6 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
         return imm << 12;
     };
 
-    auto decode_b_target = [](uint64_t pc, uint32_t inst) -> uint64_t {
-        // Extract 26-bit signed offset
-        int32_t offset = inst & 0x03FFFFFF;  // bits [25:0]
-
-        // Sign-extend from 26 bits to 32 bits
-        if (offset & 0x02000000) {            // Check bit 25 (sign bit)
-            offset |= 0xFC000000;               // Sign extend
-        }
-
-        // Target = PC + (offset * 4)
-        uint64_t target = pc + ((int64_t)offset * 4);
-
-        return target;
-    };
-
     // Scan forwards from statepoint call
     for (uint64_t offset = scan_start; offset + 4 <= scan_end; offset += 4) {
         // Read instruction at current offset
@@ -384,26 +369,16 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
             // Always use first blr instruction as blr offset
             out_match.call_target_blr_offset = offset;
             found_blr = true;
-        } else if (found_ljpc && found_call_target && !found_blr && (inst & B_MASK) == B_PATTERN) {
-            uint64_t target_address = decode_b_target((uint64_t) instr, inst);
-
-            // Calculate offset within CodeData
-            uint64_t target_offset = target_address - (uint64_t)code_buffer;
-
-            // scan another 25 instructions to find blr instruction
-            for (uint64_t b_offset = 0; b_offset + 4 <= 100; b_offset += 4) {
-                uint32_t b_inst = *(uint32_t*)(code_buffer + target_offset + b_offset);
-                if ((b_inst & BLR_MASK) == BLR_PATTERN) {
-                    // Always use first blr instruction as blr offset
-                    out_match.call_target_blr_offset = target_offset + b_offset;
-                    found_blr = true;
-                    break;
-                }
+        } else if (found_ljpc && (found_call_target || found_safepoint_poll_call) && !found_blr && (inst & B_MASK) == B_PATTERN) {
+            scan_from_b_target(instr, inst, code_buffer, &out_match, &found_blr);
+            // If blr is not found, just stop
+            if (!found_blr) {
+                break;
             }
         }
 
         // Stop if we found both placeholders and blr
-        if (((found_ljpc && found_call_target) || (found_ljpc && found_safepoint_poll_call)) && found_blr) {
+        if (found_ljpc && (found_call_target || found_safepoint_poll_call) && found_blr) {
             return true;
         }
     }

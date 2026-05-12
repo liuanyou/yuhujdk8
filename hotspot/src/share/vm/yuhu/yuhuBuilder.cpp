@@ -758,21 +758,21 @@ void YuhuBuilder::CreateEpiloguePlaceholder() {
   // After compilation, we'll parse the prologue and replace this marker
   // with the correct "add sp, x29, #-imm" instruction.
 
-  YuhuContext& ctx = YuhuContext::current();
-
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-    llvm::Type::getVoidTy(ctx),
-    false);
-
-  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
-    asm_type,
-    ".inst 0xcafebabe",
-    "",
-    true,
-    false,
-    llvm::InlineAsm::AD_ATT);
-
-  CreateCall(asm_type, asm_func, std::vector<Value*>());
+//  YuhuContext& ctx = YuhuContext::current();
+//
+//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+//    llvm::Type::getVoidTy(ctx),
+//    false);
+//
+//  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+//    asm_type,
+//    ".inst 0xcafebabe",
+//    "",
+//    true,
+//    false,
+//    llvm::InlineAsm::AD_ATT);
+//
+//  CreateCall(asm_type, asm_func, std::vector<Value*>());
 }
 
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
@@ -1742,31 +1742,31 @@ Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
 // Total: 6 words = 48 bytes, maintaining 16-byte SP alignment
 
 void YuhuBuilder::CreateSaveCalleeSavedRegisters() {
-  llvm::LLVMContext& ctx = getContext();
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-    llvm::Type::getVoidTy(ctx), {}, false);
-  
-  llvm::InlineAsm* save_asm = llvm::InlineAsm::get(
-    asm_type,
-    "stp x19, x20, [sp, #80]\n\t"
-    "stp x23, x25, [sp, #96]\n\t"
-    "str x27, [sp, #112]",
-    "~{memory}", true, true, llvm::InlineAsm::AD_ATT);
-  
-  CreateCall(asm_type, save_asm, {});
+//  llvm::LLVMContext& ctx = getContext();
+//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+//    llvm::Type::getVoidTy(ctx), {}, false);
+//
+//  llvm::InlineAsm* save_asm = llvm::InlineAsm::get(
+//    asm_type,
+//    "stp x19, x20, [sp, #80]\n\t"
+//    "stp x23, x25, [sp, #96]\n\t"
+//    "str x27, [sp, #112]",
+//    "~{memory}", true, true, llvm::InlineAsm::AD_ATT);
+//
+//  CreateCall(asm_type, save_asm, {});
 }
 
 void YuhuBuilder::CreateRestoreCalleeSavedRegisters() {
-  llvm::LLVMContext& ctx = getContext();
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-    llvm::Type::getVoidTy(ctx), {}, false);
-  
-  llvm::InlineAsm* restore_asm = llvm::InlineAsm::get(
-    asm_type,
-    "ldr x27, [sp, #112]\n\t"
-    "ldp x23, x25, [sp, #96]\n\t"
-    "ldp x19, x20, [sp, #80]",
-    "~{x19},~{x20},~{x23},~{x25},~{x27},~{memory}", true, false, llvm::InlineAsm::AD_ATT);
-  
-  CreateCall(asm_type, restore_asm, {});
+//  llvm::LLVMContext& ctx = getContext();
+//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+//    llvm::Type::getVoidTy(ctx), {}, false);
+//
+//  llvm::InlineAsm* restore_asm = llvm::InlineAsm::get(
+//    asm_type,
+//    "ldr x27, [sp, #112]\n\t"
+//    "ldp x23, x25, [sp, #96]\n\t"
+//    "ldp x19, x20, [sp, #80]",
+//    "~{x19},~{x20},~{x23},~{x25},~{x27},~{memory}", true, false, llvm::InlineAsm::AD_ATT);
+//
+//  CreateCall(asm_type, restore_asm, {});
 }

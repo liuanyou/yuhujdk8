@@ -165,7 +165,6 @@ void YuhuFunction::initialize(const char *name) {
   Function::arg_iterator ai = function()->arg_begin();
   llvm::Value *method = NULL;  // Will be set below for both OSR and normal entry
   llvm::Value *osr_buf = NULL;  // Will be set for OSR entry only
-  llvm::AllocaInst* sp_storage_alloca = NULL;  // Will hold sp_storage alloca for both OSR and normal entry
   
   if (is_osr()) {
     // OSR entry: keep old signature for now (will be handled in phase 6)
@@ -218,11 +217,6 @@ void YuhuFunction::initialize(const char *name) {
         "entry",
         function());
       builder()->SetInsertPoint(early_entry_block);
-
-      // CRITICAL: Create sp_storage alloca FIRST thing in entry block
-      // This ensures LLVM puts it in the prologue, not in the middle of the function
-      sp_storage_alloca = builder()->CreateAlloca(
-        YuhuType::intptr_type(), 0, "sp_storage");
 
       // CRITICAL: Save p7 from x0 to x22 (reserved register) immediately
       // This must be done BEFORE any code that might use x0
@@ -277,7 +271,7 @@ void YuhuFunction::initialize(const char *name) {
     builder()->SetInsertPoint(_unified_exit_block);
 
     // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
-    builder()->CreateEpiloguePlaceholder();
+//    builder()->CreateEpiloguePlaceholder();
 
     // Create ret instruction
     builder()->CreateRet(LLVMValue::jint_constant(0));
@@ -344,13 +338,6 @@ void YuhuFunction::initialize(const char *name) {
     }
     builder()->SetInsertPoint(stack_frame_block);
 
-    // CRITICAL: For OSR entry, create sp_storage alloca if not already created
-    // This must be the FIRST instruction in the entry block
-    if (is_osr() && sp_storage_alloca == NULL) {
-      sp_storage_alloca = builder()->CreateAlloca(
-        YuhuType::intptr_type(), 0, "sp_storage");
-    }
-
     // For OSR entry, create method_ptr and thread_ptr if not already set
     if (is_osr()) {
       // OSR entry: method and thread should already be set from function arguments
@@ -381,7 +368,7 @@ void YuhuFunction::initialize(const char *name) {
   
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
   // Pass sp_storage_alloca so YuhuStack uses the alloca created in the entry block
-  _stack = YuhuStack::CreateBuildAndPushFrame(this, method, sp_storage_alloca);
+  _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
 
   // NOTE: We no longer call CreateResetLastJavaFrame() here.
   // The last_Java_sp/fp/pc are set directly in yuhuStack.cpp::initialize()
@@ -611,7 +598,7 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
     builder()->SetInsertPoint(_unified_exit_block);
 
     // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
-    builder()->CreateEpiloguePlaceholder();
+//    builder()->CreateEpiloguePlaceholder();
 
     // Create ret instruction
     builder()->CreateRet(LLVMValue::jint_constant(0));

@@ -33,9 +33,7 @@
 
 using namespace llvm;
 
-void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, llvm::BasicBlock* exit_block) {
-  bool setup_sp_and_method = (method != NULL);
-
+void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
   int locals_words  = max_locals();
   // For AArch64, header_words includes all frame header metadata:
   //   - oop_tmp (1 word)
@@ -48,20 +46,9 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   int header_words  = YUHU_FRAME_HEADER_WORDS;
   int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
   int stack_words   = max_stack();
-  int frame_words   = header_words + monitor_words + stack_words + YUHU_CALLEE_SAVED_SAVE_AREA + YUHU_LLVM_SPILL_SLOTS;
+  int frame_words   = header_words + monitor_words + stack_words;
 
-  // Reserve space for ALL callee-saved registers (x19-x28 = 10 regs = 80 bytes)
-  // This is the MAXIMUM LLVM could possibly need for register spills.
-  // Because when llvm spills registers, it always assumes it is manipulating stack top.
-  // But obviously stack top is also yuhu frame area. Creating these spill slots, it
-  // prevents spills from corrupting Yuhu frame.
   _extended_frame_size = frame_words + locals_words;
-
-  // For AArch64, calculate the new stack pointer
-  // Get actual stack pointer (SP register x31) using read_register intrinsic
-  // NOTE: CreateGetFrameAddress() returns FP (frame pointer), not SP (stack pointer)
-  // We need the actual SP to correctly allocate stack frames
-  Value *current_sp = builder()->CreateReadStackPointer();
   
   // Calculate frame size in bytes
   // NOTE: LR and FP are saved by LLVM's prologue (stp x29, x30, [sp, #-16]!)
@@ -71,47 +58,24 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   // AArch64 requires 16-byte stack alignment
   // Align frame size up to 16 bytes
   frame_size_bytes = align_size_up(frame_size_bytes, 16);
-  
-  // Allocate Yuhu frame body (LLVM prologue already saved x29/x30)
-  // After LLVM prologue: sp points to saved x29/x30 area
-  // We allocate additional space for Yuhu frame body
-  Value *stack_pointer = builder()->CreateSub(
-    current_sp,
-    LLVMValue::intptr_constant(frame_size_bytes),
-    "new_sp");
-  
-  // Check for stack overflow - checks current_sp to ensure there's enough space
-  // for both the new frame and throw_StackOverflowError (if needed)
-  // Pass stack_pointer so we can calculate frame_size = current_sp - stack_pointer
-  CreateStackOverflowCheck(stack_pointer, exit_block);
 
-  // Update SP register
-  builder()->CreateWriteStackPointer(stack_pointer);
+  // Convert back to words for alloca array size
+  int aligned_frame_size_words = frame_size_bytes / wordSize;
 
-  // Initialize stack pointer storage
-  // For normal entry, sp_storage_alloca was created in function entry block
-  // For native wrapper, sp_storage_alloca is NULL, so we create one here (less ideal)
-  if (sp_storage_alloca == NULL) {
-    // Native wrapper case: create alloca here (in middle of function)
-    // This is less ideal but acceptable for native wrappers
-    initialize_stack_pointers(stack_pointer, NULL);
-  } else {
-    // Normal entry case: use alloca from entry block
-    initialize_stack_pointers(stack_pointer, sp_storage_alloca);
-  }
+  llvm::AllocaInst* extended_sp = builder()->CreateAlloca(YuhuType::intptr_type(),
+                                                          ConstantInt::get(YuhuType::intptr_type(), aligned_frame_size_words),
+                                                          "extended_sp");
 
-  if (setup_sp_and_method)
-    CreateStoreStackPointer(stack_pointer);
+  initialize_expression_stack_pointer(extended_sp);
 
   // Create the frame
-  _frame = builder()->CreateIntToPtr(
-    stack_pointer,
+  _frame = builder()->CreateBitCast(
+    extended_sp,
     PointerType::getUnqual(
-      llvm::ArrayType::get(YuhuType::intptr_type(), extended_frame_size())),
+      llvm::ArrayType::get(YuhuType::intptr_type(), aligned_frame_size_words)),
     "frame");
-  int offset = 0;
 
-  offset += YUHU_LLVM_SPILL_SLOTS + YUHU_CALLEE_SAVED_SAVE_AREA;
+  int offset = 0;
 
   // Expression stack
   _stack_slots_offset = offset;
@@ -126,13 +90,14 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
 
   // Method pointer
   _method_slot_offset = offset++;
-  if (setup_sp_and_method) {
     builder()->CreateStore(
       method, slot_addr(method_slot_offset(), YuhuType::Method_type()));
-  }
+
+  // Should get the sp value after final allocation, include prologue/main frame/spill areas
+  Value* final_sp = builder()->CreateReadStackPointer();
 
   // Unextended SP
-  builder()->CreateStore(stack_pointer, slot_addr(offset++));
+  builder()->CreateStore(final_sp, slot_addr(offset++));
 
   // PC
   _pc_slot_offset = offset++;
@@ -160,76 +125,6 @@ void YuhuStack::initialize(Value* method, llvm::AllocaInst* sp_storage_alloca, l
   // Update frame pointer to point to this frame
   CreateStoreFramePointer(
     builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
-  
-//  // Get addresses for last_Java_sp, last_Java_fp, and last_Java_pc
-//  Value *last_sp_addr = last_Java_sp_addr();
-//  Value *last_fp_addr = last_Java_fp_addr();
-//  Value *last_pc_addr = builder()->CreateAddressOfStructEntry(
-//    thread(),
-//    JavaThread::last_Java_pc_offset(),
-//    llvm::PointerType::getUnqual(YuhuType::intptr_type()),
-//    "last_Java_pc_addr");
-//
-//  // Convert addresses to i64 for inline assembly (AArch64 uses 64-bit addresses)
-//  Value *sp_addr_i64 = builder()->CreatePtrToInt(last_sp_addr, YuhuType::intptr_type(), "sp_addr_i64");
-//  Value *fp_addr_i64 = builder()->CreatePtrToInt(last_fp_addr, YuhuType::intptr_type(), "fp_addr_i64");
-//  Value *pc_addr_i64 = builder()->CreatePtrToInt(last_pc_addr, YuhuType::intptr_type(), "pc_addr_i64");
-//
-//  // Create inline assembly to store last_Java_sp
-//  // "str $1, [$0]" stores the value in $1 to the address in $0
-//  // "r" constraint means input from a general-purpose register
-//  // "memory" clobber prevents LLVM from optimizing memory operations
-//  YuhuContext& ctx = YuhuContext::current();
-//  llvm::FunctionType* store_asm_type = llvm::FunctionType::get(
-//    llvm::Type::getVoidTy(ctx),
-//    {YuhuType::intptr_type(), YuhuType::intptr_type()},  // addr, value
-//    false);
-//
-//  llvm::InlineAsm* store_sp_asm = llvm::InlineAsm::get(
-//    store_asm_type,
-//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-//    true,            // Has side effects: yes (writes to memory)
-//    false,           // Is align stack: no
-//    llvm::InlineAsm::AD_ATT
-//  );
-//
-//  // Call inline assembly to store last_Java_sp
-//  // stack_pointer is already intptr_type (i64), no conversion needed
-//  std::vector<Value*> store_sp_args;
-//  store_sp_args.push_back(sp_addr_i64);
-//  store_sp_args.push_back(stack_pointer);
-//  builder()->CreateCall(store_asm_type, store_sp_asm, store_sp_args);
-//
-//  llvm::InlineAsm* store_fp_asm = llvm::InlineAsm::get(
-//    store_asm_type,
-//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-//    true,            // Has side effects: yes (writes to memory)
-//    false,           // Is align stack: no
-//    llvm::InlineAsm::AD_ATT
-//  );
-//
-//  std::vector<Value*> store_fp_args;
-//  store_fp_args.push_back(fp_addr_i64);
-//  store_fp_args.push_back(current_fp);  // Use LLVM prologue's sp, where x29/x30 are saved
-//  builder()->CreateCall(store_asm_type, store_fp_asm, store_fp_args);
-//
-//  Value* current_pc = builder()->CreateReadCurrentPC();
-//
-//  llvm::InlineAsm* store_pc_asm = llvm::InlineAsm::get(
-//    store_asm_type,
-//    "str $1, [$0]",  // AArch64: store value ($1) to address ($0)
-//    "r,r,~{memory}",  // Both inputs in registers, clobber memory
-//    true,            // Has side effects: yes (writes to memory)
-//    false,           // Is align stack: no
-//    llvm::InlineAsm::AD_ATT
-//  );
-//
-//  std::vector<Value*> store_pc_args;
-//  store_pc_args.push_back(pc_addr_i64);
-//  store_pc_args.push_back(current_pc);
-//  builder()->CreateCall(store_asm_type, store_pc_asm, store_pc_args);
 }
 
 // Stack overflow check for AArch64
@@ -306,46 +201,40 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block
   builder()->SetInsertPoint(ok);
 }
 
-void YuhuStack::initialize_stack_pointers(llvm::Value* stack_pointer, llvm::AllocaInst* sp_storage_alloca) {
-    _stack_pointer = stack_pointer;
-    if (sp_storage_alloca != NULL) {
-        // Use the alloca created in the entry block
-        _sp_storage = sp_storage_alloca;
-    } else {
-        // Native wrapper case: create a new alloca (less ideal)
-        _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
-    }
-    builder()->CreateStore(stack_pointer, _sp_storage);
+void YuhuStack::initialize_expression_stack_pointer(llvm::Value* stack_pointer) {
+    _expression_stack_pointer = stack_pointer;
+    _expression_stack_pointer_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+    builder()->CreateStore(stack_pointer, _expression_stack_pointer_storage);
     // Frame pointer address will be set in initialize() when frame is created
 }
 
-llvm::Value* YuhuStack::stack_pointer_addr() const {
+llvm::Value* YuhuStack::expression_stack_pointer_addr() const {
     // For AArch64, return the address of the stack pointer storage
-    if (_sp_storage != NULL) {
-        return _sp_storage;
+    if (_expression_stack_pointer_storage != NULL) {
+        return _expression_stack_pointer_storage;
     }
     // Fallback: create a new alloca (should not happen in normal flow)
     return builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_addr");
 }
 
-llvm::LoadInst* YuhuStack::CreateLoadStackPointer(const char *name) {
+llvm::LoadInst* YuhuStack::CreateLoadExpressionStackPointer(const char *name) {
     // For AArch64, load from the stack pointer storage
     // LLVM 20+ requires explicit type parameter for CreateLoad
     return builder()->CreateLoad(
             YuhuType::intptr_type(),
-            stack_pointer_addr(),
+            expression_stack_pointer_addr(),
             name);
 }
 
-llvm::StoreInst* YuhuStack::CreateStoreStackPointer(llvm::Value* value) {
+llvm::StoreInst* YuhuStack::CreateStoreExpressionStackPointer(llvm::Value* value) {
     // For AArch64, store the stack pointer in storage
-    _stack_pointer = value;
-    if (_sp_storage == NULL) {
+    _expression_stack_pointer = value;
+    if (_expression_stack_pointer_storage == NULL) {
         // This should not happen if sp_storage_alloca was passed correctly
         // Fallback: create a new alloca (warning: this will be in the middle of the function!)
-        _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
+        _expression_stack_pointer_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
     }
-    return builder()->CreateStore(value, _sp_storage);
+    return builder()->CreateStore(value, _expression_stack_pointer_storage);
 }
 
 llvm::LoadInst* YuhuStack::CreateLoadFramePointer(const char *name) {
@@ -578,7 +467,7 @@ Value* YuhuStack::CreatePopFrame(int result_slots) {
     fp,
     LLVMValue::intptr_constant((1 + locals_to_pop) * wordSize));
 
-  CreateStoreStackPointer(sp);
+    CreateStoreExpressionStackPointer(sp);
   CreateStoreFramePointer(
     builder()->CreateLoad(
       YuhuType::intptr_type(),
@@ -616,9 +505,8 @@ Value* YuhuStack::slot_addr(int         offset,
 // The bits that differentiate stacks with normal and native frames on top
 
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuFunction* function,
-                                                Value*         method,
-                                                llvm::AllocaInst* sp_storage_alloca) {
-  return new YuhuStackWithNormalFrame(function, method, sp_storage_alloca);
+                                                Value*         method) {
+  return new YuhuStackWithNormalFrame(function, method);
 }
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
                                                 Value*              method) {
@@ -626,14 +514,13 @@ YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
 }
 
 YuhuStackWithNormalFrame::YuhuStackWithNormalFrame(YuhuFunction* function,
-                                                     Value*         method,
-                                                     llvm::AllocaInst* sp_storage_alloca)
+                                                     Value*         method)
   : YuhuStack(function), _function(function) {
   // For normal frames, the stack pointer and the method slot will
   // be set during each decache, so it is not necessary to do them
   // at the time the frame is created.  However, we set them for
   // non-PRODUCT builds to make crash dumps easier to understand.
-  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), sp_storage_alloca, function->unified_exit_block());
+  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), function->unified_exit_block());
 }
 YuhuStackWithNativeFrame::YuhuStackWithNativeFrame(YuhuNativeWrapper* wrp,
                                                      Value*              method)
@@ -641,7 +528,7 @@ YuhuStackWithNativeFrame::YuhuStackWithNativeFrame(YuhuNativeWrapper* wrp,
   // Native wrapper doesn't have sp_storage_alloca created in entry block
   // Pass NULL and let initialize() handle it
   // Pass NULL as exit_block because native wrappers handle their own returns
-  initialize(method, NULL, NULL);
+  initialize(method, NULL);
 }
 
 int YuhuStackWithNormalFrame::arg_size() const {

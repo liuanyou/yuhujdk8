@@ -145,7 +145,7 @@ int frame_size_bytes = extended_frame_size() * wordSize;
 - Shark 的实现：`hotspot/src/share/vm/shark/sharkStack.cpp:48-50`
   ```cpp
   Value *stack_pointer = builder()->CreateSub(
-    CreateLoadStackPointer(),
+    CreateLoadExpressionStackPointer(),
     LLVMValue::intptr_constant((frame_words + extra_locals) * wordSize));
   ```
   注意：Shark 使用的是 ZeroStack，栈帧布局不同，所以它可以使用 `extra_locals`。但 Yuhu 使用的是标准 AArch64 栈，需要为所有 `locals_words` 分配空间。

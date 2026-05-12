@@ -1480,7 +1480,7 @@ void YuhuTopLevelBlock::do_call() {
   YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address);
 
   // Save callee-saved registers that Yuhu uses but interpreter may corrupt
-  builder()->CreateSaveCalleeSavedRegisters();
+//  builder()->CreateSaveCalleeSavedRegisters();
 
   // Cast from_compiled_entry to a function pointer matching the callee's signature
   // We need to construct the callee's FunctionType based on its Java signature
@@ -1528,7 +1528,7 @@ void YuhuTopLevelBlock::do_call() {
     compiled_ftype, compiled_entry_ptr, call_args);
 
   // Restore callee-saved registers from save area at [sp, #80]
-  builder()->CreateRestoreCalleeSavedRegisters();
+//  builder()->CreateRestoreCalleeSavedRegisters();
 
   // NEW: Reset last_Java_pc after call returns
   stack()->CreateResetLastJavaFrame();

@@ -30,11 +30,11 @@
 在 `yuhuStack.hpp:85-86` 中：
 
 ```cpp
-void initialize_stack_pointers(llvm::Value* stack_pointer) {
-  _stack_pointer = stack_pointer;
+void initialize_expression_stack_pointer(llvm::Value* stack_pointer) {
+  _expression_stack_pointer = stack_pointer;
   // Create storage for stack pointer
-  _sp_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
-  builder()->CreateStore(stack_pointer, _sp_storage);
+  _expression_stack_pointer_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
+  builder()->CreateStore(stack_pointer, _expression_stack_pointer_storage);
   // ...
 }
 ```
@@ -47,7 +47,7 @@ void YuhuStack::initialize(Value* method) {
   builder()->CreateWriteStackPointer(stack_pointer);
 
   // Initialize stack pointer storage
-  initialize_stack_pointers(stack_pointer);  // ← 在这里调用 alloca！
+  initialize_expression_stack_pointer(stack_pointer);  // ← 在这里调用 alloca！
 
   // Create the frame
   _frame = builder()->CreateIntToPtr(...);
@@ -57,7 +57,7 @@ void YuhuStack::initialize(Value* method) {
 
 ### 2. 问题所在
 
-- **调用时机**：`initialize_stack_pointers()` 在 Yuhu frame 分配**之后**调用
+- **调用时机**：`initialize_expression_stack_pointer()` 在 Yuhu frame 分配**之后**调用
 - **LLVM 行为**：当 LLVM 看到在函数体中间有 `alloca` 指令时，会在那个位置生成 `sub sp, sp, #16`
 - **结果**：SP 在 Yuhu frame 分配之后又被减少了 16 字节
 
@@ -330,27 +330,27 @@ builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
 
 ## 详细修改
 
-### 1. 删除 _sp_storage 成员
+### 1. 删除 _expression_stack_pointer_storage 成员
 
 ```cpp
 // 删除第 79 行：
-mutable llvm::AllocaInst* _sp_storage;  // Storage for stack pointer
+mutable llvm::AllocaInst* _expression_stack_pointer_storage;  // Storage for stack pointer
 ```
 
-### 2. 修改 initialize_stack_pointers()
+### 2. 修改 initialize_expression_stack_pointer()
 
 ```cpp
-void initialize_stack_pointers(llvm::Value* stack_pointer) {
-  _stack_pointer = stack_pointer;
+void initialize_expression_stack_pointer(llvm::Value* stack_pointer) {
+  _expression_stack_pointer = stack_pointer;
   // Frame pointer address will be set in initialize() when frame is created
   // No longer using alloca for sp_storage!
 }
 ```
 
-### 3. 修改 stack_pointer_addr()
+### 3. 修改 expression_stack_pointer_addr()
 
 ```cpp
-llvm::Value* stack_pointer_addr() const {
+llvm::Value* expression_stack_pointer_addr() const {
   // Return the address of unextended_sp slot in the frame
   if (_frame != NULL) {
     return builder()->CreatePtrToInt(
@@ -366,11 +366,11 @@ llvm::Value* stack_pointer_addr() const {
 }
 ```
 
-### 4. 修改 CreateStoreStackPointer()
+### 4. 修改 CreateStoreExpressionStackPointer()
 
 ```cpp
-llvm::StoreInst* CreateStoreStackPointer(llvm::Value* value) {
-  _stack_pointer = value;
+llvm::StoreInst* CreateStoreExpressionStackPointer(llvm::Value* value) {
+  _expression_stack_pointer = value;
   if (_frame != NULL) {
     // Store to unextended_sp slot in the frame
     return builder()->CreateStore(value, slot_addr(unextended_sp_offset()));
@@ -382,9 +382,9 @@ llvm::StoreInst* CreateStoreStackPointer(llvm::Value* value) {
 }
 ```
 
-### 5. 修改 CreateLoadStackPointer()
+### 5. 修改 CreateLoadExpressionStackPointer()
 
-保持不变，因为它调用 `stack_pointer_addr()`，会自动使用新的逻辑。
+保持不变，因为它调用 `expression_stack_pointer_addr()`，会自动使用新的逻辑。
 
 ### 6. 添加 unextended_sp_offset() 方法
 

@@ -250,7 +250,8 @@ YuhuCompiler::YuhuCompiler()
     .setCPU(MCPU)
     .addFeatures(MAttrs);
 
-  JTMB.addFeatures({"+reserve-x28", "+reserve-x21", "+reserve-x26", "+reserve-x22", "+reserve-x24"});
+  JTMB.addFeatures({"+reserve-x19", "+reserve-x20", "+reserve-x21", "+reserve-x22", "+reserve-x23",
+                    "+reserve-x24", "+reserve-x25", "+reserve-x26", "+reserve-x27", "+reserve-x28"});
 
   // CRITICAL: Reserve x28 (Thread*) and x12 (Method*) registers
   // This prevents LLVM from using these registers in generated code
@@ -684,16 +685,16 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int locals_words = target->max_locals();
   int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
   int extra_locals = locals_words - arg_size;
-  int frame_words = header_words + monitor_words + stack_words +
-                    YUHU_CALLEE_SAVED_SAVE_AREA + YUHU_LLVM_SPILL_SLOTS;
+//  int frame_words = header_words + monitor_words + stack_words;
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();
   int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start);
-  int actual_prologue_words = (actual_prologue_bytes + wordSize - 1) / wordSize;  // Round up
+  int actual_prologue_words = actual_prologue_bytes / wordSize;
 
   // Step 3: Calculate final frame_size using actual prologue size
-  int frame_size = frame_words + locals_words + actual_prologue_words;
+//  int frame_size = frame_words + locals_words + actual_prologue_words;
+  int frame_size = actual_prologue_words;
   // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
   // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
   frame_size = align_size_up(frame_size, 2);
@@ -748,7 +749,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // CRITICAL: Fix up epilogue markers (0xcafebabe -> sub sp, x29, #imm)
       // This is needed to restore SP from x29 before returning from the function.
       // See doc/yuhu/activities/039_epilogue_sp_restoration.md for details.
-      builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
+//      builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
       
       // Scan for oop markers and generate relocation records
       // This must be done AFTER fixup_prologue_epilogue_markers because both operations

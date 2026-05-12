@@ -139,7 +139,7 @@ Value *stack_pointer = builder()->CreateSub(
 Shark 使用 `CreateGetFrameAddress()` 检查 ABI 栈，但它：
 1. 使用 ZeroStack 管理 Java 栈（不依赖 ABI 栈指针）
 2. 只在检查 ABI 栈溢出时使用 `CreateGetFrameAddress()`（用于检查，不用于分配）
-3. 实际的栈帧分配使用 ZeroStack 的 `CreateLoadStackPointer()`
+3. 实际的栈帧分配使用 ZeroStack 的 `CreateLoadExpressionStackPointer()`
 
 ### 如何获取实际的栈指针（SP）？
 

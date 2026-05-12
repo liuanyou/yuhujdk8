@@ -48,11 +48,11 @@ void YuhuDecacher::start_stack(int stack_depth) {
   _exparray = new GrowableArray<ScopeValue*>(stack_depth);
 
   // Set the stack pointer
-  stack()->CreateStoreStackPointer(
-    builder()->CreatePtrToInt(
-      stack()->slot_addr(
-        stack()->stack_slots_offset() + max_stack() - stack_depth),
-      YuhuType::intptr_type()));
+    stack()->CreateStoreExpressionStackPointer(
+            builder()->CreatePtrToInt(
+                    stack()->slot_addr(
+                            stack()->stack_slots_offset() + max_stack() - stack_depth),
+                    YuhuType::intptr_type()));
 }
 
 void YuhuDecacher::process_stack_slot(int          index,

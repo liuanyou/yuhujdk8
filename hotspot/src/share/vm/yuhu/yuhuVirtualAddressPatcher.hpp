@@ -150,6 +150,43 @@ class YuhuVirtualAddressScanner : public AllStatic {
       }
       return false;
   }
+
+    static uint64_t decode_b_target(uint64_t pc, uint32_t inst) {
+        // Extract 26-bit signed offset
+        int32_t offset = inst & 0x03FFFFFF;  // bits [25:0]
+
+        // Sign-extend from 26 bits to 32 bits
+        if (offset & 0x02000000) {            // Check bit 25 (sign bit)
+            offset |= 0xFC000000;               // Sign extend
+        }
+
+        // Target = PC + (offset * 4)
+        uint64_t target = pc + ((int64_t)offset * 4);
+
+        return target;
+    };
+
+    static void scan_from_b_target(uint32_t* instr, uint32_t inst, const uint8_t* code_buffer, VirtualAddressMatch* out_match, bool* found_blr) {
+        uint64_t target_address = decode_b_target((uint64_t) instr, inst);
+
+        // Calculate offset within CodeData
+        uint64_t target_offset = target_address - (uint64_t)code_buffer;
+
+        // scan another 25 instructions to find blr instruction
+        for (uint64_t b_offset = 0; b_offset + 4 <= 100; b_offset += 4) {
+            uint32_t* b_instr = (uint32_t*)(code_buffer + target_offset + b_offset);
+            uint32_t b_inst = b_instr[0];
+            if ((b_inst & BLR_MASK) == BLR_PATTERN) {
+                // Always use first blr instruction as blr offset
+                out_match->call_target_blr_offset = target_offset + b_offset;
+                *found_blr = true;
+                break;
+            } else if ((b_inst & B_MASK) == B_PATTERN) {
+                scan_from_b_target(b_instr, b_inst, code_buffer, out_match, found_blr);
+                break;
+            }
+        }
+    };
 };
 
 #endif // SHARE_VM_YUHU_YUHUVIRTUALADDRESSPATCHER_HPP

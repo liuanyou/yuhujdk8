@@ -38,7 +38,7 @@ class YuhuStackWithNativeFrame;
 class YuhuStack : public YuhuCompileInvariants {
  public:
   static YuhuStack* CreateBuildAndPushFrame(
-    YuhuFunction* function, llvm::Value* method, llvm::AllocaInst* sp_storage_alloca);
+    YuhuFunction* function, llvm::Value* method);
   static YuhuStack* CreateBuildAndPushFrame(
     YuhuNativeWrapper* wrapper, llvm::Value* method);
 
@@ -47,7 +47,7 @@ class YuhuStack : public YuhuCompileInvariants {
     : YuhuCompileInvariants(parent) {}
 
  protected:
-  void initialize(llvm::Value* method, llvm::AllocaInst* sp_storage_alloca, llvm::BasicBlock* exit_block);
+  void initialize(llvm::Value* method, llvm::BasicBlock* exit_block);
 
  protected:
   // Stack overflow check - checks if the new stack pointer (sp) has enough space
@@ -80,15 +80,14 @@ class YuhuStack : public YuhuCompileInvariants {
  private:
   // Stack pointer is stored as a local variable during frame initialization
   // Frame pointer is stored in the frame header
-  mutable llvm::Value* _stack_pointer;  // Current stack pointer value
+  mutable llvm::Value* _expression_stack_pointer;  // Current expression stack pointer value
   mutable llvm::Value* _frame_pointer_addr;  // Address where frame pointer is stored in frame header
-  mutable llvm::AllocaInst* _sp_storage;  // Storage for stack pointer
+  mutable llvm::AllocaInst* _expression_stack_pointer_storage;  // Storage for expression stack pointer
 
   // Initialize stack pointer and frame pointer storage
-  // If sp_storage_alloca is NULL (native wrapper case), create a new alloca
-  void initialize_stack_pointers(llvm::Value* stack_pointer, llvm::AllocaInst* sp_storage_alloca);
+  void initialize_expression_stack_pointer(llvm::Value* stack_pointer);
 
-  llvm::Value* stack_pointer_addr() const;
+  llvm::Value* expression_stack_pointer_addr() const;
   
   llvm::Value* frame_pointer_addr() const {
     // Frame pointer is stored in the frame header
@@ -96,8 +95,8 @@ class YuhuStack : public YuhuCompileInvariants {
   }
 
  public:
-  llvm::LoadInst* CreateLoadStackPointer(const char *name = "");
-  llvm::StoreInst* CreateStoreStackPointer(llvm::Value* value);
+  llvm::LoadInst* CreateLoadExpressionStackPointer(const char *name = "");
+  llvm::StoreInst* CreateStoreExpressionStackPointer(llvm::Value* value);
   llvm::LoadInst* CreateLoadFramePointer(const char *name = "");
   llvm::StoreInst* CreateStoreFramePointer(llvm::Value* value);
   llvm::Value* CreatePopFrame(int result_slots);
@@ -225,7 +224,7 @@ class YuhuStackWithNormalFrame : public YuhuStack {
   friend class YuhuStack;
 
  protected:
-  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method, llvm::AllocaInst* sp_storage_alloca);
+  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method);
 
  private:
   YuhuFunction* _function;
