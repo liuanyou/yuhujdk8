@@ -74,7 +74,16 @@ class YuhuRuntime : public AllStatic {
     return thread->last_frame();
   }
   static Method* method(JavaThread *thread) {
-    return last_frame(thread).interpreter_frame_method();
+      frame f = last_frame(thread);
+
+      // Yuhu runtime is only called from Yuhu-compiled code
+      // The caller frame is always a compiled frame, never interpreted
+      assert(f.is_compiled_frame(), "Yuhu runtime called from unexpected frame type");
+
+      // Get method from the compiled frame's CodeBlob
+      CodeBlob* cb = f.cb();
+      assert(cb->is_nmethod(), "expected compiled code");
+      return cb->as_nmethod_or_null()->method();
   }
   static address bcp(JavaThread *thread, int bci) {
     return method(thread)->code_base() + bci;
