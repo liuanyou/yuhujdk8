@@ -121,6 +121,8 @@ class YuhuStack : public YuhuCompileInvariants {
 
   void CreateResetLastJavaFrameWithNoPC();
 
+  void CreateCallSitePlaceholder(uint64_t virtual_address);
+
  private:
   void CreateAssertLastJavaSPIsNull() const PRODUCT_RETURN;
 

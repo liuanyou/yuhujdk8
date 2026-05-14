@@ -129,14 +129,16 @@ void YuhuDebugInformationRecorder::end_safepoint(int virtual_pc_offset) {
 }
 
 // Register call site for JITLink correlation
-void YuhuDebugInformationRecorder::register_call_site(int virtual_offset, 
+void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
                                                        uint64_t virtual_address, 
-                                                       uint64_t helper_address) {
+                                                       uint64_t helper_address,
+                                                       CallSiteType call_site_type) {
     CallSiteEntry* call_site_entry = new CallSiteEntry();
     call_site_entry->virtual_offset = virtual_offset;
     call_site_entry->virtual_address = virtual_address;
     call_site_entry->helper_address = helper_address;
     call_site_entry->return_pc_offset = 0;
+    call_site_entry->call_site_type = call_site_type;
     _call_site_entries->append(call_site_entry);
 }
 

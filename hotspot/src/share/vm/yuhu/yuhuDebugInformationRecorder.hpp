@@ -15,11 +15,19 @@ namespace llvm {
     class Module;
 }
 
+enum class CallSiteType : uint8_t {
+    none = 0,
+    safepoint_poll = 1,
+    vm_call = 2,
+    java_call = 3
+};
+
 struct CallSiteEntry {
     uint64_t virtual_offset;
     uint64_t virtual_address;
     uint64_t helper_address;
     uint64_t return_pc_offset;
+    CallSiteType call_site_type;
 };
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
@@ -100,7 +108,7 @@ public:
   GrowableArray<GrowableArray<MonitorValue*>*>* frame_monitors() const { return _frame_monitors; }
 
   // Call site related functions
-  void register_call_site(int virtual_offset, uint64_t virtual_address, uint64_t helper_address);
+  void register_call_site(uint64_t virtual_offset, uint64_t virtual_address, uint64_t helper_address, CallSiteType call_site_type);
   void embed_call_site_metadata();
   
   int get_call_site_count() const {
@@ -140,6 +148,15 @@ public:
       });
     if (index == -1) return 0;
     return _call_site_entries->at(index)->helper_address;
+  }
+
+  CallSiteType get_call_site_type_by_offset(uint64_t virtual_offset) const {
+      if (!_call_site_entries) return CallSiteType::none;
+      int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->virtual_offset;
+      });
+      if (index == -1) return CallSiteType::none;
+      return _call_site_entries->at(index)->call_site_type;
   }
 
   void update_call_site_return_pc_offset(uint64_t virtual_offset, uint64_t return_pc_offset) const {

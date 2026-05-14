@@ -293,28 +293,32 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         // update return_pc_offset by virtual_offsets
                         YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset(virtual_offset, block_offset + return_pc_offset);
 
-                        // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
-                        uint64_t adr_offset = match.last_java_pc_placeholder_offset + 8;
+                        if (YuhuDebugInformationRecorder::get()->get_call_site_type_by_offset(virtual_offset) == CallSiteType::vm_call) {
+                            // The adr instruction is at marker_offset + 8 (2 instructions after marker start)
+                            uint64_t adr_offset = match.last_java_pc_placeholder_offset + 8;
 
-                        // Calculate absolute addresses for patching
-                        // BaseAddr is the load address of this section (from JITLink)
-                        uint64_t adr_absolute_address = BaseAddr + adr_offset;
-                        uint64_t return_absolute_address = BaseAddr + return_pc_offset;
+                            // Calculate absolute addresses for patching
+                            // BaseAddr is the load address of this section (from JITLink)
+                            uint64_t adr_absolute_address = BaseAddr + adr_offset;
+                            uint64_t return_absolute_address = BaseAddr + return_pc_offset;
 
-                        // Patch the adr instruction with correct PC-relative offset
-                        YuhuVirtualAddressScanner::patch_adr_instruction(
-                            CodeData,
-                            adr_offset,
-                            adr_absolute_address,      // Address of adr instruction
-                            return_absolute_address    // Target address (return after bl)
-                        );
+                            // Patch the adr instruction with correct PC-relative offset
+                            YuhuVirtualAddressScanner::patch_adr_instruction(
+                                    CodeData,
+                                    adr_offset,
+                                    adr_absolute_address,      // Address of adr instruction
+                                    return_absolute_address    // Target address (return after bl)
+                            );
+                            if (YuhuTraceMachineCode) {
+                                errs() << "  [OK] Patched adr instruction at offset " << adr_offset
+                                       << " to point to return address at offset " << return_pc_offset << "\n";
+                            }
+                        }
 
                         YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
                                                                                   YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset));
 
                         if (YuhuTraceMachineCode) {
-                            errs() << "  [OK] Patched adr instruction at offset " << adr_offset
-                                   << " to point to return address at offset " << return_pc_offset << "\n";
                             errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
                         }
                     } else if (found && match.safepoint_poll_call) {
