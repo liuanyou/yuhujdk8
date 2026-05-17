@@ -44,6 +44,7 @@
 #include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhuValue.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
 
 using namespace llvm;
@@ -1212,7 +1213,7 @@ Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_
   // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
   // the problematic field access in the generated LLVM IR
   // Pass both the target method and the current method being compiled
-  address stub_addr = YuhuCompiler::compiler()->generate_static_call_stub(method, target());
+  address stub_addr = YuhuRuntime::generate_static_call_stub(method, target());
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
   }
@@ -1232,7 +1233,7 @@ Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
   // Generate a virtual call stub that performs vtable lookup at runtime.
   // The stub address becomes the compile-time constant call target.
   // call_method is the statically declared target from the bytecode.
-  address stub_addr = YuhuCompiler::compiler()->generate_virtual_call_stub(
+  address stub_addr = YuhuRuntime::generate_virtual_call_stub(
     call_method, target(), vtable_index);
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
@@ -1250,7 +1251,7 @@ Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
                                                 address* out_stub_addr) {
   // Generate an interface call stub that performs itable lookup at runtime.
   // The stub address becomes the compile-time constant call target.
-  address stub_addr = YuhuCompiler::compiler()->generate_interface_call_stub(
+  address stub_addr = YuhuRuntime::generate_interface_call_stub(
     call_method, target());
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;

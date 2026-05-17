@@ -43,6 +43,7 @@ class ciInstanceKlass : public ciKlass {
   friend class ciMethod;
   friend class ciField;
   friend class YuhuCompiler;
+  friend class YuhuRuntime;
 
 private:
   jobject                _loader;

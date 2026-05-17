@@ -31,11 +31,28 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 
+class ciMethod;
+
 extern "C" void gc_safepoint_poll();
 
 class YuhuRuntime : public AllStatic {
   // VM calls
  public:
+  // Generate static call stub for direct method calls
+  static address generate_static_call_stub(ciMethod* target_method, 
+                                           ciMethod* current_method);
+  
+  // Generate virtual call stub for virtual method calls
+  // This stub performs vtable lookup at runtime and jumps to _from_compiled_entry
+  static address generate_virtual_call_stub(ciMethod* target_method, 
+                                            ciMethod* current_method, 
+                                            int vtable_index);
+  
+  // Generate interface call stub for interface method calls
+  // This stub performs itable lookup at runtime and jumps to _from_compiled_entry
+  static address generate_interface_call_stub(ciMethod* target_method, 
+                                              ciMethod* current_method);
+
   static int find_exception_handler(JavaThread* thread,
                                     int*        indexes,
                                     int         num_indexes);
