@@ -43,16 +43,6 @@ int YuhuDebugInformationRecorder::_tls_index = -1;
 // Constructor
 YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   : _module(NULL) {
-  _virtual_offsets = new GrowableArray<int>();
-  _oopmaps = new GrowableArray<OopMap*>();
-  
-  _virtual_frame_offsets = new GrowableArray<int>();
-  _frame_targets = new GrowableArray<ciMethod*>();
-  _frame_bcis = new GrowableArray<int>();
-  _frame_locals = new GrowableArray<GrowableArray<ScopeValue*>*>();
-  _frame_expressions = new GrowableArray<GrowableArray<ScopeValue*>*>();
-  _frame_monitors = new GrowableArray<GrowableArray<MonitorValue*>*>();
-
   _call_site_entries = new GrowableArray<CallSiteEntry*>();
 
   _stack_map_instruction_offsets = new GrowableArray<uint32_t>();
@@ -99,46 +89,19 @@ void YuhuDebugInformationRecorder::release() {
   }
 }
 
-// Add safepoint information
-void YuhuDebugInformationRecorder::add_safepoint(int virtual_pc_offset, OopMap* oopmap) {
-  _virtual_offsets->append(virtual_pc_offset);
-  _oopmaps->append(oopmap);
-}
-
-// Describe scope information
-void YuhuDebugInformationRecorder::describe_scope(int virtual_pc_offset,
-                                                  ciMethod* method,
-                                                  int bci,
-                                                  bool reexecute,
-                                                  bool rethrow_exception,
-                                                  bool is_method_handle_invoke,
-                                                  GrowableArray<ScopeValue*>* locals,
-                                                  GrowableArray<ScopeValue*>* expressions,
-                                                  GrowableArray<MonitorValue*>* monitors) {
-  _virtual_frame_offsets->append(virtual_pc_offset);
-  _frame_targets->append(method);
-  _frame_bcis->append(bci);
-  _frame_locals->append(locals);
-  _frame_expressions->append(expressions);
-  _frame_monitors->append(monitors);
-}
-
-// End safepoint recording
-void YuhuDebugInformationRecorder::end_safepoint(int virtual_pc_offset) {
-  // No action needed - all information has been recorded
-}
-
 // Register call site for JITLink correlation
 void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
                                                        uint64_t virtual_address, 
                                                        uint64_t helper_address,
-                                                       CallSiteType call_site_type) {
+                                                       CallSiteType call_site_type,
+                                                       int bci) {
     CallSiteEntry* call_site_entry = new CallSiteEntry();
     call_site_entry->virtual_offset = virtual_offset;
     call_site_entry->virtual_address = virtual_address;
     call_site_entry->helper_address = helper_address;
     call_site_entry->return_pc_offset = 0;
     call_site_entry->call_site_type = call_site_type;
+    call_site_entry->bci = bci;
     _call_site_entries->append(call_site_entry);
 }
 
@@ -285,6 +248,15 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         }
         // call sites need an oopmap even there is no live oop
         real_recorder->add_safepoint(pc_offset, oopmap);
+        real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
+                                      method, // the method being compiled (the caller)
+                                      call_site_entry->bci, // the BCI of the invoke bytecode in the caller
+                                      false, // Whether to re-execute the bytecode after deoptimization
+                                      false, // Whether this is a MethodHandle invoke
+                                      false, // Whether the return value is an oop
+                                      NULL, // DebugToken* for local variables (can be NULL/empty)
+                                      NULL, // DebugToken* for expression stack (can be NULL/empty)
+                                      NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
         real_recorder->end_safepoint(pc_offset);
         // record processed instruction offset
         processed_instruction_offsets.append(return_pc_offset);

@@ -675,7 +675,7 @@ void YuhuTopLevelBlock::maybe_add_safepoint() {
     uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
     uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
     // call_target_va is not used in the CreateCall, just create one for no use
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll, CallSiteType::safepoint_poll);
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll, CallSiteType::safepoint_poll, bci());
     // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
     // otherwise, poll_type relocation record can't be created. hence patching adr logic is a little different
     // than call site in CallSiteExtractorPlugin
@@ -1476,7 +1476,7 @@ void YuhuTopLevelBlock::do_call() {
   stack()->CreateCallSitePlaceholder(last_java_pc_va);
   
   // NEW: Register call site for later patching
-  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address, CallSiteType::java_call);
+  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address, CallSiteType::java_call, bci());
 
   // Save callee-saved registers that Yuhu uses but interpreter may corrupt
 //  builder()->CreateSaveCalleeSavedRegisters();

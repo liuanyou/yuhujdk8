@@ -149,9 +149,6 @@ class YuhuFunction : public YuhuTargetInvariants {
   // Per-function deoptimization stub support
   address deoptimization_stub() const { return _deoptimization_stub; }
   void generate_deoptimization_stub();
-
-  // Process deferred OopMaps before destruction
-  void process_deferred_oopmaps();
   
   // On-stack replacement
  private:

@@ -326,7 +326,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
         llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
         callee->getType());
 
-      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call);
+      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci());
     }
     
     // Step 5: Store last_Java_pc placeholder (will be patched later)
