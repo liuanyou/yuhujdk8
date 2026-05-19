@@ -58,6 +58,7 @@ extern "C" void gc_safepoint_poll();
 #include "c1/c1_Runtime1.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "yuhu/yuhuIRTransformer.hpp"
+#include "yuhu/yuhuRuntime.hpp"
 
 #include <fnmatch.h>
 #include <cstring>
@@ -377,6 +378,9 @@ YuhuCompiler::YuhuCompiler()
       fatal(err_msg("Failed to add native IR module: %s", ErrMsg.c_str()));
     }
   }
+
+  // Initialize VM call RuntimeStubs
+  YuhuRuntime::initialize_vm_stubs();
 
   // All done
   set_state(initialized);

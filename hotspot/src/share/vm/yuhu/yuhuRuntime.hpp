@@ -36,8 +36,35 @@ class ciMethod;
 extern "C" void gc_safepoint_poll();
 
 class YuhuRuntime : public AllStatic {
+  // VM call stubs (RuntimeStub wrappers)
+ private:
+  static address _new_instance_stub;
+  static address _newarray_stub;
+  static address _anewarray_stub;
+  static address _multianewarray_stub;
+  static address _monitorenter_stub;
+  static address _monitorexit_stub;
+  static address _register_finalizer_stub;
+  static address _find_exception_handler_stub;
+  
+  // Stub generation functions
+  static address generate_vm_stub(const char* name, address C_function);
+  
   // VM calls
  public:
+  // Initialize all VM call stubs
+  static void initialize_vm_stubs();
+  
+  // Getter functions for stub addresses
+  static address new_instance_stub() { return _new_instance_stub; }
+  static address newarray_stub() { return _newarray_stub; }
+  static address anewarray_stub() { return _anewarray_stub; }
+  static address multianewarray_stub() { return _multianewarray_stub; }
+  static address monitorenter_stub() { return _monitorenter_stub; }
+  static address monitorexit_stub() { return _monitorexit_stub; }
+  static address register_finalizer_stub() { return _register_finalizer_stub; }
+  static address find_exception_handler_stub() { return _find_exception_handler_stub; }
+  
   // Generate static call stub for direct method calls
   static address generate_static_call_stub(ciMethod* target_method, 
                                            ciMethod* current_method);

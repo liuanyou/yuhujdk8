@@ -261,35 +261,35 @@ Value* YuhuBuilder::make_function(address     func,
 
 Value* YuhuBuilder::find_exception_handler() {
   return make_function(
-    (address) YuhuRuntime::find_exception_handler, "TIi", "i");
+    YuhuRuntime::find_exception_handler_stub(), "TIi", "i");
 }
 
 Value* YuhuBuilder::monitorenter() {
-  return make_function((address) YuhuRuntime::monitorenter, "TM", "v");
+  return make_function(YuhuRuntime::monitorenter_stub(), "TM", "v");
 }
 
 Value* YuhuBuilder::monitorexit() {
-  return make_function((address) YuhuRuntime::monitorexit, "TM", "v");
+  return make_function(YuhuRuntime::monitorexit_stub(), "TM", "v");
 }
 
 Value* YuhuBuilder::new_instance() {
-  return make_function((address) YuhuRuntime::new_instance, "Ti", "v");
+  return make_function(YuhuRuntime::new_instance_stub(), "Ti", "v");
 }
 
 Value* YuhuBuilder::newarray() {
-  return make_function((address) YuhuRuntime::newarray, "Tii", "v");
+  return make_function(YuhuRuntime::newarray_stub(), "Tii", "v");
 }
 
 Value* YuhuBuilder::anewarray() {
-  return make_function((address) YuhuRuntime::anewarray, "Tii", "v");
+  return make_function(YuhuRuntime::anewarray_stub(), "Tii", "v");
 }
 
 Value* YuhuBuilder::multianewarray() {
-  return make_function((address) YuhuRuntime::multianewarray, "TiiI", "v");
+  return make_function(YuhuRuntime::multianewarray_stub(), "TiiI", "v");
 }
 
 Value* YuhuBuilder::register_finalizer() {
-  return make_function((address) YuhuRuntime::register_finalizer, "TO", "v");
+  return make_function(YuhuRuntime::register_finalizer_stub(), "TO", "v");
 }
 
 // Klass pointer encoding/decoding (compressed class pointers support)

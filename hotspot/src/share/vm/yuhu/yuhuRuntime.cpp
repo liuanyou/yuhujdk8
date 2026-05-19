@@ -542,4 +542,95 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
 
 #endif // TARGET_ARCH_aarch64
 
+// ============================================================================
+// VM Call RuntimeStubs (Activity 068)
+// ============================================================================
+// These stubs wrap VM function calls to provide proper frame boundaries for GC.
+// They prevent the preserve_callee_argument_oops() assertion failure by ensuring
+// the youngest frame during GC is a RuntimeStub (which has a no-op implementation)
+// rather than an nmethod frame at a non-invoke BCI.
+
+#ifdef TARGET_ARCH_aarch64
+
+// Initialize static stub addresses
+address YuhuRuntime::_new_instance_stub = NULL;
+address YuhuRuntime::_newarray_stub = NULL;
+address YuhuRuntime::_anewarray_stub = NULL;
+address YuhuRuntime::_multianewarray_stub = NULL;
+address YuhuRuntime::_monitorenter_stub = NULL;
+address YuhuRuntime::_monitorexit_stub = NULL;
+address YuhuRuntime::_register_finalizer_stub = NULL;
+address YuhuRuntime::_find_exception_handler_stub = NULL;
+
+// Initialize all VM call stubs
+void YuhuRuntime::initialize_vm_stubs() {
+  _new_instance_stub = generate_vm_stub("yuhu_new_instance_stub", (address) YuhuRuntime::new_instance);
+  _newarray_stub = generate_vm_stub("yuhu_newarray_stub", (address) YuhuRuntime::newarray);
+  _anewarray_stub = generate_vm_stub("yuhu_anewarray_stub", (address) YuhuRuntime::anewarray);
+  _multianewarray_stub = generate_vm_stub("yuhu_multianewarray_stub", (address) YuhuRuntime::multianewarray);
+  _monitorenter_stub = generate_vm_stub("yuhu_monitorenter_stub", (address) YuhuRuntime::monitorenter);
+  _monitorexit_stub = generate_vm_stub("yuhu_monitorexit_stub", (address) YuhuRuntime::monitorexit);
+  _register_finalizer_stub = generate_vm_stub("yuhu_register_finalizer_stub", (address) YuhuRuntime::register_finalizer);
+  _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
+  
+  if (YuhuTraceInstalls) {
+    tty->print_cr("Yuhu: VM call stubs initialized");
+    tty->print_cr("  new_instance_stub:           " PTR_FORMAT, p2i(_new_instance_stub));
+    tty->print_cr("  newarray_stub:               " PTR_FORMAT, p2i(_newarray_stub));
+    tty->print_cr("  anewarray_stub:              " PTR_FORMAT, p2i(_anewarray_stub));
+    tty->print_cr("  multianewarray_stub:         " PTR_FORMAT, p2i(_multianewarray_stub));
+    tty->print_cr("  monitorenter_stub:           " PTR_FORMAT, p2i(_monitorenter_stub));
+    tty->print_cr("  monitorexit_stub:            " PTR_FORMAT, p2i(_monitorexit_stub));
+    tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT, p2i(_register_finalizer_stub));
+    tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT, p2i(_find_exception_handler_stub));
+  }
+}
+
+address YuhuRuntime::generate_vm_stub(const char* name, address C_function) {
+    ResourceMark rm;
+    const int stub_size = 128;
+    CodeBuffer cb(name, stub_size, stub_size);
+    YuhuMacroAssembler masm(&cb);
+
+    masm.write_inst("sub sp, sp, #16");
+    masm.write_inst("stp x29, x30, [sp]");
+    masm.write_inst("mov x29, sp");
+
+    masm.write_insts_set_last_java_frame(YuhuMacroAssembler::sp, YuhuMacroAssembler::noreg, YuhuMacroAssembler::noreg, YuhuMacroAssembler::x9);
+
+    YuhuLabel label;
+    masm.write_inst_adr(YuhuMacroAssembler::x9, label);
+    masm.write_inst("stp xzr, x9, [sp, #-16]!");
+
+    masm.write_insts_lea(YuhuMacroAssembler::x8, YuhuExternalAddress(C_function));
+    masm.write_inst_blr(YuhuMacroAssembler::x8);
+    masm.pin_label(label);
+
+    masm.write_inst("add sp, sp, #16");
+
+    masm.write_insts_reset_last_java_frame(true);
+
+    masm.write_inst("ldp x29, x30, [sp]");
+    masm.write_inst("add sp, sp, #16");
+    masm.write_inst("ret");
+    masm.flush();
+
+    // Create RuntimeStub
+    // Frame size: 2 words (FP + LR)
+    int frame_size_in_words = 2;
+
+    RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+            name,
+            &cb,
+            CodeOffsets::frame_never_safe,
+            frame_size_in_words,
+            NULL,  // no oopmap needed - stub has no live oops
+            false  // caller_must_gc_arguments
+    );
+
+    return stub->entry_point();
+}
+
+#endif // TARGET_ARCH_aarch64
+
 

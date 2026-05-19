@@ -328,9 +328,9 @@ class YuhuTopLevelBlock : public YuhuBlock {
 
       YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci());
     }
-    
-    // Step 5: Store last_Java_pc placeholder (will be patched later)
-    stack()->CreateSetLastJavaFrameWithPlaceholderPC(last_java_pc_va);
+
+    // Step 5: Store last_Java_pc placeholder
+    stack()->CreateCallSitePlaceholder(last_java_pc_va);
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
     decache_for_VM_call(virtual_offset);
@@ -347,9 +347,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
 #else
     llvm::CallInst *res = builder()->CreateCall(virtual_callee, llvm::makeArrayRef(args_start, args_end));
 #endif
-    
-    // Step 8: Reset last_Java_pc and cache results
-    stack()->CreateResetLastJavaFrame();
+
     cache_after_VM_call();
     if (exception_action & EAM_CHECK) {
       check_pending_exception(exception_action);

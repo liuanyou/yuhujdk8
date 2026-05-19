@@ -253,7 +253,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                                       call_site_entry->bci, // the BCI of the invoke bytecode in the caller
                                       false, // Whether to re-execute the bytecode after deoptimization
                                       false, // Whether this is a MethodHandle invoke
-                                      false, // Whether the return value is an oop
+                                      method->signature()->return_type()->is_object(), // Whether the return value is an oop
                                       NULL, // DebugToken* for local variables (can be NULL/empty)
                                       NULL, // DebugToken* for expression stack (can be NULL/empty)
                                       NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
