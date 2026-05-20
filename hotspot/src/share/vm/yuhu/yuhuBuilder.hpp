@@ -247,6 +247,14 @@ class YuhuBuilder : public llvm::IRBuilder<> {
  private:
   GrowableArray<jobject>* _pending_oops;  // Indexed by oop_id
   int _next_oop_id;                       // Next unique oop_id to assign
+
+  // Pending metadata management for deferred metadata_Relocation generation.
+  // Mirrors the oop scheme: each CreateInlineMetadata() emits a marker block
+  // that the post-codegen scanner later turns into a metadata_Relocation.
+  // Unlike oops, the placeholder holds the metadata address directly
+  // (no temp_placeholder indirection) because Metadata* is stable.
+  GrowableArray< ::Metadata*>* _pending_metadata;  // Indexed by metadata_id
+  int _next_metadata_id;                            // Next unique metadata_id to assign
   
  public:
   llvm::Value* CreateInlineOop(ciObject* object, const char* name = "");

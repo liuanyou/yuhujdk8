@@ -48,10 +48,15 @@
 using namespace llvm;
 
 JRT_ENTRY(int, YuhuRuntime::find_exception_handler(JavaThread* thread,
+                                                    Method*     caller_method,
+                                                    oop         exception,
                                                     int*        indexes,
                                                     int         num_indexes))
-  constantPoolHandle pool(thread, method(thread)->constants());
-  KlassHandle exc_klass(thread, ((oop) tos_at(thread, 0))->klass());
+  // Option A: caller passes Method* and the exception oop explicitly.
+  // The constant pool comes from the caller Method* (the JIT-compiled
+  // Yuhu method that threw / re-dispatched the exception).
+  constantPoolHandle pool(thread, caller_method->constants());
+  KlassHandle exc_klass(thread, exception->klass());
 
   for (int i = 0; i < num_indexes; i++) {
     Klass* tmp = pool->klass_at(indexes[i], CHECK_0);
@@ -93,8 +98,9 @@ JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
   ObjectSynchronizer::slow_exit(object(), lock->lock(), thread);
 JRT_END
 
-JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, int index))
-  Klass* k_oop = method(thread)->constants()->klass_at(index, CHECK);
+JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, Klass* k_oop))
+  // Option A: JIT passes resolved Klass* directly (embedded as a
+  // metadata-relocated constant in the nmethod). No frame walk needed.
   instanceKlassHandle klass(THREAD, k_oop);
 
   // Make sure we are not instantiating an abstract klass
@@ -129,18 +135,18 @@ JRT_ENTRY(void, YuhuRuntime::newarray(JavaThread* thread,
 JRT_END
 
 JRT_ENTRY(void, YuhuRuntime::anewarray(JavaThread* thread,
-                                        int         index,
+                                        Klass*      klass,
                                         int         size))
-  Klass* klass = method(thread)->constants()->klass_at(index, CHECK);
+  // Option A: JIT passes the (already resolved) element Klass* directly.
   objArrayOop obj = oopFactory::new_objArray(klass, size, CHECK);
   thread->set_vm_result(obj);
 JRT_END
 
 JRT_ENTRY(void, YuhuRuntime::multianewarray(JavaThread* thread,
-                                             int         index,
+                                             Klass*      klass,
                                              int         ndims,
                                              int*        dims))
-  Klass* klass = method(thread)->constants()->klass_at(index, CHECK);
+  // Option A: JIT passes the (already resolved) array Klass* directly.
   oop obj = ArrayKlass::cast(klass)->multi_allocate(ndims, dims, CHECK);
   thread->set_vm_result(obj);
 JRT_END

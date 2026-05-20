@@ -625,12 +625,22 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
 }
 
 void YuhuTopLevelBlock::marshal_exception_slow(int num_options) {
+  // Option A: pass Method* and the exception oop explicitly so the C helper
+  // does not need to walk the caller frame. The catch-klass cp indexes
+  // remain (the slow path is precisely the case where at least one catch
+  // klass is *not* loaded, so they cannot be pre-resolved at JIT time).
   int *indexes = NEW_RESOURCE_ARRAY(int, num_options);
   for (int i = 0; i < num_options; i++)
     indexes[i] = exc_handler(i)->catch_klass_index();
 
+  Value *method_const = builder()->CreateInlineMetadata(
+    target(), YuhuType::klass_type());
+  Value *exception_oop = xstack(0)->jobject_value();
+
   Value *index = call_vm(
     builder()->find_exception_handler(),
+    method_const,
+    exception_oop,
     builder()->CreateInlineData(
       indexes,
       num_options * sizeof(int),
@@ -1971,9 +1981,11 @@ void YuhuTopLevelBlock::do_new() {
   }
 
   // The slow path
+  // Option A: pass resolved Klass* directly (the same constant used by the
+  // fast path above on line ~1964), instead of the cp index.
   call_vm(
     builder()->new_instance(),
-    LLVMValue::jint_constant(iter()->get_klass_index()),
+    builder()->CreateInlineMetadata(klass, YuhuType::klass_type()),
     EX_CHECK_FULL);
   slow_object = get_vm_result();
   got_slow = builder()->GetInsertBlock();
@@ -2020,9 +2032,10 @@ void YuhuTopLevelBlock::do_anewarray() {
     Unimplemented();
   }
 
+  // Option A: pass the resolved element Klass* directly.
   call_vm(
     builder()->anewarray(),
-    LLVMValue::jint_constant(iter()->get_klass_index()),
+    builder()->CreateInlineMetadata(klass, YuhuType::klass_type()),
     pop()->jint_value(),
     EX_CHECK_FULL);
 
@@ -2050,9 +2063,10 @@ void YuhuTopLevelBlock::do_multianewarray() {
       builder()->CreateStructGEP(llvm::ArrayType::get(YuhuType::jint_type(), ndims), dimensions, i));
   }
 
+  // Option A: pass the resolved array Klass* directly.
   call_vm(
     builder()->multianewarray(),
-    LLVMValue::jint_constant(iter()->get_klass_index()),
+    builder()->CreateInlineMetadata(array_klass, YuhuType::klass_type()),
     LLVMValue::jint_constant(ndims),
     builder()->CreateStructGEP(llvm::ArrayType::get(YuhuType::jint_type(), ndims), dimensions, 0),
     EX_CHECK_FULL);

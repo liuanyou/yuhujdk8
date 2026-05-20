@@ -393,6 +393,19 @@ class YuhuTopLevelBlock : public YuhuBlock {
     return call_vm(callee, args, args + 3, exception_action, return_type);
   }
 
+  // Overload with 4 args + explicit return type (added for Option A:
+  // find_exception_handler now takes Method*, oop, int*, int).
+  llvm::CallInst* call_vm(llvm::Value* callee,
+                          llvm::Value* arg1,
+                          llvm::Value* arg2,
+                          llvm::Value* arg3,
+                          llvm::Value* arg4,
+                          int          exception_action,
+                          llvm::Type*  return_type) {
+    llvm::Value *args[] = {thread(), arg1, arg2, arg3, arg4};
+    return call_vm(callee, args, args + 5, exception_action, return_type);
+  }
+
   // VM call oop return handling
  private:
   llvm::LoadInst* get_vm_result() const {

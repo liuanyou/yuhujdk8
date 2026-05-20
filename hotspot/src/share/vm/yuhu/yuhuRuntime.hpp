@@ -80,18 +80,24 @@ class YuhuRuntime : public AllStatic {
   static address generate_interface_call_stub(ciMethod* target_method, 
                                               ciMethod* current_method);
 
+  // NOTE (Option A refactor): VM call entry points no longer derive the
+  // current Method* / cp index by walking the caller frame, because the
+  // RuntimeStub wrapper makes the youngest frame a non-nmethod CodeBlob.
+  // The JIT now passes the resolved Method* / Klass* / oop directly.
   static int find_exception_handler(JavaThread* thread,
+                                    Method*     method,
+                                    oop         exception,
                                     int*        indexes,
                                     int         num_indexes);
 
   static void monitorenter(JavaThread* thread, BasicObjectLock* lock);
   static void monitorexit(JavaThread* thread, BasicObjectLock* lock);
 
-  static void new_instance(JavaThread* thread, int index);
+  static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);
-  static void anewarray(JavaThread* thread, int index, int size);
+  static void anewarray(JavaThread* thread, Klass* element_klass, int size);
   static void multianewarray(JavaThread* thread,
-                             int         index,
+                             Klass*      array_klass,
                              int         ndims,
                              int*        dims);
 
@@ -111,36 +117,13 @@ class YuhuRuntime : public AllStatic {
                                          const char* file,
                                          int         line);
 
-  // Helpers for VM calls
- private:
-  // For AArch64, use standard frame API instead of ZeroStack
-  static frame last_frame(JavaThread *thread) {
-    return thread->last_frame();
-  }
-  static Method* method(JavaThread *thread) {
-      frame f = last_frame(thread);
-
-      // Yuhu runtime is only called from Yuhu-compiled code
-      // The caller frame is always a compiled frame, never interpreted
-      assert(f.is_compiled_frame(), "Yuhu runtime called from unexpected frame type");
-
-      // Get method from the compiled frame's CodeBlob
-      CodeBlob* cb = f.cb();
-      assert(cb->is_nmethod(), "expected compiled code");
-      return cb->as_nmethod_or_null()->method();
-  }
-  static address bcp(JavaThread *thread, int bci) {
-    return method(thread)->code_base() + bci;
-  }
-  static int two_byte_index(JavaThread *thread, int bci) {
-    return Bytes::get_Java_u2(bcp(thread, bci) + 1);
-  }
-  static intptr_t tos_at(JavaThread *thread, int offset) {
-    // For AArch64, access expression stack through standard frame API
-    frame f = last_frame(thread);
-    intptr_t* tos = f.interpreter_frame_tos_address();
-    return *(tos + offset);
-  }
+  // NOTE (Option A refactor): the previous private helpers
+  //   last_frame() / method() / bcp() / two_byte_index() / tos_at()
+  // walked the caller frame to recover the Method* / cp index / TOS.
+  // After introducing the VM-call RuntimeStub wrapper, the youngest
+  // frame at C-entry is the stub (not the nmethod), so frame-introspection
+  // would assert. All required metadata is now passed explicitly by the
+  // JIT via embedded Klass*/Method*/oop constants, mirroring C1/C2.
 
   // Non-VM calls
  public:

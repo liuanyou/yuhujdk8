@@ -61,7 +61,9 @@ YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
     _code_buffer(code_buffer),
     _function(function),
     _pending_oops(new GrowableArray<jobject>(100)),
-    _next_oop_id(0) {
+    _next_oop_id(0),
+    _pending_metadata(new GrowableArray< ::Metadata*>(100)),
+    _next_metadata_id(0) {
 }
 
 // Helpers for accessing structures
@@ -260,8 +262,11 @@ Value* YuhuBuilder::make_function(address     func,
 // VM calls
 
 Value* YuhuBuilder::find_exception_handler() {
+  // Option A signature: (JavaThread*, Method*, oop, int*, int) -> int
+  // T = thread, K = Method* (metadata pointer), O = oop (exception),
+  // I = int* (cp index array), i = int (num_indexes)
   return make_function(
-    YuhuRuntime::find_exception_handler_stub(), "TIi", "i");
+    YuhuRuntime::find_exception_handler_stub(), "TKOIi", "i");
 }
 
 Value* YuhuBuilder::monitorenter() {
@@ -273,7 +278,8 @@ Value* YuhuBuilder::monitorexit() {
 }
 
 Value* YuhuBuilder::new_instance() {
-  return make_function(YuhuRuntime::new_instance_stub(), "Ti", "v");
+  // Option A: (JavaThread*, Klass*) -> void
+  return make_function(YuhuRuntime::new_instance_stub(), "TK", "v");
 }
 
 Value* YuhuBuilder::newarray() {
@@ -281,11 +287,13 @@ Value* YuhuBuilder::newarray() {
 }
 
 Value* YuhuBuilder::anewarray() {
-  return make_function(YuhuRuntime::anewarray_stub(), "Tii", "v");
+  // Option A: (JavaThread*, Klass*, int) -> void
+  return make_function(YuhuRuntime::anewarray_stub(), "TKi", "v");
 }
 
 Value* YuhuBuilder::multianewarray() {
-  return make_function(YuhuRuntime::multianewarray_stub(), "TiiI", "v");
+  // Option A: (JavaThread*, Klass*, int, int*) -> void
+  return make_function(YuhuRuntime::multianewarray_stub(), "TKiI", "v");
 }
 
 Value* YuhuBuilder::register_finalizer() {
@@ -307,7 +315,7 @@ Value* YuhuBuilder::encode_klass_not_null(Value* full_klass) {
   if (Universe::narrow_klass_base() == NULL) {
     if (Universe::narrow_klass_shift() != 0) {
       assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
-      return CreateLShr(full_klass_int, LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+      return CreateLShr(full_klass_int, LLVMValue::intptr_constant(Universe::narrow_klass_shift()));
     }
     return full_klass_int; // return i64
   }
@@ -317,7 +325,7 @@ Value* YuhuBuilder::encode_klass_not_null(Value* full_klass) {
   Value *sub = CreateSub(full_klass_int, base);
   if (Universe::narrow_klass_shift() != 0) {
     assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
-    return CreateLShr(sub, LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+    return CreateLShr(sub, LLVMValue::intptr_constant(Universe::narrow_klass_shift()));
   }
   return sub; // return i64
 }
@@ -1148,11 +1156,71 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
 Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name) {
   assert(metadata != NULL, "inlined metadata must not be NULL");
   assert(metadata->is_metaspace_object(), "sanity check");
-  
-  // Directly embed metadata pointer as immediate constant
-  // Metadata is in Metaspace, address is fixed and won't change
+
+  Module* mod = YuhuContext::current().module();
+  LLVMContext& ctx = mod->getContext();
+
+  // Allocate unique metadata_id and record the Metadata* in pending_metadata.
+  // The marker scanner later uses metadata_id (in w20) to look up the entry,
+  // verifies that the placeholder address matches, and emits a
+  // metadata_Relocation::spec(metadata_index) at the placeholder PC.
+  int metadata_id = _next_metadata_id++;
+  while (_pending_metadata->length() <= metadata_id) {
+    _pending_metadata->append(NULL);
+  }
+  _pending_metadata->at_put(metadata_id, metadata);
+
+  // Use the Metadata* address directly in the placeholder (no temp_placeholder).
+  // Metaspace addresses are stable and fit within 48 bits on AArch64, so the
+  // 3-instruction mov/movk/movk sequence is sufficient.
+  uint64_t metadata_addr = (uint64_t)(uintptr_t)metadata;
+  assert((metadata_addr & 0xFFFF000000000000ULL) == 0,
+         "metadata address must fit in 48 bits");
+
+  // Generate marker + placeholder using inline assembly.
+  // Pattern (mirrors CreateInlineOop, but with 0xDEAD low marker for metadata):
+  //   mov  w19, #0xDEAD                  ; marker low  (distinguishes metadata from oop)
+  //   movk w19, #0xBABE, lsl #16         ; marker high
+  //   mov  w20, #metadata_id             ; index into _pending_metadata
+  //   nop
+  //   nop
+  //   mov  xN,  #addr[15:0]              ; placeholder = real Metadata* (48 bits)
+  //   movk xN,  #addr[31:16], lsl #16
+  //   movk xN,  #addr[47:32], lsl #32
+  // Total: 8 instructions (3 marker + 2 nops + 3 placeholder).
+  // High 16 bits of the placeholder are zero (asserted above), matching
+  // the existing scanner contract for 48-bit mov/movk/movk sequences.
+  char asm_string[512];
+  snprintf(asm_string, sizeof(asm_string),
+           "mov w19, #0xDEAD\n"
+           "movk w19, #0xBABE, lsl #16\n"
+           "mov w20, #%d\n"                    // metadata_id
+           "nop\n"
+           "nop\n"
+           "mov ${0:x}, #0x%04lx\n"
+           "movk ${0:x}, #0x%04lx, lsl #16\n"
+           "movk ${0:x}, #0x%04lx, lsl #32",
+           metadata_id & 0xFFFF,                      // metadata_id for marker
+           (metadata_addr >> 0)  & 0xFFFFULL,         // low 16 bits
+           (metadata_addr >> 16) & 0xFFFFULL,         // mid-low 16 bits
+           (metadata_addr >> 32) & 0xFFFFULL);        // mid-high 16 bits
+
+  llvm::FunctionType* asm_type = llvm::FunctionType::get(
+    llvm::Type::getInt64Ty(ctx), {}, false);
+
+  llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
+    asm_type,
+    asm_string,
+    "=r,~{w19},~{w20},~{memory}",  // Output + clobbers (w19/w20 hold marker)
+    true,            // Has side effects: yes (prevent CSE/DCE)
+    false,           // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+
+  // Emit the marker + placeholder, then cast i64 result to the requested
+  // metadata pointer type so callers see the same value type as before.
   return CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)metadata),
+    CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
     type,
     name);
 }
@@ -1412,6 +1480,23 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return false;
     };
 
+    // metadata_relocation marker pattern
+    // Same shape as oop marker but with low immediate 0xDEAD (vs 0xCAFE).
+    //   [0] mov  w19, #0xDEAD            → 0x529BD5B3
+    //   [1] movk w19, #0xBABE, lsl #16   → 0x72B757D3
+    //   [2] mov  w20, #metadata_id       → 0x528xxxxxB4 (bits 5-20 = metadata_id)
+    //   [3] nop, [4] nop
+    // Distinguished from last_Java_pc marker (which has 0xDEAD in the HIGH 16 bits).
+    auto is_metadata_marker_pattern = [](uint32_t* instr) -> bool {
+        if (instr[0] == 0x529BD5B3 &&  // mov w19, #0xDEAD
+            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
+            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop
+            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
+            return true;
+        }
+        return false;
+    };
+
     // Helper function to extract oop_id from marker
     auto extract_oop_id = [](uint32_t* instr) -> int {
         // Extract imm16 from: mov w20, #imm16
@@ -1558,6 +1643,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     };
 
     int marker_count = 0;
+    int metadata_marker_count = 0;
     int adrp_count = 0;
 
     // Scan machine code for marker pattern
@@ -1601,6 +1687,57 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 cb->relocate((address)placeholder_instrs, rspec);
                 marker_count++;
             }
+        } else if (is_metadata_marker_pattern(llvm_instr)) {
+            // Metadata marker handling.
+            // Unlike oops, the placeholder already holds the real Metadata*
+            // address (CreateInlineMetadata embeds the address directly).
+            // We therefore only need to:
+            //   1. extract metadata_id from w20
+            //   2. look up the Metadata* in _pending_metadata
+            //   3. sanity-check that the placeholder address matches
+            //   4. allocate a metadata_index and emit metadata_Relocation
+            // The instruction stream is NOT patched (the immediate is already correct).
+            int metadata_id = extract_oop_id(llvm_instr);  // same imm16-from-w20 extraction
+
+            assert(metadata_id >= 0 && metadata_id < _pending_metadata->length(),
+                   "metadata_id out of range");
+            ::Metadata* metadata = _pending_metadata->at(metadata_id);
+            assert(metadata != NULL, "metadata must not be NULL");
+            assert(metadata->is_metaspace_object(), "sanity check");
+
+            // Placeholder is immediately after the 5-instruction marker block.
+            uint32_t* llvm_placeholder_instrs = (uint32_t*)(llvm_code_start + (i + 5) * 4);
+            if (!is_mov_movk_sequence(llvm_placeholder_instrs)) {
+                continue;
+            }
+
+            // Locate the matching placeholder in the actual CodeBuffer.
+            uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
+            assert(is_metadata_marker_pattern(instr), "should be metadata marker pattern");
+            uint32_t* placeholder_instrs = (uint32_t*)(code_start + (i + 5) * 4 + adapter_size);
+            assert(is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
+
+            // Verify the embedded address matches the recorded Metadata*.
+            // The placeholder encodes 48 bits; metaspace addresses fit in 48 bits.
+            uint64_t embedded_addr = extract_from_movk_sequence(placeholder_instrs);
+            uint64_t expected_addr = (uint64_t)(uintptr_t)metadata;
+            assert((expected_addr & 0xFFFF000000000000ULL) == 0,
+                   "metadata address must fit in 48 bits");
+            assert(embedded_addr == expected_addr,
+                   "placeholder address must match recorded Metadata*");
+
+            // Allocate a metadata_index from the OopRecorder. Note:
+            // metadata_Relocation::spec(idx) requires idx > 0 (idx==0 is reserved
+            // for unrecorded). allocate_metadata_index() returns indices >= 1.
+            int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
+            assert(metadata_index > 0, "metadata_index must be > 0");
+
+            // Emit the relocation record at the placeholder PC. The first
+            // instruction of the mov/movk/movk triplet is the relocation
+            // address (HotSpot AArch64 convention).
+            RelocationHolder rspec = metadata_Relocation::spec(metadata_index);
+            cb->relocate((address)placeholder_instrs, rspec);
+            metadata_marker_count++;
         } else if (is_adrp_pattern(llvm_instr)) {
             // Locate target page
             int64_t page_offset = extract_page_offset(llvm_instr);
@@ -1657,8 +1794,10 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     }
 
     if (YuhuTraceOffset) {
-        tty->print_cr("Yuhu: Found %d markers and generated %d relocation records",
+        tty->print_cr("Yuhu: Found %d oop markers and generated %d relocation records",
                       marker_count, marker_count);
+        tty->print_cr("Yuhu: Found %d metadata markers and generated %d relocation records",
+                      metadata_marker_count, metadata_marker_count);
         tty->print_cr("Yuhu: Found %d adrp instructions and generated %d relocation records",
                       adrp_count, adrp_count);
         tty->flush();
