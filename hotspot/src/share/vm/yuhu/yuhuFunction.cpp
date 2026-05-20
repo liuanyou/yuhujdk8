@@ -78,8 +78,19 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
     params.push_back(llvm_type);
   }
   
-  // Return type is always int (jint)
-  return FunctionType::get(YuhuType::jint_type(), params, false);
+  // Return type must match the Java method's return type so the LLVM `ret`
+  // value is placed in the correct register per AArch64 ABI:
+  //   T_INT/T_BOOLEAN/T_BYTE/T_SHORT/T_CHAR -> i32 (low 32 bits, w0)
+  //   T_LONG                                  -> i64 (full x0)
+  //   T_FLOAT                                 -> float (s0)
+  //   T_DOUBLE                                -> double (d0)
+  //   T_OBJECT/T_ARRAY                        -> ptr addrspace(1) (x0, RS4GC tracked)
+  //   T_VOID                                  -> void
+  BasicType ret_basic = target()->return_type()->basic_type();
+  llvm::Type* ret_llvm = (ret_basic == T_VOID)
+                            ? YuhuType::void_type()
+                            : YuhuType::to_stackType(ret_basic);
+  return FunctionType::get(ret_llvm, params, false);
 }
 
 void YuhuFunction::initialize(const char *name) {
@@ -259,7 +270,17 @@ void YuhuFunction::initialize(const char *name) {
   // CRITICAL: Create unified exit block BEFORE creating stack
   // This ensures that stack overflow check can jump to it
   _unified_exit_block = NULL;
+  _return_slot = NULL;
   if (!is_osr()) {
+    // Create function-scope return slot Alloca in the entry block for non-void methods.
+    // This allows handle_return to store the return value and the unified exit block
+    // to load and ret it. Mem2Reg promotes this to a register, so zero runtime cost.
+    BasicType ret_type = target()->return_type()->basic_type();
+    if (ret_type != T_VOID) {
+      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
+      _return_slot = builder()->CreateAlloca(ret_llvm_type, NULL, "return_slot");
+    }
+
     // For normal entry, create unified exit block now
     _unified_exit_block = llvm::BasicBlock::Create(
       YuhuContext::current(),
@@ -273,8 +294,14 @@ void YuhuFunction::initialize(const char *name) {
     // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
 //    builder()->CreateEpiloguePlaceholder();
 
-    // Create ret instruction
-    builder()->CreateRet(LLVMValue::jint_constant(0));
+    // Create ret instruction based on return type
+    if (ret_type == T_VOID) {
+      builder()->CreateRetVoid();
+    } else {
+      // Load from return slot (will be populated by handle_return)
+      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
+      builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+    }
 
     // Restore original insert point
     if (orig_insert_block) {
@@ -600,8 +627,18 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
     // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
 //    builder()->CreateEpiloguePlaceholder();
 
-    // Create ret instruction
-    builder()->CreateRet(LLVMValue::jint_constant(0));
+    // Create ret instruction matching the actual function return type.
+    BasicType ret_type = target()->return_type()->basic_type();
+    if (ret_type == T_VOID) {
+      builder()->CreateRetVoid();
+    } else if (_return_slot != NULL) {
+      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
+      builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+    } else {
+      // Fallback: return a zero of the correct type if no return slot exists.
+      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
+      builder()->CreateRet(llvm::Constant::getNullValue(ret_llvm_type));
+    }
 
     // Restore original insert point
     if (orig_insert_block) {

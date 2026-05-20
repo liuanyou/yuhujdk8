@@ -71,6 +71,7 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::Value*                     _arg_base;
   llvm::Value*                     _arg_count;
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
+  llvm::AllocaInst*                _return_slot;         // Function-scope return value slot (Alloca in entry block)
 
   // Prologue analysis data
   int _fp_offset_from_sp;  // Offset from SP to FP (imm in "add x29, sp, #imm")
@@ -105,6 +106,7 @@ class YuhuFunction : public YuhuTargetInvariants {
     assert(i < block_count(), "should be");
     return _blocks[i];
   }
+  llvm::AllocaInst* return_slot() const { return _return_slot; }
   GrowableArray<DeferredZeroCheck*>* deferred_zero_checks() {
     return &_deferred_zero_checks;
   }

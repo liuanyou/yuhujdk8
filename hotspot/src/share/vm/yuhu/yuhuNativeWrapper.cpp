@@ -58,6 +58,14 @@ void YuhuNativeWrapper::initialize(const char *name) {
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
   NOT_PRODUCT(method = NULL);
 
+  // Create function-scope return slot Alloca in the entry block for non-void native wrappers
+  if (return_type() != T_VOID) {
+    llvm::Type* ret_llvm_type = YuhuType::to_stackType(return_type());
+    _return_slot = builder()->CreateAlloca(ret_llvm_type, NULL, "return_slot");
+  } else {
+    _return_slot = NULL;
+  }
+
   // Create the oopmap.  We use the one oopmap for every call site in
   // the wrapper, which results in the odd mild inefficiency but is a
   // damn sight easier to code.
@@ -303,8 +311,16 @@ void YuhuNativeWrapper::initialize(const char *name) {
 
   builder()->SetInsertPoint(exception);
   CreateResetHandleBlock();
-  stack()->CreatePopFrame(0);
-  builder()->CreateRet(LLVMValue::jint_constant(0));
+  // Exception path: store 0 into return slot and return
+  if (this->return_type() != T_VOID) {
+    builder()->CreateStore(LLVMValue::jint_constant(0), _return_slot);
+  }
+  if (this->return_type() == T_VOID) {
+    builder()->CreateRetVoid();
+  } else {
+    llvm::Type* ret_llvm_type = YuhuType::to_stackType(this->return_type());
+    builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+  }
 
   builder()->SetInsertPoint(no_exception);
 
@@ -339,8 +355,7 @@ void YuhuNativeWrapper::initialize(const char *name) {
   if (is_synchronized())
     Unimplemented();
 
-  // Unwind and return
-  Value *result_addr = stack()->CreatePopFrame(type2size[result_type]);
+  // Store result into return slot and return
   if (result_type != T_VOID) {
     bool needs_cast = false;
     bool is_signed = false;
@@ -365,11 +380,12 @@ void YuhuNativeWrapper::initialize(const char *name) {
         result, YuhuType::to_stackType(result_type), is_signed);
     }
 
-    builder()->CreateStore(
-      result,
-      builder()->CreateIntToPtr(
-        result_addr,
-        PointerType::getUnqual(YuhuType::to_stackType(result_type))));
+    builder()->CreateStore(result, _return_slot);
   }
-  builder()->CreateRet(LLVMValue::jint_constant(0));
+  if (result_type == T_VOID) {
+    builder()->CreateRetVoid();
+  } else {
+    llvm::Type* ret_llvm_type = YuhuType::to_stackType(result_type);
+    builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+  }
 }

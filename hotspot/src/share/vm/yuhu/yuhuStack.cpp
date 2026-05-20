@@ -193,9 +193,16 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block
   if (exit_block != NULL) {
     builder()->CreateBr(exit_block);
   } else {
-    // Called during initialize before unified_exit_block exists
-    // Create ret directly (this should rarely happen)
-    builder()->CreateRet(LLVMValue::jint_constant(0));
+    // Called during initialize before unified_exit_block exists.
+    // Emit a ret matching the function's declared return type so the verifier
+    // accepts it for any return type (int / long / float / double / oop / void).
+    llvm::Function* fn = builder()->GetInsertBlock()->getParent();
+    llvm::Type* ret_ty = fn->getReturnType();
+    if (ret_ty->isVoidTy()) {
+      builder()->CreateRetVoid();
+    } else {
+      builder()->CreateRet(llvm::Constant::getNullValue(ret_ty));
+    }
   }
 
   builder()->SetInsertPoint(ok);

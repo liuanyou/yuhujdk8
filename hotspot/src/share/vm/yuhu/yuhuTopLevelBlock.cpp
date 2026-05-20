@@ -835,35 +835,18 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
     builder()->CreateStore(exception, pending_exception_address());
   }
 
-  Value *result_addr = stack()->CreatePopFrame(type2size[type]);
+  // Store the return value into the function-scope return slot.
+  // The unified exit block loads from this slot and returns it via ret.
+  // This replaces the old CreatePopFrame approach which wrote to the caller's
+  // interpreter expression stack — a location the i2c adapter never reads
+  // after a compiled method return (the i2c adapter only consumes x0).
   if (type != T_VOID) {
+    llvm::AllocaInst* ret_slot = function()->return_slot();
+    assert(ret_slot != NULL, "return slot must exist for non-void returns");
     builder()->CreateStore(
       pop_result(type)->generic_value(),
-      builder()->CreateIntToPtr(
-        result_addr,
-        PointerType::getUnqual(YuhuType::to_stackType(type))));
+      ret_slot);
   }
-
-  // NOTE: We do NOT clear last_Java_sp here when returning from a Yuhu compiled method.
-  //
-  // The reason: last_Java_sp represents the "current Java frame" for stack traversal.
-  // When a method returns, the caller becomes the "current frame", but the caller
-  // should have already set last_Java_sp when it entered (if it's a compiled method)
-  // or the interpreter maintains it (if it's an interpreted method).
-  //
-  // However, if we clear it here and the caller is another Yuhu compiled method that
-  // hasn't set last_Java_sp yet (or if it's the top-level method), stack traversal
-  // will fail because pd_last_frame() requires has_last_Java_frame() to be true.
-  //
-  // C2 clears last_Java_sp in its return stub, but C2 methods are typically called
-  // from the interpreter or have special handling. For Yuhu, we keep last_Java_sp
-  // set so that stack traversal can work correctly.
-  //
-  // If the caller is the interpreter, it will maintain last_Java_sp correctly.
-  // If the caller is another compiled method, it should have set last_Java_sp when
-  // it entered, so our value will be overwritten anyway.
-  //
-  // TODO: Re-evaluate this decision based on actual behavior and safepoint requirements.
 
   // CRITICAL: Jump to the unified exit block instead of creating multiple rets
   // The unified exit block contains the epilogue marker and ret instruction
