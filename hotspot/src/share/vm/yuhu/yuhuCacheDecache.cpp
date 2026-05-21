@@ -278,9 +278,7 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
 }
 
 void YuhuDecacher::end_frame() {
-  // Add the frame information to the deferred collection for later processing
-  // This ensures all OopMaps are handled consistently in the relocation process
-  function()->add_deferred_frame(pc_offset(), target(), bci(), locarray(), exparray(), monarray());
+
 }
 
 void YuhuCacher::process_stack_slot(int          index,

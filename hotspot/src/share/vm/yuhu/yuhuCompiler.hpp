@@ -101,14 +101,6 @@ class YuhuCompiler : public AbstractCompiler {
 
   // Track stubs that need patching for x28 restoration
  private:
-  // Map from ciMethod to list of stub addresses that call it
-  // Key: ciMethod* (the callee being called)
-  // Value: GrowableArray of stub addresses that need patching when callee is compiled
-  GrowableArray<ciMethod*>* _stub_patch_methods;
-  GrowableArray<GrowableArray<address>*>* _stub_patch_addresses;
-  
-  // Add a stub that needs patching when the target method is compiled
-  void register_stub_for_patching(ciMethod* target_method, address stub_addr);
 
  public:
 

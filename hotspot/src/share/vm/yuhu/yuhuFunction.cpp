@@ -100,16 +100,7 @@ void YuhuFunction::initialize(const char *name) {
   // Initialize member variables
   _arg_base = NULL;
   _arg_count = NULL;
-  _fp_offset_from_sp = 0;  // Will be analyzed on first return
   _deoptimization_stub = NULL;  // Will be generated below
-
-  // Initialize deferred frame collections
-  _deferred_frame_offsets = NULL;
-  _deferred_frame_targets = NULL;
-  _deferred_frame_bcis = NULL;
-  _deferred_frame_locals = NULL;
-  _deferred_frame_expressions = NULL;
-  _deferred_frame_monitors = NULL;
 
   // Generate deoptimization stub FIRST
   // This ensures deoptimized_entry_point() can find it during IR generation
@@ -121,15 +112,6 @@ void YuhuFunction::initialize(const char *name) {
   // for IRBuilder to access DataLayout (especially in LLVM 20+)
   _arg_base = NULL;
   _arg_count = NULL;
-  _fp_offset_from_sp = 0;  // Will be analyzed on first return
-
-  // Initialize deferred frame collections
-  _deferred_frame_offsets = NULL;
-  _deferred_frame_targets = NULL;
-  _deferred_frame_bcis = NULL;
-  _deferred_frame_locals = NULL;
-  _deferred_frame_expressions = NULL;
-  _deferred_frame_monitors = NULL;
   
   _function = Function::Create(
     entry_point_type(),

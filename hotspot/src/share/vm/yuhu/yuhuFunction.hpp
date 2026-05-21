@@ -73,19 +73,8 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
   llvm::AllocaInst*                _return_slot;         // Function-scope return value slot (Alloca in entry block)
 
-  // Prologue analysis data
-  int _fp_offset_from_sp;  // Offset from SP to FP (imm in "add x29, sp, #imm")
-
   // Per-function deoptimization stub
   address                           _deoptimization_stub;
-  
-  // Collections for deferred frame information (for decaching)
-  GrowableArray<int>*               _deferred_frame_offsets;
-  GrowableArray<ciMethod*>*         _deferred_frame_targets;
-  GrowableArray<int>*               _deferred_frame_bcis;
-  GrowableArray<GrowableArray<ScopeValue*>*>* _deferred_frame_locals;
-  GrowableArray<GrowableArray<ScopeValue*>*>* _deferred_frame_expressions;
-  GrowableArray<GrowableArray<MonitorValue*>*>* _deferred_frame_monitors;
 
  public:
   llvm::Function* function() const {
@@ -115,38 +104,6 @@ class YuhuFunction : public YuhuTargetInvariants {
   }
   llvm::Value* arg_base() const { return _arg_base; }
   llvm::Value* arg_count() const { return _arg_count; }
-
-  // Prologue analysis: get/set FP offset from SP
-  int fp_offset_from_sp() const { return _fp_offset_from_sp; }
-  void set_fp_offset_from_sp(int offset) { _fp_offset_from_sp = offset; }
-  
-  // Methods for deferred frame handling
-  void add_deferred_frame(int pc_offset, ciMethod* target, int bci,
-                        GrowableArray<ScopeValue*>* locals,
-                        GrowableArray<ScopeValue*>* expressions,
-                        GrowableArray<MonitorValue*>* monitors) {
-    if (_deferred_frame_offsets == NULL) {
-      _deferred_frame_offsets = new GrowableArray<int>();
-      _deferred_frame_targets = new GrowableArray<ciMethod*>();
-      _deferred_frame_bcis = new GrowableArray<int>();
-      _deferred_frame_locals = new GrowableArray<GrowableArray<ScopeValue*>*>();
-      _deferred_frame_expressions = new GrowableArray<GrowableArray<ScopeValue*>*>();
-      _deferred_frame_monitors = new GrowableArray<GrowableArray<MonitorValue*>*>();
-    }
-    _deferred_frame_offsets->append(pc_offset);
-    _deferred_frame_targets->append(target);
-    _deferred_frame_bcis->append(bci);
-    _deferred_frame_locals->append(locals);
-    _deferred_frame_expressions->append(expressions);
-    _deferred_frame_monitors->append(monitors);
-  }
-  
-  GrowableArray<int>* deferred_frame_offsets() const { return _deferred_frame_offsets; }
-  GrowableArray<ciMethod*>* deferred_frame_targets() const { return _deferred_frame_targets; }
-  GrowableArray<int>* deferred_frame_bcis() const { return _deferred_frame_bcis; }
-  GrowableArray<GrowableArray<ScopeValue*>*>* deferred_frame_locals() const { return _deferred_frame_locals; }
-  GrowableArray<GrowableArray<ScopeValue*>*>* deferred_frame_expressions() const { return _deferred_frame_expressions; }
-  GrowableArray<GrowableArray<MonitorValue*>*>* deferred_frame_monitors() const { return _deferred_frame_monitors; }
 
   // Per-function deoptimization stub support
   address deoptimization_stub() const { return _deoptimization_stub; }

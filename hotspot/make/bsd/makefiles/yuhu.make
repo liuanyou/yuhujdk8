@@ -219,7 +219,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuTopLevelBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuEntry.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuCodeBuffer.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
-  CXXFLAGS/yuhuMemoryManager.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuNativeWrapper.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuValue.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhu_globals.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
@@ -232,7 +231,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuStateScanner.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuBlock.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
-  CXXFLAGS/yuhuDebugInfo.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuORCPlugins.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuTracingIRCompiler.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuVirtualAddressPatcher.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
@@ -258,7 +256,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuFunction.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuEntry.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuCodeBuffer.o = $(PCH_FLAG/NO_PCH)
-    PCH_FLAG/yuhuMemoryManager.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuNativeWrapper.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuValue.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhu_globals.o = $(PCH_FLAG/NO_PCH)
@@ -271,7 +268,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuStateScanner.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuBlock.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuState.o = $(PCH_FLAG/NO_PCH)
-    PCH_FLAG/yuhuDebugInfo.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuORCPlugins.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuTracingIRCompiler.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuVirtualAddressPatcher.o = $(PCH_FLAG/NO_PCH)

@@ -5,7 +5,6 @@
 #include "compiler/oopMap.hpp"
 #include "ci/ciMethod.hpp"
 #include "code/scopeDesc.hpp"
-#include "yuhu/yuhuOffsetMapper.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "runtime/threadLocalStorage.hpp"
 #include "yuhu/yuhuStack.hpp"

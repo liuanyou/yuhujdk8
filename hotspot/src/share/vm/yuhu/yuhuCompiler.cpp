@@ -43,10 +43,8 @@
 #include "yuhu/yuhuEntry.hpp"
 #include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
-#include "yuhu/yuhuMemoryManager.hpp"
 #include "yuhu/yuhuNativeWrapper.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
-#include "yuhu/yuhuDebugInfo.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "utilities/debug.hpp"
 
@@ -84,10 +82,6 @@ YuhuCompiler::YuhuCompiler()
   // already hold CompileThread_lock. Therefore, this lock must be acquired AFTER
   // CompileThread_lock in the lock order, meaning it needs a higher rank.
   _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
-  
-  // Initialize stub patching tracking structures
-  _stub_patch_methods = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<ciMethod*>(100, true);
-  _stub_patch_addresses = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<GrowableArray<address>*>(100, true);
   
   MutexLocker locker(execution_engine_lock());
 
@@ -1365,34 +1359,6 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
   }
   *(dst++) = '\0';
   return buf;
-}
-
-// Register a stub that needs patching when the target method is compiled
-void YuhuCompiler::register_stub_for_patching(ciMethod* target_method, address stub_addr) {
-  // Find if we already have entries for this method
-  int index = -1;
-  for (int i = 0; i < _stub_patch_methods->length(); i++) {
-    if (_stub_patch_methods->at(i) == target_method) {
-      index = i;
-      break;
-    }
-  }
-  
-  if (index == -1) {
-    // First stub for this method, create new entry
-    _stub_patch_methods->append(target_method);
-    GrowableArray<address>* stubs = new (ResourceObj::C_HEAP, mtCompiler) GrowableArray<address>(10, true);
-    stubs->append(stub_addr);
-    _stub_patch_addresses->append(stubs);
-  } else {
-    // Add to existing entry
-    _stub_patch_addresses->at(index)->append(stub_addr);
-  }
-  
-  if (YuhuTraceInstalls) {
-    tty->print_cr("Yuhu: Registered stub " PTR_FORMAT " for patching when %s is compiled",
-                  p2i(stub_addr), target_method->name()->as_utf8());
-  }
 }
 
 // Measure exception handler size (without actually generating code).

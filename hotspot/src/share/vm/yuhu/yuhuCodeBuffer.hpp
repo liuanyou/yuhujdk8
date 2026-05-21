@@ -30,12 +30,11 @@
 #include "memory/allocation.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
-#include "yuhu/yuhuOffsetMapper.hpp"
 
 class YuhuCodeBuffer : public StackObj {
  public:
   YuhuCodeBuffer(YuhuMacroAssembler& masm)
-    : _masm(masm), _base_pc(NULL), _offset_mapper() {
+    : _masm(masm), _base_pc(NULL) {
   }
   
   ~YuhuCodeBuffer() {
@@ -44,7 +43,6 @@ class YuhuCodeBuffer : public StackObj {
  private:
   YuhuMacroAssembler& _masm;
   llvm::Value*        _base_pc;
-  YuhuOffsetMapper    _offset_mapper;
 
  public:
   YuhuMacroAssembler& masm() const {
@@ -58,17 +56,6 @@ class YuhuCodeBuffer : public StackObj {
   void set_base_pc(llvm::Value* base_pc) {
     assert(_base_pc == NULL, "only do this once");
     _base_pc = base_pc;
-  }
-  
-  // Offset mapper access methods
-  YuhuOffsetMapper* offset_mapper() const {
-    return const_cast<YuhuOffsetMapper*>(&_offset_mapper);
-  }
-  
-  void set_offset_mapper(YuhuOffsetMapper* offset_mapper) {
-    // This method may not be needed with direct member, but keeping for interface compatibility
-    // We can't really set a direct member object to point to a different object
-    ShouldNotCallThis();
   }
 
   // Allocate some space in the buffer and return its address.
