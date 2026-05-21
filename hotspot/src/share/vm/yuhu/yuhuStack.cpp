@@ -66,8 +66,6 @@ void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
                                                           ConstantInt::get(YuhuType::intptr_type(), aligned_frame_size_words),
                                                           "extended_sp");
 
-  initialize_expression_stack_pointer(extended_sp);
-
   // Create the frame
   _frame = builder()->CreateBitCast(
     extended_sp,
@@ -206,42 +204,6 @@ void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block
   }
 
   builder()->SetInsertPoint(ok);
-}
-
-void YuhuStack::initialize_expression_stack_pointer(llvm::Value* stack_pointer) {
-    _expression_stack_pointer = stack_pointer;
-    _expression_stack_pointer_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage");
-    builder()->CreateStore(stack_pointer, _expression_stack_pointer_storage);
-    // Frame pointer address will be set in initialize() when frame is created
-}
-
-llvm::Value* YuhuStack::expression_stack_pointer_addr() const {
-    // For AArch64, return the address of the stack pointer storage
-    if (_expression_stack_pointer_storage != NULL) {
-        return _expression_stack_pointer_storage;
-    }
-    // Fallback: create a new alloca (should not happen in normal flow)
-    return builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_addr");
-}
-
-llvm::LoadInst* YuhuStack::CreateLoadExpressionStackPointer(const char *name) {
-    // For AArch64, load from the stack pointer storage
-    // LLVM 20+ requires explicit type parameter for CreateLoad
-    return builder()->CreateLoad(
-            YuhuType::intptr_type(),
-            expression_stack_pointer_addr(),
-            name);
-}
-
-llvm::StoreInst* YuhuStack::CreateStoreExpressionStackPointer(llvm::Value* value) {
-    // For AArch64, store the stack pointer in storage
-    _expression_stack_pointer = value;
-    if (_expression_stack_pointer_storage == NULL) {
-        // This should not happen if sp_storage_alloca was passed correctly
-        // Fallback: create a new alloca (warning: this will be in the middle of the function!)
-        _expression_stack_pointer_storage = builder()->CreateAlloca(YuhuType::intptr_type(), 0, "sp_storage_fallback");
-    }
-    return builder()->CreateStore(value, _expression_stack_pointer_storage);
 }
 
 llvm::LoadInst* YuhuStack::CreateLoadFramePointer(const char *name) {
@@ -506,25 +468,6 @@ void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
 
     // Create the inline asm call
     builder()->CreateCall(asm_inst, {});
-}
-
-Value* YuhuStack::CreatePopFrame(int result_slots) {
-  assert(result_slots >= 0 && result_slots <= 2, "should be");
-  int locals_to_pop = max_locals() - result_slots;
-
-  Value *fp = CreateLoadFramePointer();
-  Value *sp = builder()->CreateAdd(
-    fp,
-    LLVMValue::intptr_constant((1 + locals_to_pop) * wordSize));
-
-    CreateStoreExpressionStackPointer(sp);
-  CreateStoreFramePointer(
-    builder()->CreateLoad(
-      YuhuType::intptr_type(),
-      builder()->CreateIntToPtr(
-        fp, PointerType::getUnqual(YuhuType::intptr_type()))));
-
-  return sp;
 }
 
 Value* YuhuStack::slot_addr(int         offset,

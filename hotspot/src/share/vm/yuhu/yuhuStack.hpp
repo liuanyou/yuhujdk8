@@ -78,16 +78,8 @@ class YuhuStack : public YuhuCompileInvariants {
   // Interface with the AArch64 stack
   // AArch64 uses standard ABI stack, not ZeroStack
  private:
-  // Stack pointer is stored as a local variable during frame initialization
   // Frame pointer is stored in the frame header
-  mutable llvm::Value* _expression_stack_pointer;  // Current expression stack pointer value
   mutable llvm::Value* _frame_pointer_addr;  // Address where frame pointer is stored in frame header
-  mutable llvm::AllocaInst* _expression_stack_pointer_storage;  // Storage for expression stack pointer
-
-  // Initialize stack pointer and frame pointer storage
-  void initialize_expression_stack_pointer(llvm::Value* stack_pointer);
-
-  llvm::Value* expression_stack_pointer_addr() const;
   
   llvm::Value* frame_pointer_addr() const {
     // Frame pointer is stored in the frame header
@@ -95,11 +87,8 @@ class YuhuStack : public YuhuCompileInvariants {
   }
 
  public:
-  llvm::LoadInst* CreateLoadExpressionStackPointer(const char *name = "");
-  llvm::StoreInst* CreateStoreExpressionStackPointer(llvm::Value* value);
   llvm::LoadInst* CreateLoadFramePointer(const char *name = "");
   llvm::StoreInst* CreateStoreFramePointer(llvm::Value* value);
-  llvm::Value* CreatePopFrame(int result_slots);
 
   // Interface with the frame anchor
  private:
