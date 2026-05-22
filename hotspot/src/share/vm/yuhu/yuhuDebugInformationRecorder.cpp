@@ -171,17 +171,6 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
     using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
     GrowableArray<uint32_t> processed_instruction_offsets;
 
-    // remove call sites which don't appear in llvm machine code
-    // this can happen because llvm passes may eliminate some blocks
-    for (int i = 0; i < _call_site_entries->length(); ) {
-        if (_call_site_entries->at(i)->return_pc_offset) {
-            i++;
-            continue;
-        }
-        _call_site_entries->remove_at(i);
-        // scan the same position again
-    }
-
     // sort by return_pc_offset, oopmap should be registered in ascending order
     _call_site_entries->sort([](CallSiteEntry** a, CallSiteEntry** b) -> int {
         if ((*a)->return_pc_offset < (*b)->return_pc_offset) return -1;

@@ -78,12 +78,13 @@ class YuhuCompiler : public AbstractCompiler {
   // Compile a normal (bytecode) method and install it in the VM
   void compile_method(ciEnv* env, ciMethod* target, int entry_bci);
 
-  static int measure_normal_adapter_size();
+  static bool need_stack_bang(int frame_size_in_bytes);
+  static int measure_normal_adapter_size(int frame_size_in_bytes);
   static int measure_exception_handler_size();
   static int measure_deopt_handler_size();
   static int measure_unwind_handler_size(int frame_size_in_bytes);
 
-  int generate_normal_adapter_into(CodeBuffer& cb, address llvm_entry);
+  int generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes);
   // Exception and deoptimization handler generation
   int generate_exception_handler(CodeBuffer& cb, int handler_size);
   int generate_deopt_handler(CodeBuffer& cb, int handler_size);

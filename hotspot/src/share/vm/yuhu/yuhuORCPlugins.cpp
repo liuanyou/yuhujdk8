@@ -329,6 +329,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             }
         }
     }
+
+    YuhuDebugInformationRecorder::get()->clean_eliminated_call_sites();
     
     return Error::success();
 }

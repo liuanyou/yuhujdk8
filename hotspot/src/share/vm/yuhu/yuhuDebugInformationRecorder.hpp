@@ -75,6 +75,28 @@ public:
                           uint64_t helper_address,
                           CallSiteType call_site_type,
                           int bci);
+
+  void clean_eliminated_call_sites() {
+      // remove call sites which don't appear in llvm machine code
+      // this can happen because llvm passes may eliminate some blocks
+      for (int i = 0; i < _call_site_entries->length(); ) {
+          if (_call_site_entries->at(i)->return_pc_offset) {
+              i++;
+              continue;
+          }
+          _call_site_entries->remove_at(i);
+          // scan the same position again
+      }
+  }
+
+  bool has_java_call_sites() const {
+      CallSiteType java_call = CallSiteType::java_call;
+      int index = _call_site_entries->find(&java_call, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((CallSiteType*)token) == entry->call_site_type;
+      });
+      return index != -1;
+  }
+
   void embed_call_site_metadata();
   
   int get_call_site_count() const {
@@ -141,7 +163,7 @@ public:
       _mangled_func_name = mangled_func_name;
   }
 
-  std::string get_mangled_func_name() {
+  std::string get_mangled_func_name() const {
       return _mangled_func_name;
   }
 
@@ -149,7 +171,7 @@ public:
       _func_size = func_size;
   }
 
-  size_t get_func_size() {
+  size_t get_func_size() const {
       return _func_size;
   }
 

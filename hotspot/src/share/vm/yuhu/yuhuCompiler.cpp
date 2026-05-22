@@ -443,60 +443,62 @@ static int generate_osr_adapter_into(CodeBuffer& cb,
   return (int)(end - start);
 }
 
+bool YuhuCompiler::need_stack_bang(int frame_size_in_bytes) {
+    // For Yuhu:
+    // 1. stub_function() is always NULL (Yuhu doesn't generate stubs)
+    // 2. has_java_calls() = any java_call in call site entries
+    // 3. frame_size > page_size/8 = frame larger than 512 bytes (assuming 4KB page)
+    bool has_java_calls = YuhuDebugInformationRecorder::get()->has_java_call_sites();
+
+    return (UseStackBanging &&
+            (has_java_calls || frame_size_in_bytes > os::vm_page_size() >> 3));
+}
+
 // Measure adapter size for normal (non-OSR) method compilation.
 // Returns the exact byte size needed for the parameter adapter stub.
-int YuhuCompiler::measure_normal_adapter_size() {
-    // First, measure adapter size using a temporary CodeBuffer.
-    // Use the same jump method (direct jump with NULL label) as actual generation
-    // to ensure size consistency.
-    // The b instruction size is fixed (4 bytes) as long as offset is within ±128MB range,
-    // so using a reasonable placeholder address is safe.
-    const int kAdapterBufSize = 512;
+int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes) {
+    const int kAdapterBufSize = 64;
     char adapter_buf[kAdapterBufSize];
     CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
-    // Use a placeholder address that's within b instruction range (±128MB)
-    // The exact value doesn't matter as long as the offset is encodable (within ±128MB)
-    // Using adapter_buf + 80 assumes adapter is roughly 80 bytes, giving ~80 byte offset
-    address placeholder_entry = (address)adapter_buf + 80;
 
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
 
-    // CRITICAL: Adapter must NOT allocate any stack frame
-    // If adapter allocates stack frame, current_sp in LLVM function will be wrong
-    // This will cause incorrect stack frame traversal during safepoints
+    YuhuLabel label;
 
-    // Simply jump to LLVM function
-    // x0-x7 are already Java method parameters (from i2c adapter)
-    // For static methods, x0 is NULL (passed by i2c adapter)
-    // Method* (x12) and Thread* (x28) are HotSpot global registers, preserved by i2c adapter
-    // Stack arguments (> 8) are in caller's stack frame, accessible via x20 (esp)
+    masm.write_inst_b(label);
 
-    // Use relative jump instead of absolute address
-    // b instruction range is ±128MB, which is sufficient for adapter_size
-    masm.write_inst_b(placeholder_entry);
+    masm.pin_label(label);
+
+    if (need_stack_bang(frame_size_in_bytes)) {
+        masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
+    }
+
+    // padding instruction in case it doesn't generate stack overflow check instructions
+    masm.write_inst("nop");
 
     address end = masm.current_pc();
     return (int)(end - start);
 }
 
-int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address llvm_entry) {
+int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes) {
   YuhuMacroAssembler masm(&cb);
   address start = masm.current_pc();
 
-  // CRITICAL: Adapter must NOT allocate any stack frame
-  // If adapter allocates stack frame, current_sp in LLVM function will be wrong
-  // This will cause incorrect stack frame traversal during safepoints
-  
-  // Simply jump to LLVM function
-  // x0-x7 are already Java method parameters (from i2c adapter)
-  // For static methods, x0 is NULL (passed by i2c adapter)
-  // Method* (x12) and Thread* (x28) are HotSpot global registers, preserved by i2c adapter
-  // Stack arguments (> 8) are in caller's stack frame, accessible via x20 (esp)
+  YuhuLabel label;
 
-  // Use relative jump instead of absolute address
-  // b instruction range is ±128MB, which is sufficient for adapter_size
-  masm.write_inst_b(llvm_entry);
+  masm.write_inst_b(label);
+
+  masm.pin_label(label);
+
+  *verified_entry_point = masm.current_pc();
+
+  if (need_stack_bang(frame_size_in_bytes)) {
+      masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
+  }
+
+  // padding instruction in case it doesn't generate stack overflow check instructions
+  masm.write_inst("nop");
 
   address end = masm.current_pc();
   return (int)(end - start);
@@ -708,7 +710,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   if (!is_osr) {
     // Normal method: build adapter + LLVM code into a combined CodeCache blob.
     // The adapter rearranges parameters from i2c adapter format to Yuhu's expected format.
-    adapter_size = measure_normal_adapter_size();
+    adapter_size = measure_normal_adapter_size(actual_prologue_bytes);
     assert(adapter_size > 0 && adapter_size < 512, "adapter size sanity");
 
       // Measure exception handler and deopt handler sizes first
@@ -729,9 +731,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     // Emit adapter into combined buffer with correct addresses.
     // Use direct jump (pass NULL for llvm_label) to avoid patching complexity.
-    address llvm_entry = combined_base + adapter_size;
-    int emitted_adapter = generate_normal_adapter_into(combined_cb, llvm_entry);
+    address verified_entry_point;
+    int emitted_adapter = generate_normal_adapter_into(combined_cb, &verified_entry_point, actual_prologue_bytes);
     assert(emitted_adapter == adapter_size, "adapter size mismatch");
+    assert(verified_entry_point != NULL, "verified entry point must have valid address");
 
     // Copy LLVM code after adapter.
     // Only copy effective code (excluding trailing udf #0 padding)
@@ -771,29 +774,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Generate deopt handler (always needed)
     generate_deopt_handler(combined_cb, deopt_handler_size);
 
-    // The label should already be bound to the jump instruction location.
-    // We need to patch the jump instruction to point to llvm_entry.
-    // Since we used write_inst_b(*llvm_label), the label should be bound when we call pin_label.
-    // But we need to patch it after we know the actual llvm_entry address.
-    // Let's use a direct jump instead of a label-based jump for simplicity.
-    // Actually, we already passed llvm_entry to generate_normal_adapter_into, so it should use direct jump.
-    // But if we passed a label, we need to patch it. Let's check the implementation.
-    // For now, let's use direct jump (pass NULL for llvm_label) to avoid patching complexity.
+      if (target->is_static()) {
+          // Static methods: both entry points point to adapter (no class check needed)
+          offsets.set_value(CodeOffsets::Entry, 0);
+          offsets.set_value(CodeOffsets::Verified_Entry, 0);
+      } else {
+          // Non-static methods: Entry points to adapter (for class check),
+          // Verified_Entry points to LLVM code (skip class check)
+          offsets.set_value(CodeOffsets::Entry, 0);
+          offsets.set_value(CodeOffsets::Verified_Entry, (int)(verified_entry_point - combined_base));
+      }
 
-    // Set entry point offsets according to HotSpot's requirements:
-    // - For static methods: Entry == Verified_Entry (both point to adapter)
-    // - For non-static methods: Entry != Verified_Entry
-    //   (Entry points to adapter for class check, Verified_Entry points to LLVM code)
-    if (target->is_static()) {
-      // Static methods: both entry points point to adapter (no class check needed)
-      offsets.set_value(CodeOffsets::Entry, 0);
-      offsets.set_value(CodeOffsets::Verified_Entry, 0);
-    } else {
-      // Non-static methods: Entry points to adapter (for class check),
-      // Verified_Entry points to LLVM code (skip class check)
-      offsets.set_value(CodeOffsets::Entry, 0);
-      offsets.set_value(CodeOffsets::Verified_Entry, adapter_size);
-    }
     offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + effective_code_size);
     offsets.set_value(CodeOffsets::Exceptions, 0);
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
@@ -1365,7 +1356,7 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
 // Returns the exact byte size needed for the exception handler.
 int YuhuCompiler::measure_exception_handler_size() {
   // Use a temporary buffer on the stack to measure
-  const int kTempBufSize = 256;
+  const int kTempBufSize = 64;
   char temp_buf[kTempBufSize];
   CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
   YuhuMacroAssembler masm(&temp_cb);
@@ -1427,7 +1418,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
     // that yuhu does not yet implement.  Synchronized methods are therefore not supported
     // through this path; they will fall back to the interpreter or trigger an assert at
     // compile time before reaching this code.
-    const int kTempBufSize = 256;
+    const int kTempBufSize = 64;
     char temp_buf[kTempBufSize];
     CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
     YuhuMacroAssembler masm(&temp_cb);
@@ -1512,7 +1503,7 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
 // Returns the exact byte size needed for the deopt handler.
 int YuhuCompiler::measure_deopt_handler_size() {
   // Use a temporary buffer on the stack to measure
-  const int kTempBufSize = 256;
+  const int kTempBufSize = 64;
   char temp_buf[kTempBufSize];
   CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
   YuhuMacroAssembler masm(&temp_cb);
