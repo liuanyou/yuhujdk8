@@ -1017,4 +1017,11 @@ public:
     YuhuExternalAddress(address target) : YuhuAddress(target, reloc_for_target(target)) {}
 };
 
+class YuhuRuntimeAddress: public YuhuAddress {
+
+public:
+
+    YuhuRuntimeAddress(address target) : YuhuAddress(target, relocInfo::runtime_call_type) {}
+};
+
 #endif //JDK8_YUHU_MACROASSEMBLER_HPP
