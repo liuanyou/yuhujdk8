@@ -64,15 +64,6 @@ struct VirtualAddressMatch {
 // Scanner for finding dual virtual address placeholders in machine code
 class YuhuVirtualAddressScanner : public AllStatic {
  public:
-  // Scan backwards from statepoint call to find both placeholders
-  // Returns true if both placeholders are found and share the same virtual_offset
-  static bool scan_backwards_for_placeholders(
-    const uint8_t* code_buffer,
-    uint64_t statepoint_call_offset,
-    uint64_t max_scan_distance,
-    VirtualAddressMatch& out_match
-  );
-
     // Scan forwards from statepoint call to find both placeholders
     // Returns true if both placeholders are found and share the same virtual_offset
     static bool scan_forwards_for_call_targets(
@@ -151,6 +142,13 @@ class YuhuVirtualAddressScanner : public AllStatic {
       return false;
   }
 
+  /**
+   * extract target address from b instruction
+   *
+   * @param pc
+   * @param inst
+   * @return
+   */
     static uint64_t decode_b_target(uint64_t pc, uint32_t inst) {
         // Extract 26-bit signed offset
         int32_t offset = inst & 0x03FFFFFF;  // bits [25:0]
@@ -186,6 +184,45 @@ class YuhuVirtualAddressScanner : public AllStatic {
                 break;
             }
         }
+    };
+
+    /**
+     * extract page offset from adrp instruction
+     *
+     * @param instr
+     * @return
+     */
+    static int64_t extract_page_offset(uint32_t* instr) {
+        // Extract the 21-bit immediate and shift left by 12
+        int64_t imm = ((instr[0] >> 29) & 0x3) |           // immlo (2 bits)
+                      (((int64_t)instr[0] >> 5) & 0x7FFFF); // immhi (19 bits)
+
+        // Sign-extend from 21 bits to 64 bits
+        if (imm & (1ULL << 20)) {
+            imm |= ~((1ULL << 21) - 1);  // Sign extend
+        }
+
+        // Multiply by page size (4096)
+        return imm << 12;
+    };
+
+    /**
+     * check if it is adrp instruction sequences.
+     *
+     * @param instr
+     * @return
+     */
+    static bool is_adrp_pattern(uint32_t* instr) {
+        // Check instruction encoding (little-endian):
+        // adrp   x8, 3
+        // ldr    x8, [x8, #0x718]
+        // blr    x8
+        if ((instr[0] & 0x9F000000) == 0x90000000 &&
+            (instr[1] & 0xFFC00000) == 0xF9400000 &&
+            (instr[2] & 0xFFFFFC1F) == 0xD63F0000) {
+            return true;
+        }
+        return false;
     };
 };
 

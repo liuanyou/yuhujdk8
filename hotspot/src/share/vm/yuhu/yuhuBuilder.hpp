@@ -280,9 +280,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Prologue/Epilogue marker fixup support
  public:
   static void fixup_prologue_epilogue_markers(address code_start, size_t code_size);
-  
-  // Oop marker scanning and relocation generation
-  void scan_for_oop_markers_and_generate_relocation(CodeBuffer* cb, address code_start, size_t code_size);
 
   // hotspot stores relocation points in unsigned short.
   // Layout:

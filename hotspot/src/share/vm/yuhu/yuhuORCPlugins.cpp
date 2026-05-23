@@ -291,7 +291,9 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         }
 
                         // update return_pc_offset by virtual_offsets
-                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset(virtual_offset, block_offset + return_pc_offset);
+                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset(virtual_offset,
+                                                                                               block_offset + return_pc_offset,
+                                                                                               block_offset + match.call_target_placeholder_offset);
 
                         YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
                                                                                   YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset));
@@ -323,7 +325,9 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                             continue;
                         }
                         // update return_pc_offset by virtual_offsets
-                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset, block_offset + return_pc_offset);
+                        YuhuDebugInformationRecorder::get()->update_call_site_return_pc_offset((int)virtual_offset,
+                                                                                               block_offset + return_pc_offset,
+                                                                                               block_offset + match.call_target_placeholder_offset);
                     }
                 }
             }

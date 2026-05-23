@@ -99,9 +99,10 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
     call_site_entry->virtual_offset = virtual_offset;
     call_site_entry->virtual_address = virtual_address;
     call_site_entry->helper_address = helper_address;
-    call_site_entry->return_pc_offset = 0;
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
+    call_site_entry->return_pc_offset = 0;
+    call_site_entry->call_target_offset = 0;
     _call_site_entries->append(call_site_entry);
 }
 
@@ -182,6 +183,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         CallSiteEntry* call_site_entry = _call_site_entries->at(i);
         uint64_t return_pc_offset = call_site_entry->return_pc_offset;
 
+        // multiple call targets may use same blr, so skip processed return pc offset
         if (processed_instruction_offsets.contains(return_pc_offset)) {
             continue;
         }

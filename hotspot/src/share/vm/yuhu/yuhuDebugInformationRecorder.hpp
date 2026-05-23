@@ -22,12 +22,13 @@ enum class CallSiteType : uint8_t {
 };
 
 struct CallSiteEntry {
-    uint64_t virtual_offset;
-    uint64_t virtual_address;
-    uint64_t helper_address;
-    uint64_t return_pc_offset;
-    CallSiteType call_site_type;
-    int bci;
+    uint64_t virtual_offset; // generated at IR phase
+    uint64_t virtual_address; // generated at IR phase
+    uint64_t helper_address; // generated at IR phase
+    CallSiteType call_site_type; // generated at IR phase
+    int bci; // generated at IR phase
+    uint64_t call_target_offset; // extracted by ORC plugin
+    uint64_t return_pc_offset; // extracted by ORC plugin
 };
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
@@ -147,13 +148,25 @@ public:
       return _call_site_entries->at(index)->call_site_type;
   }
 
-  void update_call_site_return_pc_offset(uint64_t virtual_offset, uint64_t return_pc_offset) const {
+  CallSiteType get_call_site_type_by_helper_address_and_call_target_offset(uint64_t helper_address, uint64_t call_target_offset) const {
+      if (!_call_site_entries) return CallSiteType::none;
+      std::pair<uint64_t, uint64_t> pair(helper_address, call_target_offset);
+      int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
+          auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
+          return ha == entry->helper_address && cto == entry->call_target_offset;
+      });
+      if (index == -1) return CallSiteType::none;
+      return _call_site_entries->at(index)->call_site_type;
+  }
+
+  void update_call_site_return_pc_offset(uint64_t virtual_offset, uint64_t return_pc_offset, uint64_t call_target_offset) const {
       if (!_call_site_entries) return;
       int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
           return *((uint64_t*)token) == entry->virtual_offset;
       });
       if (index == -1) return;
       _call_site_entries->at(index)->return_pc_offset = return_pc_offset;
+      _call_site_entries->at(index)->call_target_offset = call_target_offset;
   }
 
   // stack map related functions
