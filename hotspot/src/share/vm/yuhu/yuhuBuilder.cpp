@@ -513,6 +513,25 @@ Value* YuhuBuilder::uncommon_trap() {
   return make_function((address) YuhuRuntime::uncommon_trap, "Ti", "i");
 }
 
+void YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
+  // Get or create the llvm.experimental.deoptimize intrinsic declaration
+  llvm::Function* deopt_intrinsic = llvm::Intrinsic::getDeclaration(
+    GetInsertBlock()->getModule(),
+    llvm::Intrinsic::experimental_deoptimize);
+  
+  // Create the call with deopt bundle
+  llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, Bundles);
+  
+  // Attach custom Statepoint ID to distinguish deopt statepoints from GC statepoints
+  // GC safepoints use DefaultStatepointID (0), deopt traps use 0x1000+
+  // This allows runtime to differentiate between GC stackmaps and deopt stackmaps
+  llvm::LLVMContext &Ctx = getContext();
+  llvm::AttrBuilder AB(Ctx);
+  AB.addAttribute("statepoint-id", "4096");
+  llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+  call->setAttributes(Attrs);
+}
+
 Value* YuhuBuilder::debug_stack_overflow_check() {
   // Signature: "Txxxxxx" -> "v" (Thread*, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t -> void)
   return make_function((address) YuhuRuntime::debug_stack_overflow_check, "Txxxxxx", "v");
@@ -1435,7 +1454,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return true;
     };
 
-    auto patch_new_adrp_polling_page = [](uint32_t* instr, uint64_t function_address) -> bool {
+    auto patch_new_adrp_polling_page = [](uint32_t* instr, uint64_t function_address, uint32_t* blr_instr) -> bool {
         // Calculate new page offset for function_address
         uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
 
@@ -1457,7 +1476,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
         instr[1] = ldr_wzr;
 
-        instr[2] = 0xD503201F; // nop instruction
+        blr_instr[0] = 0xD503201F; // nop instruction
         return true;
     };
 
@@ -1616,8 +1635,13 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             uint64_t function_address = *(uint64_t*)target_address;
 
+            uint64_t llvm_blr_offset = YuhuDebugInformationRecorder::get()->get_call_site_blr_offset_by_helper_address_and_call_target_offset(function_address,
+                                                                                                                                              i * 4);
+            assert(llvm_blr_offset != 0, "should be valid offset");
+
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_adrp_pattern(instr), "should be adrp instructions");
+            uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
 
             // Create relocation record
             uint64_t safepoint_poll_addr = (uint64_t)&gc_safepoint_poll;
@@ -1626,16 +1650,18 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 //
                 // adrp   x8, <GOT_page>           # Points to GOT
                 // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
+                // ...inst...
                 // blr    x8                       # Branches to function
 
                 // After patch :
                 //
                 // adrp   x8, <polling_page>       # Points to polling page
                 // ldr    wzr, [x8]                # Loads polling page
+                // ...inst...
                 // nop                             # nop
 
                 // Patch adrp instruction
-                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page());
+                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page(), blr_instr);
                 assert(new_adrp_polling_page_patched, "should patch successfully");
                 cb->relocate((address)instr, relocInfo::poll_type);
             } else {

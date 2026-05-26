@@ -188,6 +188,9 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* uncommon_trap();
   llvm::Value* deoptimized_entry_point();
   llvm::Value* debug_stack_overflow_check();
+  
+  // LLVM intrinsics for deoptimization
+  void CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles);
 
   // Intrinsics and external functions, part 4: Native-Java transition.
   //   This is a special case in that it is invoked during a thread

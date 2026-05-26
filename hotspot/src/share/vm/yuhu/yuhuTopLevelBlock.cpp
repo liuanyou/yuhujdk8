@@ -53,149 +53,26 @@ using namespace llvm;
 extern "C" void gc_safepoint_poll();
 
 void YuhuTopLevelBlock::scan_for_traps() {
-  // If typeflow found a trap then don't scan past it
-  int limit_bci = ciblock()->has_trap() ? ciblock()->trap_bci() : limit();
-
-  // Scan the bytecode for traps that are always hit
-  iter()->reset_to_bci(start());
-  while (iter()->next_bci() < limit_bci) {
-    iter()->next();
-
-    ciField *field;
-    ciMethod *method;
-    ciInstanceKlass *klass;
-    bool will_link;
-    bool is_field;
-
-    switch (bc()) {
-    case Bytecodes::_ldc:
-    case Bytecodes::_ldc_w:
-    case Bytecodes::_ldc2_w:
-      if (!YuhuConstant::for_ldc(iter())->is_loaded()) {
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_uninitialized,
-            Deoptimization::Action_reinterpret), bci());
-        return;
-      }
-      break;
-
-    case Bytecodes::_getfield:
-    case Bytecodes::_getstatic:
-    case Bytecodes::_putfield:
-    case Bytecodes::_putstatic:
-      field = iter()->get_field(will_link);
-      assert(will_link, "typeflow responsibility");
-      is_field = (bc() == Bytecodes::_getfield || bc() == Bytecodes::_putfield);
-
-      // If the bytecode does not match the field then bail out to
-      // the interpreter to throw an IncompatibleClassChangeError
-      if (is_field == field->is_static()) {
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_unhandled,
-            Deoptimization::Action_none), bci());
-        return;
-      }
-
-      // Bail out if we are trying to access a static variable
-      // before the class initializer has completed.
-      if (!is_field && !field->holder()->is_initialized()) {
-        if (!static_field_ok_in_clinit(field)) {
-          set_trap(
-            Deoptimization::make_trap_request(
-              Deoptimization::Reason_uninitialized,
-              Deoptimization::Action_reinterpret), bci());
-          return;
-        }
-      }
-      break;
-
-    case Bytecodes::_invokestatic:
-    case Bytecodes::_invokespecial:
-    case Bytecodes::_invokevirtual:
-    case Bytecodes::_invokeinterface:
-      ciSignature* sig;
-      method = iter()->get_method(will_link, &sig);
-      assert(will_link, "typeflow responsibility");
-      // We can't compile calls to method handle intrinsics, because we use
-      // the interpreter entry points and they expect the top frame to be an
-      // interpreter frame. We need to implement the intrinsics for Yuhu.
-      if (method->is_method_handle_intrinsic() || method->is_compiled_lambda_form()) {
-        if (YuhuPerformanceWarnings) {
-          warning("JSR292 optimization not yet implemented in Yuhu");
-        }
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_unhandled,
-            Deoptimization::Action_make_not_compilable), bci());
-          return;
-      }
-      if (!method->holder()->is_linked()) {
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_uninitialized,
-            Deoptimization::Action_reinterpret), bci());
-          return;
-      }
-
-      if (bc() == Bytecodes::_invokevirtual) {
-        klass = ciEnv::get_instance_klass_for_declared_method_holder(
-          iter()->get_declared_method_holder());
-        if (!klass->is_linked()) {
-          set_trap(
-            Deoptimization::make_trap_request(
-              Deoptimization::Reason_uninitialized,
-              Deoptimization::Action_reinterpret), bci());
-            return;
-        }
-      }
-      break;
-
-    case Bytecodes::_new:
-      klass = iter()->get_klass(will_link)->as_instance_klass();
-      assert(will_link, "typeflow responsibility");
-
-      // Bail out if the class is unloaded
-      if (iter()->is_unresolved_klass() || !klass->is_initialized()) {
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_uninitialized,
-            Deoptimization::Action_reinterpret), bci());
-        return;
-      }
-
-      // Bail out if the class cannot be instantiated
-      if (klass->is_abstract() || klass->is_interface() ||
-          klass->name() == ciSymbol::java_lang_Class()) {
-        set_trap(
-          Deoptimization::make_trap_request(
-            Deoptimization::Reason_unhandled,
-            Deoptimization::Action_reinterpret), bci());
-        return;
-      }
-      break;
-    case Bytecodes::_invokedynamic:
-    case Bytecodes::_invokehandle:
-      if (YuhuPerformanceWarnings) {
-        warning("JSR292 optimization not yet implemented in Yuhu");
-      }
-      set_trap(
-        Deoptimization::make_trap_request(
-          Deoptimization::Reason_unhandled,
-          Deoptimization::Action_make_not_compilable), bci());
-      return;
-    }
-  }
-
-  // Trap if typeflow trapped (and we didn't before)
+  // Adopt trap information directly from ciTypeFlow's analysis.
+  // ciTypeFlow has already scanned the bytecode and identified all traps,
+  // including the exact BCI and constant pool index for each trap.
+  // No need to re-scan bytecode - trust ciTypeFlow's results.
   if (ciblock()->has_trap()) {
-    set_trap(
-      Deoptimization::make_trap_request(
+    int trap_index = ciblock()->trap_index();
+    int trap_request;
+    
+    if (trap_index < 0) {
+      // ciTypeFlow already encoded reason/action (negative value)
+      trap_request = trap_index;
+    } else {
+      // CP index only — use Reason_unloaded with default action
+      trap_request = Deoptimization::make_trap_request(
         Deoptimization::Reason_unloaded,
         Deoptimization::Action_reinterpret,
-        ciblock()->trap_index()), ciblock()->trap_bci());
-    return;
+        trap_index);
+    }
+    
+    set_trap(trap_request, ciblock()->trap_bci());
   }
 }
 
@@ -677,7 +554,7 @@ BasicBlock* YuhuTopLevelBlock::handler_for_exception(int index) {
   }
 }
 
-void YuhuTopLevelBlock::maybe_add_safepoint() {
+void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
   if (current_state()->has_safepointed())
     return;
 
@@ -685,7 +562,11 @@ void YuhuTopLevelBlock::maybe_add_safepoint() {
     uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
     uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
     // call_target_va is not used in the CreateCall, just create one for no use
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&gc_safepoint_poll, CallSiteType::safepoint_poll, bci());
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
+                                                            call_target_va,
+                                                            (uint64_t)&gc_safepoint_poll,
+                                                            CallSiteType::safepoint_poll,
+                                                            is_method_entry_safepoint ? -1 : bci());
     // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
     // otherwise, poll_type relocation record can't be created. hence patching adr logic is a little different
     // than call site in CallSiteExtractorPlugin
@@ -759,15 +640,53 @@ BasicBlock* YuhuTopLevelBlock::make_trap(int trap_bci, int trap_request) {
 
 void YuhuTopLevelBlock::do_trap(int trap_request) {
   decache_for_trap();
-  // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "Ti" -> "i"
-  llvm::FunctionType* func_type = YuhuBuilder::make_ftype("Ti", "i");
-  std::vector<Value*> args;
-  args.push_back(thread());
-  args.push_back(LLVMValue::jint_constant(trap_request));
-
-  // Call uncommon_trap and then jump to unified exit block
-  // Note: uncommon_trap may throw an exception and not return, but we need to handle the return case
-  llvm::Value* call_result = builder()->CreateCall(func_type, builder()->uncommon_trap(), args);
+  
+  // Build deopt operand bundle with all live JVM state
+  YuhuState* state = current_state();
+  std::vector<llvm::Value*> deopt_operands;
+  
+  // 1. Local variables (in order 0..max_locals-1)
+  for (int i = 0; i < max_locals(); i++) {
+    YuhuValue* local = state->local(i);
+    if (local != NULL) {
+      llvm::Value* llvm_val = local->generic_value();
+      
+      // Cast to i64 for uniform representation
+      if (llvm_val->getType()->isPointerTy()) {
+        llvm_val = builder()->CreatePtrToInt(llvm_val, builder()->getInt64Ty());
+      } else if (llvm_val->getType()->getIntegerBitWidth() != 64) {
+        llvm_val = builder()->CreateIntCast(llvm_val, builder()->getInt64Ty(), false);
+      }
+      
+      deopt_operands.push_back(llvm_val);
+    } else {
+      // Null local - push null pointer as i64
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
+    }
+  }
+  
+  // 2. Expression stack (in order bottom..top)
+  for (int i = 0; i < state->stack_depth(); i++) {
+    YuhuValue* stack_val = state->stack(i);
+    llvm::Value* llvm_val = stack_val->generic_value();
+    
+    // Cast to i64
+    if (llvm_val->getType()->isPointerTy()) {
+      llvm_val = builder()->CreatePtrToInt(llvm_val, builder()->getInt64Ty());
+    } else if (llvm_val->getType()->getIntegerBitWidth() != 64) {
+      llvm_val = builder()->CreateIntCast(llvm_val, builder()->getInt64Ty(), false);
+    }
+    
+    deopt_operands.push_back(llvm_val);
+  }
+  
+  // Create deopt operand bundle
+  llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);
+  
+  // Call @llvm.experimental.deoptimize intrinsic
+  // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
+  // The deopt bundle preserves all live JVM state for frame reconstruction
+  builder()->CreateExperimentalDeoptimize({deopt_bundle});
 
   // CRITICAL: Jump to the unified exit block (contains epilogue marker and ret)
   // This ensures we only have ONE marker in the entire function
@@ -911,7 +830,7 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
     // Cast back to pointer type
     value = builder()->CreateIntToPtr(
       value,
-      llvm::PointerType::getUnqual(YuhuType::oop_addrspace1_type()), // FIXED - object is allocated in heap
+      YuhuType::oop_addrspace1_type(), // FIXED - object is allocated in heap
       "decompressed_ptr");
   } else {
     // Normal load for non-compressed oops or other types

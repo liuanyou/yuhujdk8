@@ -424,7 +424,7 @@ void YuhuFunction::initialize(const char *name) {
     // and argument copying — before transitioning into bytecode blocks.
     // This matches C2's sequence: build_frame() -> set_frame_complete() -> safepoint_poll.
     if (!is_osr()) {
-        start_block->maybe_add_safepoint();
+        start_block->maybe_add_safepoint(true);
     }
 
   builder()->CreateBr(start_block->entry_block());

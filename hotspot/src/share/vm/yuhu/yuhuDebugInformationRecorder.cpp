@@ -102,6 +102,7 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
     call_site_entry->return_pc_offset = 0;
+    call_site_entry->blr_offset = 0;
     call_site_entry->call_target_offset = 0;
     _call_site_entries->append(call_site_entry);
 }

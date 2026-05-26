@@ -50,6 +50,7 @@
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
+extern "C" void handle_deoptimization();
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "code/codeCache.hpp"
 #include "oops/method.hpp"
@@ -320,6 +321,10 @@ YuhuCompiler::YuhuCompiler()
             llvm::orc::ExecutorSymbolDef(
                     llvm::orc::ExecutorAddr::fromPtr(&gc_safepoint_poll),
                     llvm::JITSymbolFlags::Callable);
+    SymMap[ES.intern("__llvm_deoptimize")] =
+            llvm::orc::ExecutorSymbolDef(
+                    llvm::orc::ExecutorAddr::fromPtr(&handle_deoptimization),
+                    llvm::JITSymbolFlags::Callable);
     auto symErr = MainJD.define(llvm::orc::absoluteSymbols(std::move(SymMap)));
     if (symErr) {
         // handle symErr
@@ -570,6 +575,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Yuhu does not support deoptimization, so such methods cannot be compiled.
   for (int i = 0; i < flow->block_count(); i++) {
     if (flow->pre_order_at(i)->has_trap()) {
+        if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
+            && strcmp(target->name()->as_utf8(), "encodeArrayLoop") == 0
+            && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;") == 0) {
+          break;
+        }
       env->record_failure("block has trap (unloaded class)");
       return;
     }

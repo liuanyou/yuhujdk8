@@ -216,10 +216,8 @@ class YuhuVirtualAddressScanner : public AllStatic {
         // Check instruction encoding (little-endian):
         // adrp   x8, 3
         // ldr    x8, [x8, #0x718]
-        // blr    x8
         if ((instr[0] & 0x9F000000) == 0x90000000 &&
-            (instr[1] & 0xFFC00000) == 0xF9400000 &&
-            (instr[2] & 0xFFFFFC1F) == 0xD63F0000) {
+            (instr[1] & 0xFFC00000) == 0xF9400000) {
             return true;
         }
         return false;

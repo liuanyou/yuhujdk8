@@ -433,7 +433,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
 
   // Safepoints
  private:
-  void maybe_add_safepoint();
+  void maybe_add_safepoint(bool is_method_entry_safepoint = false);
   void maybe_add_backedge_safepoint();
 
   // Loop safepoint removal
