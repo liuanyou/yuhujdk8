@@ -327,12 +327,9 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         }
                         // update return_pc_offset by virtual_offsets
                         YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets((int) virtual_offset,
-                                                                                                   block_offset +
-                                                                                                   return_pc_offset,
-                                                                                                   block_offset +
-                                                                                                   match.call_target_blr_offset,
-                                                                                                   block_offset +
-                                                                                                   match.call_target_placeholder_offset);
+                                                                                                   block_offset + return_pc_offset,
+                                                                                                   block_offset + match.call_target_blr_offset,
+                                                                                                   block_offset + match.call_target_placeholder_offset);
                     }
                 }
             }
