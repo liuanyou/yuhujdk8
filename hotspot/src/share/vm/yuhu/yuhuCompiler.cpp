@@ -321,7 +321,7 @@ YuhuCompiler::YuhuCompiler()
             llvm::orc::ExecutorSymbolDef(
                     llvm::orc::ExecutorAddr::fromPtr(&gc_safepoint_poll),
                     llvm::JITSymbolFlags::Callable);
-    SymMap[ES.intern("__llvm_deoptimize")] =
+    SymMap[ES.intern("___llvm_deoptimize")] =
             llvm::orc::ExecutorSymbolDef(
                     llvm::orc::ExecutorAddr::fromPtr(&handle_deoptimization),
                     llvm::JITSymbolFlags::Callable);
@@ -672,30 +672,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   bool is_osr = (entry_bci != InvocationEntryBci);
   int adapter_size = 0;
-
-  // Calculate frame_size for nmethod registration
-  // frame_size is in words (intptr_t units), not bytes
-  // According to YuhuStack::initialize:
-  //   frame_words = header_words + monitor_words + stack_words
-  //   header_words = 6
-  //   extra_locals = max_locals - size_of_parameters
-  //   frame_size (words) = frame_words + extra_locals
-  int header_words = YUHU_FRAME_HEADER_WORDS;
-  
-  // Calculate max_monitors using flow analysis (similar to YuhuTargetInvariants::count_monitors)
-  int max_monitors = 0;
-  if (target->is_synchronized() || target->has_monitor_bytecodes()) {
-    for (int i = 0; i < flow->block_count(); i++) {
-      max_monitors = MAX2(max_monitors, flow->pre_order_at(i)->monitor_count());
-    }
-  }
-  
-  int monitor_words = max_monitors * frame::interpreter_frame_monitor_size();
-  int stack_words = target->max_stack();
-  int locals_words = target->max_locals();
-  int arg_size = target->arg_size();  // Use arg_size() instead of size_of_parameters()
-  int extra_locals = locals_words - arg_size;
-//  int frame_words = header_words + monitor_words + stack_words;
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();

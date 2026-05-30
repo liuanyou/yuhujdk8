@@ -100,12 +100,6 @@ void YuhuFunction::initialize(const char *name) {
   // Initialize member variables
   _arg_base = NULL;
   _arg_count = NULL;
-  _deoptimization_stub = NULL;  // Will be generated below
-
-  // Generate deoptimization stub FIRST
-  // This ensures deoptimized_entry_point() can find it during IR generation
-  // Must be called before IR generation starts (before do_entry() etc.)
-  generate_deoptimization_stub();
 
   // Create the function and add it to the Module immediately
   // This ensures the Function has a parent Module, which is required
@@ -505,92 +499,6 @@ void YuhuFunction::add_deferred_zero_check(YuhuTopLevelBlock* block,
 void YuhuFunction::do_deferred_zero_checks() {
   for (int i = 0; i < deferred_zero_checks()->length(); i++)
     deferred_zero_checks()->at(i)->process();
-}
-
-// Generate per-function deoptimization stub using YuhuMacroAssembler
-// Can be called multiple times - will only generate stub once
-void YuhuFunction::generate_deoptimization_stub() {
-  // Check if stub is already generated
-  if (_deoptimization_stub != NULL) {
-    return;
-  }
-
-  // Get the number of parameters for this method
-  int num_params = target()->arg_size();
-
-  // Limit to 8 parameters (AArch64 ABI uses x0-x7 for first 8 parameters)
-  if (num_params > 8) {
-    num_params = 8;
-  }
-
-  BufferBlob* stub_blob = BufferBlob::create("yuhu_static_call_stub", 64);
-  if (stub_blob == NULL) {
-    fatal("CodeCache is full - cannot allocate static call stub");
-    return;
-  }
-  CodeBuffer buffer(stub_blob);
-  YuhuMacroAssembler masm(&buffer);
-
-  address start = masm.current_pc();
-
-  int header_words  = YUHU_FRAME_HEADER_WORDS;
-  int monitor_words = max_monitors()*frame::interpreter_frame_monitor_size();
-  int stack_words   = max_stack();
-  int frame_words   = header_words + monitor_words + stack_words;
-  int extended_frame_words = frame_words + max_locals();
-  masm.write_inst("add %s, sp, #%d", YuhuMacroAssembler::x8, extended_frame_words * wordSize);
-
-  // Restore x0-x7 using ldp instructions
-  // Only restore up to num_params
-  if (num_params >= 2) {
-    masm.write_inst("ldp %s, %s, [%s, #%d]!",
-                         YuhuMacroAssembler::x1, YuhuMacroAssembler::x0,
-                         YuhuMacroAssembler::x8, -16);
-  } else if (num_params == 1) {
-    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x0, YuhuMacroAssembler::x8, -8);
-  }
-
-  if (num_params >= 4) {
-    masm.write_inst("ldp %s, %s, [%s, #%d]!",
-                         YuhuMacroAssembler::x3, YuhuMacroAssembler::x2,
-                         YuhuMacroAssembler::x8, -16);
-  } else if (num_params == 3) {
-    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x2, YuhuMacroAssembler::x8, -8);
-  }
-
-  if (num_params >= 6) {
-    masm.write_inst("ldp %s, %s, [%s, #%d]!",
-                         YuhuMacroAssembler::x5, YuhuMacroAssembler::x4,
-                         YuhuMacroAssembler::x8, -16);
-  } else if (num_params == 5) {
-    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x4, YuhuMacroAssembler::x8, -8);
-  }
-
-  if (num_params >= 8) {
-    masm.write_inst("ldp %s, %s, [%s, #%d]!",
-                         YuhuMacroAssembler::x7, YuhuMacroAssembler::x6,
-                         YuhuMacroAssembler::x8, -16);
-  } else if (num_params == 7) {
-    masm.write_inst("ldr %s, [%s, #%d]!", YuhuMacroAssembler::x6, YuhuMacroAssembler::x8, -8);
-  }
-
-  // === Jump to standard deoptimization blob ===
-  // The standard deopt blob will:
-  //   - Save all registers (x0-x30, v0-v31)
-  //   - x0-x(num_params-1) now contain the restored parameter values
-  //   - Get thread from r28 (rthread register, callee-saved)
-  //   - Call fetch_unroll_info()
-  //   - Call unpack_frames()
-  //   - Restore execution in interpreter with correct parameter values
-  masm.write_insts_far_jump(SharedRuntime::deopt_blob()->unpack_with_reexecution());
-
-  // Flush the generated code
-  masm.flush();
-
-  address stub_end = masm.current_pc();
-
-  // Store the stub address
-  _deoptimization_stub = start;
 }
 
 // Get or create the unified exit block for all return paths

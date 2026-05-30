@@ -23,6 +23,7 @@
 using namespace llvm;
 
 extern "C" void gc_safepoint_poll();
+extern "C" void handle_deoptimization();
 
 // MachineCodePrinterPlugin implementation
 // This plugin prints all generated machine code for debugging purposes
@@ -59,7 +60,7 @@ void MachineCodePrinterPlugin::notifyTransferringResources(llvm::orc::JITDylib &
 void MachineCodePrinterPlugin::modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
                                                 llvm::jitlink::LinkGraph &LG,
                                                 llvm::jitlink::PassConfiguration &PassConfig) {
-// 在链接完成后打印机器码
+    // 在链接完成后打印机器码
     PassConfig.PostFixupPasses.push_back(
             [this](
                     jitlink::LinkGraph &G
@@ -240,7 +241,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                             offset + 200 <= Size ? 200 : Size - offset,
                             match);
 
-                    if (found && !match.safepoint_poll_call) {
+                    if (found && (match.call_target_type != CallTargetType::safepoint_poll && match.call_target_type != CallTargetType::deopt)) {
                         // Validate 1-1-1 relationship
                         if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
                             if (YuhuTraceMachineCode) {
@@ -302,7 +303,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         if (YuhuTraceMachineCode) {
                             errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
                         }
-                    } else if (found && match.safepoint_poll_call) {
+                    } else if (found && (match.call_target_type == CallTargetType::safepoint_poll || match.call_target_type == CallTargetType::deopt)) {
                         if (match.last_java_pc_va == 0) {
                             if (YuhuTraceMachineCode) {
                                 errs() << "[CallSite Extractor] ERROR: Missing placeholders at offset "
@@ -318,9 +319,9 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                         // Look up the actual helper address from virtual_offset mapping
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-                        if (helper_addr == 0 || helper_addr != (uint64_t)&gc_safepoint_poll) {
+                        if (helper_addr == 0 || (helper_addr != (uint64_t)&gc_safepoint_poll && helper_addr != (uint64_t)&handle_deoptimization)) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: No helper address or not safepoint poll call for virtual_offset "
+                                errs() << "[CallSite Extractor] ERROR: No helper address or not safepoint poll call or not deopt call for virtual_offset "
                                        << virtual_offset << "\n";
                             }
                             continue;

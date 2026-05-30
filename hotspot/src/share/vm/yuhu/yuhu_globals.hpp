@@ -87,18 +87,6 @@
 // Yuhu frame layout constants
 const int YUHU_FRAME_HEADER_WORDS = 6;  // Frame header size in words
 
-// LLVM register spill reservation (AArch64)
-// Reserve space for all callee-saved registers (x19-x28 = 10 regs = 80 bytes)
-// This is the MAXIMUM LLVM could possibly need for register spills.
-// Both yuhuFunction.cpp (alloca) and yuhuStack.cpp (frame size) must use this value.
-const int YUHU_LLVM_SPILL_SLOTS = 10;  // 80 bytes - absolute maximum for AArch64
-
-// Callee-saved register save area (AArch64)
-// Reserve 6 words (48 bytes) right after LLVM spill slots for saving callee-saved registers
-// across Java method calls. Location: [sp, #80] (fixed offset after 80-byte spill area).
-// Saves: x19, x20, x23, x25, x27 (5 regs = 40 bytes) + 8 bytes padding for 16-byte alignment.
-const int YUHU_CALLEE_SAVED_SAVE_AREA = 6;  // 48 bytes
-
 // AArch64 instruction encodings
 const uint32_t BLR_MASK = 0xFFFFFC1F;
 const uint32_t BLR_PATTERN = 0xD63F0000;
@@ -108,6 +96,9 @@ const uint32_t B_PATTERN = 0x14000000;
 // Virtual address magic numbers for placeholder identification
 const uint64_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;
 const uint64_t CALL_TARGET_MAGIC = 0xBEEF;
+
+// deopt statepoint id
+const uint64_t DEOPT_STATEPOINT_ID = 4096;
 
 YUHU_FLAGS(DECLARE_DEVELOPER_FLAG, DECLARE_PD_DEVELOPER_FLAG, DECLARE_PRODUCT_FLAG, DECLARE_PD_PRODUCT_FLAG, DECLARE_DIAGNOSTIC_FLAG, DECLARE_NOTPRODUCT_FLAG)
 

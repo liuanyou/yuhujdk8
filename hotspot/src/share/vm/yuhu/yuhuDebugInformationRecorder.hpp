@@ -18,7 +18,8 @@ enum class CallSiteType : uint8_t {
     none = 0,
     safepoint_poll = 1,
     vm_call = 2,
-    java_call = 3
+    java_call = 3,
+    deopt_call = 4
 };
 
 struct CallSiteEntry {
@@ -30,6 +31,27 @@ struct CallSiteEntry {
     uint64_t call_target_offset; // extracted by ORC plugin
     uint64_t blr_offset; // extracted by ORC plugin
     uint64_t return_pc_offset; // extracted by ORC plugin
+};
+
+struct StackMapLocation {
+    uint8_t kind;
+    uint32_t reg_num;
+    int32_t offset;
+    uint32_t constant;
+    uint8_t basic_type; // BasicType from ciType.hpp (T_INT, T_OBJECT, etc.)
+};
+
+struct StackMapEntry {
+    uint32_t instruction_offset;
+    GrowableArray<StackMapLocation*>* locations;
+};
+
+struct DeoptBundle {
+    uint32_t instruction_offset;
+    uint64_t bci;
+    GrowableArray<StackMapLocation*>* locals;
+    GrowableArray<StackMapLocation*>* expression_stacks;
+    GrowableArray<StackMapLocation*>* monitors;
 };
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
@@ -46,10 +68,10 @@ private:
   GrowableArray<CallSiteEntry*>* _call_site_entries;
 
   // Stack map statepoint locations
-  GrowableArray<uint32_t>* _stack_map_instruction_offsets;
-  GrowableArray<GrowableArray<uint8_t>*>* _stack_map_location_kinds;
-  GrowableArray<GrowableArray<uint32_t>*>* _stack_map_location_reg_nums; // for Constant and ConstantIndex kind, it is 0
-  GrowableArray<GrowableArray<int32_t>*>* _stack_map_location_offsets; // for Register, Constant and ConstantIndex kind, it is 0
+  GrowableArray<StackMapEntry*>* _stack_map_entries;
+
+  // deopt statepoint locations
+  GrowableArray<DeoptBundle*>* _deopt_bundles;
 
   // Mangled function name
   std::string _mangled_func_name;
@@ -97,6 +119,21 @@ public:
           return *((CallSiteType*)token) == entry->call_site_type;
       });
       return index != -1;
+  }
+
+  bool contains_stack_map_instruction_offset(uint32_t instruction_offset) const {
+      int index = _stack_map_entries->find(&instruction_offset, [](void* token, StackMapEntry* entry) -> bool {
+          return *((uint32_t*)token) == entry->instruction_offset;
+      });
+      return index != -1;
+  }
+
+  StackMapEntry* get_stack_map_by_instruction_offset(uint32_t instruction_offset) const {
+      int index = _stack_map_entries->find(&instruction_offset, [](void* token, StackMapEntry* entry) -> bool {
+          return *((uint32_t*)token) == entry->instruction_offset;
+      });
+      if (index == -1) return NULL;
+      return _stack_map_entries->at(index);
   }
 
   void embed_call_site_metadata();
@@ -171,6 +208,15 @@ public:
         return _call_site_entries->at(index)->blr_offset;
     }
 
+    DeoptBundle* get_deopt_bundle_by_instruction_offset(uint64_t instruction_offset) const {
+      if (!_deopt_bundles) return NULL;
+        int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* entry) -> bool {
+            return *((uint64_t*)token) == entry->instruction_offset;
+        });
+        if (index == -1) return NULL;
+        return _deopt_bundles->at(index);
+    }
+
   void update_call_site_machine_code_offsets(uint64_t virtual_offset,
                                              uint64_t return_pc_offset,
                                              uint64_t blr_offset,
@@ -186,7 +232,15 @@ public:
   }
 
   // stack map related functions
-  void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset);
+  void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0);
+
+  void register_deopt_bundle(uint32_t instruction_offset, uint64_t bci);
+
+  void register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_VOID);
+
+  void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_VOID);
+
+  void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_OBJECT);
 
   void set_mangled_func_name(std::string mangled_func_name) {
       _mangled_func_name = mangled_func_name;

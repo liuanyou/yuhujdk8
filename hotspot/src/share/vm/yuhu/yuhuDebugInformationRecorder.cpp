@@ -45,10 +45,9 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   : _module(NULL) {
   _call_site_entries = new GrowableArray<CallSiteEntry*>();
 
-  _stack_map_instruction_offsets = new GrowableArray<uint32_t>();
-  _stack_map_location_kinds = new GrowableArray<GrowableArray<uint8_t>*>();
-  _stack_map_location_reg_nums = new GrowableArray<GrowableArray<uint32_t>*>();
-  _stack_map_location_offsets = new GrowableArray<GrowableArray<int32_t>*>();
+  _stack_map_entries = new GrowableArray<StackMapEntry*>();
+
+  _deopt_bundles = new GrowableArray<DeoptBundle*>();
 }
 
 // Destructor
@@ -95,7 +94,14 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
                                                        uint64_t helper_address,
                                                        CallSiteType call_site_type,
                                                        int bci) {
-    CallSiteEntry* call_site_entry = new CallSiteEntry();
+    int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
+        return *((uint64_t*)token) == entry->virtual_offset;
+    });
+    // skip registration if already exists
+    if (index != -1) {
+        return;
+    }
+    auto call_site_entry = new CallSiteEntry();
     call_site_entry->virtual_offset = virtual_offset;
     call_site_entry->virtual_address = virtual_address;
     call_site_entry->helper_address = helper_address;
@@ -153,17 +159,135 @@ void YuhuDebugInformationRecorder::embed_call_site_metadata() {
 void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offset,
                                                       uint8_t location_kind,
                                                       uint32_t location_reg_num,
-                                                      int32_t location_offset) {
-    if (!_stack_map_instruction_offsets->contains(instruction_offset)) {
-        _stack_map_instruction_offsets->append(instruction_offset);
-        _stack_map_location_kinds->append(new GrowableArray<uint8_t>());
-        _stack_map_location_reg_nums->append(new GrowableArray<uint32_t>());
-        _stack_map_location_offsets->append(new GrowableArray<int32_t>());
+                                                      int32_t location_offset,
+                                                      uint32_t constant) {
+    int index = _stack_map_entries->find(&instruction_offset, [](void* token, StackMapEntry* entry) -> bool {
+        return *((uint32_t*)token) == entry->instruction_offset;
+    });
+    if (index == -1) {
+        auto stack_map_entry = new StackMapEntry();
+        stack_map_entry->instruction_offset = instruction_offset;
+        stack_map_entry->locations = new GrowableArray<StackMapLocation*>();
+        _stack_map_entries->append(stack_map_entry);
+        index = _stack_map_entries->length() - 1;
     }
-    int index = _stack_map_instruction_offsets->find(instruction_offset);
-    _stack_map_location_kinds->at(index)->append(location_kind);
-    _stack_map_location_reg_nums->at(index)->append(location_reg_num);
-    _stack_map_location_offsets->at(index)->append(location_offset);
+
+    StackMapEntry* entry = _stack_map_entries->at(index);
+    auto location = new StackMapLocation();
+    location->kind = location_kind;
+    location->reg_num = location_reg_num;
+    location->offset = location_offset;
+    location->constant = constant;
+    entry->locations->append(location);
+}
+
+void YuhuDebugInformationRecorder::register_deopt_bundle(uint32_t instruction_offset, uint64_t bci) {
+    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
+        return *((uint32_t*)token) == bundle->instruction_offset;
+    });
+    if (index != -1) {
+        assert(_deopt_bundles->at(index)->bci == 0 || _deopt_bundles->at(index)->bci == bci, "either bci is not initialized or bci matches");
+        // update bci
+        _deopt_bundles->at(index)->bci = bci;
+    } else {
+        auto deopt_bundle = new DeoptBundle();
+        deopt_bundle->instruction_offset = instruction_offset;
+        deopt_bundle->bci = bci;
+        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        _deopt_bundles->append(deopt_bundle);
+    }
+}
+
+void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t instruction_offset,
+                                                                    uint8_t location_kind,
+                                                                    uint32_t location_reg_num,
+                                                                    int32_t location_offset,
+                                                                    uint32_t constant,
+                                                                    uint8_t basic_type) {
+    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
+        return *((uint32_t*)token) == bundle->instruction_offset;
+    });
+    if (index == -1) {
+        auto deopt_bundle = new DeoptBundle();
+        deopt_bundle->instruction_offset = instruction_offset;
+        deopt_bundle->bci = 0;
+        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        _deopt_bundles->append(deopt_bundle);
+        index = _deopt_bundles->length() - 1;
+    }
+
+    DeoptBundle* bundle = _deopt_bundles->at(index);
+    auto location = new StackMapLocation();
+    location->kind = location_kind;
+    location->reg_num = location_reg_num;
+    location->offset = location_offset;
+    location->constant = constant;
+    location->basic_type = basic_type;
+    bundle->locals->append(location);
+}
+
+void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(uint32_t instruction_offset,
+                                                                               uint8_t location_kind,
+                                                                               uint32_t location_reg_num,
+                                                                               int32_t location_offset,
+                                                                               uint32_t constant,
+                                                                               uint8_t basic_type) {
+    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
+        return *((uint32_t*)token) == bundle->instruction_offset;
+    });
+    if (index == -1) {
+        auto deopt_bundle = new DeoptBundle();
+        deopt_bundle->instruction_offset = instruction_offset;
+        deopt_bundle->bci = 0;
+        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        _deopt_bundles->append(deopt_bundle);
+        index = _deopt_bundles->length() - 1;
+    }
+
+    DeoptBundle* bundle = _deopt_bundles->at(index);
+    auto location = new StackMapLocation();
+    location->kind = location_kind;
+    location->reg_num = location_reg_num;
+    location->offset = location_offset;
+    location->constant = constant;
+    location->basic_type = basic_type;
+    bundle->expression_stacks->append(location);
+}
+
+void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t instruction_offset,
+                                                                       uint8_t location_kind,
+                                                                       uint32_t location_reg_num,
+                                                                       int32_t location_offset,
+                                                                       uint32_t constant,
+                                                                       uint8_t basic_type) {
+    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
+        return *((uint32_t*)token) == bundle->instruction_offset;
+    });
+    if (index == -1) {
+        auto deopt_bundle = new DeoptBundle();
+        deopt_bundle->instruction_offset = instruction_offset;
+        deopt_bundle->bci = 0;
+        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        _deopt_bundles->append(deopt_bundle);
+        index = _deopt_bundles->length() - 1;
+    }
+
+    DeoptBundle* bundle = _deopt_bundles->at(index);
+    auto location = new StackMapLocation();
+    location->kind = location_kind;
+    location->reg_num = location_reg_num;
+    location->offset = location_offset;
+    location->constant = constant;
+    location->basic_type = basic_type;
+    bundle->monitors->append(location);
 }
 
 void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
@@ -182,6 +306,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
 
     for (int i = 0; i < _call_site_entries->length(); ++i) {
         CallSiteEntry* call_site_entry = _call_site_entries->at(i);
+
         uint64_t return_pc_offset = call_site_entry->return_pc_offset;
 
         // multiple call targets may use same blr, so skip processed return pc offset
@@ -195,85 +320,249 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
                                   YuhuStack::oopmap_slot_munge(arg_count));
 
-        assert(_stack_map_instruction_offsets->contains(return_pc_offset), "Call site should contain stack map");
+        if (call_site_entry->call_site_type != CallSiteType::deopt_call) {
 
-        if (YuhuTraceOffset) {
-            tty->print_cr("Yuhu: Found stack map site by return pc offset=%d", return_pc_offset);
-        }
+            assert(contains_stack_map_instruction_offset(return_pc_offset), "Call site should contain stack map");
 
-        // add plus_offset to get offset in code cache
-        int pc_offset = return_pc_offset + plus_offset;
-        uint64_t helper_address = call_site_entry->helper_address;
-        if (helper_address == (uint64_t)&gc_safepoint_poll) {
             if (YuhuTraceOffset) {
-                tty->print_cr("Yuhu: Call site is safepoint poll call");
+                tty->print_cr("Yuhu: Found stack map site by return pc offset=%d", return_pc_offset);
             }
-            pc_offset = call_site_entry->call_target_offset + 4 + plus_offset; // pc_offset should be ldr instruction, not adrp instruction
+
+            // add plus_offset to get offset in code cache
+            int pc_offset = return_pc_offset + plus_offset;
+            uint64_t helper_address = call_site_entry->helper_address;
+            if (helper_address == (uint64_t) &gc_safepoint_poll) {
+                if (YuhuTraceOffset) {
+                    tty->print_cr("Yuhu: Call site is safepoint poll call");
+                }
+                pc_offset = call_site_entry->call_target_offset + 4 +
+                            plus_offset; // pc_offset should be ldr instruction, not adrp instruction
+            }
+
+            GrowableArray<int32_t> processed_stack_offsets;
+            GrowableArray<uint32_t> processed_register_nums;
+
+            StackMapEntry *stack_map_entry = get_stack_map_by_instruction_offset(return_pc_offset);
+
+            for (int j = 0; j < stack_map_entry->locations->length(); ++j) {
+                uint8_t kind = stack_map_entry->locations->at(j)->kind;
+                if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct)) {
+                    uint32_t reg_num = stack_map_entry->locations->at(j)->reg_num;
+                    // Usually it should be sp register, sometimes it uses fp register,
+                    // but don't know when, assume it is always sp register
+                    assert(reg_num == 31, "Should be sp register");
+                    // offset in bytes
+                    int32_t offset_in_bytes = stack_map_entry->locations->at(j)->offset;
+                    if (processed_stack_offsets.contains(offset_in_bytes)) {
+                        continue;
+                    }
+                    processed_stack_offsets.append(offset_in_bytes);
+                    oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
+                } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+                    uint32_t reg_num = stack_map_entry->locations->at(j)->reg_num;
+                    if (processed_register_nums.contains(reg_num)) {
+                        continue;
+                    }
+                    processed_register_nums.append(reg_num);
+                    oopmap->set_oop(VMRegImpl::as_VMReg(reg_num << 1));
+                } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+                    uint32_t reg_num = stack_map_entry->locations->at(j)->reg_num;
+                    assert(reg_num == 31, "Should be sp register");
+                    // offset in bytes
+                    int32_t offset_in_bytes = stack_map_entry->locations->at(j)->offset;
+                    if (processed_stack_offsets.contains(offset_in_bytes)) {
+                        continue;
+                    }
+                    processed_stack_offsets.append(offset_in_bytes);
+                    oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
+                }
+            }
+            // call sites need an oopmap even there is no live oop
+            real_recorder->add_safepoint(pc_offset, oopmap);
+            real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
+                                          method, // the method being compiled (the caller)
+                                          call_site_entry->bci, // the BCI of the invoke bytecode in the caller
+                                          false, // Whether to re-execute the bytecode after deoptimization
+                                          false, // Whether this is a MethodHandle invoke
+                                          method->signature()->return_type()->is_object(), // Whether the return value is an oop
+                                          NULL, // DebugToken* for local variables (can be NULL/empty)
+                                          NULL, // DebugToken* for expression stack (can be NULL/empty)
+                                          NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
+            real_recorder->end_safepoint(pc_offset);
+
+        } else {
+            // add plus_offset to get offset in code cache
+            int pc_offset = return_pc_offset + plus_offset;
+
+            DeoptBundle* bundle = get_deopt_bundle_by_instruction_offset(return_pc_offset);
+            assert(bundle != NULL, "deopt bundle shouldn't be NULL");
+            assert((int) bundle->bci == call_site_entry->bci, "bci should be the same");
+
+            // Convert StackMapLocation arrays to ScopeValue arrays for DebugToken
+            GrowableArray<ScopeValue*>* locals = NULL;
+            GrowableArray<ScopeValue*>* expressions = NULL;
+            GrowableArray<MonitorValue*>* monitors = NULL;
+
+            // Convert locals
+            if (bundle->locals && bundle->locals->length() > 0) {
+                locals = new GrowableArray<ScopeValue*>();
+                for (int i = 0; i < bundle->locals->length(); i++) {
+                    StackMapLocation* loc = bundle->locals->at(i);
+                    Location location;
+                    
+                    // Determine Location::Type based on BasicType
+                    Location::Type loc_type = Location::normal; // Default for integers
+                    switch (loc->basic_type) {
+                        case T_OBJECT:
+                        case T_ARRAY:
+                            loc_type = Location::oop;
+                            break;
+                        case T_LONG:
+                            loc_type = Location::lng;
+                            break;
+                        case T_FLOAT:
+                            loc_type = Location::float_in_dbl;
+                            break;
+                        case T_DOUBLE:
+                            loc_type = Location::dbl;
+                            break;
+                        default:
+                            loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
+                            break;
+                    }
+                    
+                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
+                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+                        // Stack location
+                        location = Location::new_stk_loc(loc_type, loc->offset);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+                        // Register location
+                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
+                        location = Location::new_reg_loc(loc_type, reg);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+                        // Constant value (likely null or primitive constant)
+                        locals->append(new ConstantIntValue(loc->constant));
+                        continue;
+                    } else {
+                        continue; // Skip unsupported location kinds
+                    }
+                    
+                    locals->append(new LocationValue(location));
+                }
+            }
+
+            // Convert expression stacks
+            if (bundle->expression_stacks && bundle->expression_stacks->length() > 0) {
+                expressions = new GrowableArray<ScopeValue*>();
+                for (int i = 0; i < bundle->expression_stacks->length(); i++) {
+                    StackMapLocation* loc = bundle->expression_stacks->at(i);
+                    Location location;
+                    
+                    // Determine Location::Type based on BasicType
+                    Location::Type loc_type = Location::normal; // Default for integers
+                    switch (loc->basic_type) {
+                        case T_OBJECT:
+                        case T_ARRAY:
+                            loc_type = Location::oop;
+                            break;
+                        case T_LONG:
+                            loc_type = Location::lng;
+                            break;
+                        case T_FLOAT:
+                            loc_type = Location::float_in_dbl;
+                            break;
+                        case T_DOUBLE:
+                            loc_type = Location::dbl;
+                            break;
+                        default:
+                            loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
+                            break;
+                    }
+                    
+                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
+                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+                        // Stack location
+                        location = Location::new_stk_loc(loc_type, loc->offset);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+                        // Register location
+                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
+                        location = Location::new_reg_loc(loc_type, reg);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+                        // Constant value
+                        expressions->append(new ConstantIntValue(loc->constant));
+                        continue;
+                    } else {
+                        continue; // Skip unsupported location kinds
+                    }
+                    
+                    expressions->append(new LocationValue(location));
+                }
+            }
+
+            // Convert monitors
+            if (bundle->monitors && bundle->monitors->length() > 0) {
+                monitors = new GrowableArray<MonitorValue*>();
+                for (int i = 0; i < bundle->monitors->length(); i++) {
+                    StackMapLocation* loc = bundle->monitors->at(i);
+                    Location owner_loc;
+                    
+                    // Monitors are always T_OBJECT
+                    Location::Type loc_type = Location::oop;
+                    
+                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
+                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+                        // Stack location for monitor owner (oop)
+                        owner_loc = Location::new_stk_loc(loc_type, loc->offset);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+                        // Register location for monitor owner (oop)
+                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
+                        owner_loc = Location::new_reg_loc(loc_type, reg);
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+                        // Constant (likely null) - skip this monitor
+                        continue;
+                    } else {
+                        continue; // Skip unsupported location kinds
+                    }
+                    
+                    // For the basic_lock location, we use a stack location
+                    // The actual BasicLock is in the interpreter frame
+                    Location basic_lock_loc = Location::new_stk_loc(Location::normal, loc->offset + wordSize);
+                    
+                    ScopeValue* owner = new LocationValue(owner_loc);
+                    monitors->append(new MonitorValue(owner, basic_lock_loc));
+                }
+            }
+
+            real_recorder->add_safepoint(pc_offset, oopmap);
+            // Create DebugTokens from the ScopeValue arrays
+            DebugToken* locals_token = (locals != NULL) ? real_recorder->create_scope_values(locals) : NULL;
+            DebugToken* expressions_token = (expressions != NULL) ? real_recorder->create_scope_values(expressions) : NULL;
+            DebugToken* monitors_token = (monitors != NULL) ? real_recorder->create_monitor_values(monitors) : NULL;
+            real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
+                                          method, // the method being compiled (the caller)
+                                          call_site_entry->bci, // the BCI of the invoke bytecode in the caller
+                                          false, // Whether to re-execute the bytecode after deoptimization
+                                          false, // Whether this is a MethodHandle invoke
+                                          method->signature()->return_type()->is_object(), // Whether the return value is an oop
+                                          locals_token, // DebugToken* for local variables
+                                          expressions_token, // DebugToken* for expression stack
+                                          monitors_token); // DebugToken* for synchronized monitors
+            real_recorder->end_safepoint(pc_offset);
         }
 
-        GrowableArray<int32_t> processed_stack_offsets;
-        GrowableArray<uint32_t> processed_register_nums;
-
-        int smio_index = _stack_map_instruction_offsets->find(return_pc_offset);
-
-        for (int j = 0; j < _stack_map_location_kinds->at(smio_index)->length(); ++j) {
-            uint8_t kind = _stack_map_location_kinds->at(smio_index)->at(j);
-            if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
-                // Usually it should be sp register, sometimes it uses fp register,
-                // but don't know when, assume it is always sp register
-                assert(reg_num == 31, "Should be sp register");
-                // offset in bytes
-                int32_t offset_in_bytes = _stack_map_location_offsets->at(smio_index)->at(j);
-                if (processed_stack_offsets.contains(offset_in_bytes)) {
-                    continue;
-                }
-                processed_stack_offsets.append(offset_in_bytes);
-                oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
-            } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
-                if (processed_register_nums.contains(reg_num)) {
-                    continue;
-                }
-                processed_register_nums.append(reg_num);
-                oopmap->set_oop(VMRegImpl::as_VMReg(reg_num << 1));
-            } else if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-                uint32_t reg_num = _stack_map_location_reg_nums->at(smio_index)->at(j);
-                assert(reg_num == 31, "Should be sp register");
-                // offset in bytes
-                int32_t offset_in_bytes = _stack_map_location_offsets->at(smio_index)->at(j);
-                if (processed_stack_offsets.contains(offset_in_bytes)) {
-                    continue;
-                }
-                processed_stack_offsets.append(offset_in_bytes);
-                oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
-            }
-        }
-        // call sites need an oopmap even there is no live oop
-        real_recorder->add_safepoint(pc_offset, oopmap);
-        real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
-                                      method, // the method being compiled (the caller)
-                                      call_site_entry->bci, // the BCI of the invoke bytecode in the caller
-                                      false, // Whether to re-execute the bytecode after deoptimization
-                                      false, // Whether this is a MethodHandle invoke
-                                      method->signature()->return_type()->is_object(), // Whether the return value is an oop
-                                      NULL, // DebugToken* for local variables (can be NULL/empty)
-                                      NULL, // DebugToken* for expression stack (can be NULL/empty)
-                                      NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
-        real_recorder->end_safepoint(pc_offset);
         // record processed instruction offset
         processed_instruction_offsets.append(return_pc_offset);
     }
 
     // all stack maps containing live oops should be processed, unless they have no live oops
-    for (int i = 0; i < _stack_map_instruction_offsets->length(); ++i) {
-        if (processed_instruction_offsets.contains(_stack_map_instruction_offsets->at(i))) {
+    for (int i = 0; i < _stack_map_entries->length(); ++i) {
+        if (processed_instruction_offsets.contains(_stack_map_entries->at(i)->instruction_offset)) {
             continue;
         }
 
         // If instruction offset is not processed, either it is not call site or it has no live oops
-        for (int j = 0; j < _stack_map_location_kinds->at(i)->length(); ++j) {
-            uint8_t kind = _stack_map_location_kinds->at(i)->at(j);
+        for (int j = 0; j < _stack_map_entries->at(i)->locations->length(); ++j) {
+            uint8_t kind = _stack_map_entries->at(i)->locations->at(j)->kind;
             assert(kind != static_cast<uint8_t>(StackMapParser::LocationKind::Direct)
                    && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Register)
                    && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Indirect), "Should contain no live oops");

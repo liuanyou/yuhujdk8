@@ -73,9 +73,6 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
   llvm::AllocaInst*                _return_slot;         // Function-scope return value slot (Alloca in entry block)
 
-  // Per-function deoptimization stub
-  address                           _deoptimization_stub;
-
  public:
   llvm::Function* function() const {
     return _function;
@@ -104,10 +101,6 @@ class YuhuFunction : public YuhuTargetInvariants {
   }
   llvm::Value* arg_base() const { return _arg_base; }
   llvm::Value* arg_count() const { return _arg_count; }
-
-  // Per-function deoptimization stub support
-  address deoptimization_stub() const { return _deoptimization_stub; }
-  void generate_deoptimization_stub();
   
   // On-stack replacement
  private:

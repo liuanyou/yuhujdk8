@@ -258,7 +258,7 @@ extern "C" void gc_safepoint_poll() {
 }
 
 extern "C" void handle_deoptimization() {
-
+    assert(true, "gotcha you");
 }
 
 // ============================================================================
@@ -553,6 +553,7 @@ address YuhuRuntime::_monitorenter_stub = NULL;
 address YuhuRuntime::_monitorexit_stub = NULL;
 address YuhuRuntime::_register_finalizer_stub = NULL;
 address YuhuRuntime::_find_exception_handler_stub = NULL;
+address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
 // Initialize all VM call stubs
 void YuhuRuntime::initialize_vm_stubs() {
@@ -564,6 +565,8 @@ void YuhuRuntime::initialize_vm_stubs() {
   _monitorexit_stub = generate_vm_stub("yuhu_monitorexit_stub", (address) YuhuRuntime::monitorexit);
   _register_finalizer_stub = generate_vm_stub("yuhu_register_finalizer_stub", (address) YuhuRuntime::register_finalizer);
   _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
+
+  _handle_deoptimization_stub = generate_handle_deoptimization_stub();
   
   if (YuhuTraceInstalls) {
     tty->print_cr("Yuhu: VM call stubs initialized");
@@ -575,6 +578,7 @@ void YuhuRuntime::initialize_vm_stubs() {
     tty->print_cr("  monitorexit_stub:            " PTR_FORMAT, p2i(_monitorexit_stub));
     tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT, p2i(_register_finalizer_stub));
     tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT, p2i(_find_exception_handler_stub));
+    tty->print_cr("  handle_deoptimization_stub:  " PTR_FORMAT, p2i(_handle_deoptimization_stub));
   }
 }
 
@@ -610,6 +614,30 @@ address YuhuRuntime::generate_vm_stub(const char* name, address C_function) {
     // Create RuntimeStub
     // Frame size: 2 words (FP + LR)
     int frame_size_in_words = 2;
+
+    RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+            name,
+            &cb,
+            CodeOffsets::frame_never_safe,
+            frame_size_in_words,
+            NULL,  // no oopmap needed - stub has no live oops
+            false  // caller_must_gc_arguments
+    );
+
+    return stub->entry_point();
+}
+
+address YuhuRuntime::generate_handle_deoptimization_stub() {
+    ResourceMark rm;
+    const int stub_size = 64;
+    const char* name = "yuhu_handle_deoptimization_stub";
+    CodeBuffer cb(name, stub_size, stub_size);
+    YuhuMacroAssembler masm(&cb);
+
+    masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::deopt_blob()->unpack()));
+    masm.flush();
+
+    int frame_size_in_words = 0;
 
     RuntimeStub* stub = RuntimeStub::new_runtime_stub(
             name,

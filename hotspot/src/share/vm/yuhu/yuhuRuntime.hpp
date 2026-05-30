@@ -47,9 +47,13 @@ class YuhuRuntime : public AllStatic {
   static address _monitorexit_stub;
   static address _register_finalizer_stub;
   static address _find_exception_handler_stub;
+
+  static address _handle_deoptimization_stub;
   
   // Stub generation functions
   static address generate_vm_stub(const char* name, address C_function);
+
+  static address generate_handle_deoptimization_stub();
   
   // VM calls
  public:
@@ -65,6 +69,8 @@ class YuhuRuntime : public AllStatic {
   static address monitorexit_stub() { return _monitorexit_stub; }
   static address register_finalizer_stub() { return _register_finalizer_stub; }
   static address find_exception_handler_stub() { return _find_exception_handler_stub; }
+
+  static address handle_deoptimization_stub() { return _handle_deoptimization_stub; }
   
   // Generate static call stub for direct method calls
   static address generate_static_call_stub(ciMethod* target_method, 

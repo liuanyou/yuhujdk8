@@ -48,6 +48,14 @@ static const uint32_t MOV_IMM_MASK = 0xFF800000;
 static const uint32_t MOV_IMM_PATTERN_32 = 0x2A000000;
 static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
 
+enum class CallTargetType : uint8_t {
+    none = 0,
+    safepoint_poll = 1,
+    vm = 2,
+    java = 3,
+    deopt = 4
+};
+
 // Information about matched placeholders for a single statepoint
 struct VirtualAddressMatch {
   uint64_t virtual_offset;              // The shared virtual offset (e.g., 0x1000)
@@ -58,7 +66,8 @@ struct VirtualAddressMatch {
   uint64_t call_target_va;              // Call target placeholder (e.g., 0xBEEF1000)
   uint64_t call_target_placeholder_offset;   // Offset of movz instruction for call target
   uint64_t call_target_blr_offset; // Offset of blr instruction
-  bool safepoint_poll_call; // true means it is safepoint poll call, otherwise, normal java calls, VM calls, and helper calls
+
+  CallTargetType call_target_type;
 };
 
 // Scanner for finding dual virtual address placeholders in machine code

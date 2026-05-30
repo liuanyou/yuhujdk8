@@ -56,6 +56,7 @@ using namespace llvm;
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
+extern "C" void handle_deoptimization();
 
 YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
   : IRBuilder<>(YuhuContext::current()),
@@ -513,11 +514,12 @@ Value* YuhuBuilder::uncommon_trap() {
   return make_function((address) YuhuRuntime::uncommon_trap, "Ti", "i");
 }
 
-void YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
+CallInst* YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
   // Get or create the llvm.experimental.deoptimize intrinsic declaration
   llvm::Function* deopt_intrinsic = llvm::Intrinsic::getDeclaration(
     GetInsertBlock()->getModule(),
-    llvm::Intrinsic::experimental_deoptimize);
+    llvm::Intrinsic::experimental_deoptimize,
+    { YuhuType::oop_addrspace1_type() });
   
   // Create the call with deopt bundle
   llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, Bundles);
@@ -530,50 +532,12 @@ void YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundl
   AB.addAttribute("statepoint-id", "4096");
   llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
   call->setAttributes(Attrs);
+  return call;
 }
 
 Value* YuhuBuilder::debug_stack_overflow_check() {
   // Signature: "Txxxxxx" -> "v" (Thread*, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t -> void)
   return make_function((address) YuhuRuntime::debug_stack_overflow_check, "Txxxxxx", "v");
-}
-
-Value* YuhuBuilder::deoptimized_entry_point() {
-  // For AArch64, we don't use CppInterpreter, so we need a different approach
-  // TemplateInterpreter uses a different deoptimization mechanism
-  // The signature is "iT" -> "v": void unpack_with_reexecution(int recurse, Thread* thread)
-  // This is used when a callee gets deoptimized and we need to reexecute in the interpreter
-  //
-  // For AArch64 with TemplateInterpreter, deoptimization is handled by the same
-  // SharedRuntime deoptimization blob used by C1 and C2 compilers.
-  //
-  // The deoptimization blob provides multiple entry points:
-  // - unpack_with_reexecution(): for normal deoptimization with re-execution
-  // - unpack_with_exception_in_tls(): when there's an exception in TLS
-  //
-  // YUHU DEOPTIMIZATION STUB APPROACH:
-  // Each Yuhu function has its own per-function deoptimization stub that knows
-  // how many parameters the function has. The stub restores x0-x7 from the
-  // Yuhu frame's locals area before jumping to the standard deoptimization blob.
-
-  address yuhu_stub = NULL;
-  if (_function != NULL) {
-    yuhu_stub = _function->deoptimization_stub();
-  }
-
-  if (yuhu_stub != NULL) {
-    // Use per-function Yuhu deoptimization stub
-    return make_function(yuhu_stub, "iT", "v");
-  } else {
-    // Fallback to standard deopt blob (may not work correctly due to missing x0-x7)
-    DeoptimizationBlob* deopt_blob = SharedRuntime::deopt_blob();
-    assert(deopt_blob != NULL, "deoptimization blob must have been created");
-
-    // Return the reexecution entry point with signature "iT" -> "v"
-    // (int recurse, Thread* thread) -> void
-    return make_function(
-      (address) deopt_blob->unpack_with_reexecution(),
-      "iT", "v");
-  }
 }
 
 // Native-Java transition
@@ -1644,8 +1608,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
 
             // Create relocation record
-            uint64_t safepoint_poll_addr = (uint64_t)&gc_safepoint_poll;
-            if (function_address == safepoint_poll_addr) {
+            if (function_address == (uint64_t)&gc_safepoint_poll) {
                 // Before patch :
                 //
                 // adrp   x8, <GOT_page>           # Points to GOT
@@ -1664,6 +1627,12 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page(), blr_instr);
                 assert(new_adrp_polling_page_patched, "should patch successfully");
                 cb->relocate((address)(instr+1), relocInfo::poll_type);
+            } else if (function_address == (uint64_t)&handle_deoptimization) {
+                // patch with handle deoptimization stub address
+                bool new_adrp_patched = patch_new_adrp(instr, (uint64_t) YuhuRuntime::handle_deoptimization_stub());
+                assert(new_adrp_patched, "should patch successfully");
+                // maybe do something special for deopt, not for now
+                cb->relocate((address)instr, relocInfo::runtime_call_type);
             } else {
                 // Before patch :
                 //

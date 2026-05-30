@@ -1538,21 +1538,21 @@ address YuhuMacroAssembler::write_insts_dispatch_via(TosState state, address* ta
     return current_pc();
 }
 
-address YuhuMacroAssembler::write_insts_far_jump(address entry, CodeBuffer *cbuf, YuhuRegister tmp) {
+address YuhuMacroAssembler::write_insts_far_jump(YuhuAddress entry, CodeBuffer *cbuf, YuhuRegister tmp) {
     assert(ReservedCodeCacheSize < 4*G, "branch out of range");
-    assert(CodeCache::find_blob(entry) != NULL,
+    assert(CodeCache::find_blob(entry.target()) != NULL,
            "destination of far call not found in code cache");
     if (far_branches()) {
         uint64_t offset;
         // We can use ADRP here because we know that the total size of
         // the code cache cannot exceed 2Gb.
-        write_insts_adrp(tmp, entry, offset);
+        write_insts_adrp(tmp, entry.target(), offset);
         write_inst_regs_imm64("add %s, %s, %ld", tmp, tmp, offset);
 //        if (cbuf) cbuf->set_insts_mark();
         write_inst_br(tmp);
     } else {
 //        if (cbuf) cbuf->set_insts_mark();
-        write_inst_b(entry);
+        write_inst_b(entry.target());
     }
     return current_pc();
 }

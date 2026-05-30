@@ -23,6 +23,13 @@ public:
 private:
     std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler> WrappedCompiler;
 
+    /**
+     * parse stack map for gc and deopt, both stack map are in the same section.
+     *
+     * @param ObjFile
+     */
+    void parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile);
+
     llvm::Error disassembleObjectFile(llvm::MemoryBuffer &ObjBuffer);
 };
 

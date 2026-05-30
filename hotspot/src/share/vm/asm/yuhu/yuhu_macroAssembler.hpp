@@ -441,7 +441,7 @@ public:
 
     address write_insts_get_dispatch();
 
-    address write_insts_far_jump(address entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
+    address write_insts_far_jump(YuhuAddress entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 
     address write_insts_adrp(YuhuRegister reg, const YuhuExternalAddress &dest, uint64_t &byte_offset);
 

@@ -27,6 +27,7 @@
 #include "yuhu/yuhu_globals.hpp"
 
 extern "C" void gc_safepoint_poll();
+extern "C" void handle_deoptimization();
 
 bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
         const uint8_t* code_buffer,
@@ -44,11 +45,11 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
     out_match.call_target_placeholder_offset = 0;
     out_match.call_target_blr_offset = 0;
     out_match.virtual_offset = 0;
-    out_match.safepoint_poll_call = false;
+    out_match.call_target_type = CallTargetType::none;
 
     bool found_ljpc = false;
     bool found_call_target = false;
-    bool found_safepoint_poll_call = false;
+    bool found_adrp_call = false;
     bool found_blr = false;
 
     auto is_mov_32_or_movz_32 = [](uint32_t inst) -> bool {
@@ -159,18 +160,22 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
             uint64_t target_address = target_page + offset_within_page;
 
             uint64_t function_address = *(uint64_t*)target_address;
-            // this is good as adrp target is only gc_safepoint_poll for now.
+            // this is good as adrp target is only gc_safepoint_poll and handle_deoptimization for now.
             // will change condition for other adrp function call in the future.
             if (function_address == (uint64_t)&gc_safepoint_poll) {
-                out_match.safepoint_poll_call = true;
+                out_match.call_target_type = CallTargetType::safepoint_poll;
                 out_match.call_target_placeholder_offset = offset;
-                found_safepoint_poll_call = true;
+                found_adrp_call = true;
+            } else if (function_address == (uint64_t)&handle_deoptimization) {
+                out_match.call_target_type = CallTargetType::deopt;
+                out_match.call_target_placeholder_offset = offset;
+                found_adrp_call = true;
             }
         } else if ((inst & BLR_MASK) == BLR_PATTERN) {
             // Always use first blr instruction as blr offset
             out_match.call_target_blr_offset = offset;
             found_blr = true;
-        } else if (found_ljpc && (found_call_target || found_safepoint_poll_call) && !found_blr && (inst & B_MASK) == B_PATTERN) {
+        } else if (found_ljpc && (found_call_target || found_adrp_call) && !found_blr && (inst & B_MASK) == B_PATTERN) {
             scan_from_b_target(instr, inst, code_buffer, &out_match, &found_blr);
             // If blr is not found, just stop
             if (!found_blr) {
@@ -179,7 +184,7 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
         }
 
         // Stop if we found both placeholders and blr
-        if (found_ljpc && (found_call_target || found_safepoint_poll_call) && found_blr) {
+        if (found_ljpc && (found_call_target || found_adrp_call) && found_blr) {
             return true;
         }
     }

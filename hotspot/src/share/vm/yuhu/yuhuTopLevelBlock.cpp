@@ -51,6 +51,7 @@ using namespace llvm;
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
+extern "C" void handle_deoptimization();
 
 void YuhuTopLevelBlock::scan_for_traps() {
   // Adopt trap information directly from ciTypeFlow's analysis.
@@ -649,6 +650,10 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   for (int i = 0; i < max_locals(); i++) {
     YuhuValue* local = state->local(i);
     if (local != NULL) {
+      // Push type metadata first
+      BasicType basic_type = local->basic_type();
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+      
       llvm::Value* llvm_val = local->generic_value();
       
       // Cast to i64 for uniform representation
@@ -660,7 +665,8 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
       
       deopt_operands.push_back(llvm_val);
     } else {
-      // Null local - push null pointer as i64
+      // Null local - push T_OBJECT type and null value
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), T_OBJECT));
       deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
     }
   }
@@ -668,6 +674,11 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   // 2. Expression stack (in order bottom..top)
   for (int i = 0; i < state->stack_depth(); i++) {
     YuhuValue* stack_val = state->stack(i);
+    
+    // Push type metadata first
+    BasicType basic_type = stack_val->basic_type();
+    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+    
     llvm::Value* llvm_val = stack_val->generic_value();
     
     // Cast to i64
@@ -679,18 +690,74 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     
     deopt_operands.push_back(llvm_val);
   }
+
+  // 3. Monitors (locked objects) - in order 0..num_monitors-1
+  int monitor_count = num_monitors();
+  for (int i = 0; i < monitor_count; i++) {
+    // Push type metadata (monitors are always T_OBJECT)
+    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), T_OBJECT));
+    
+    // Load the locked object from the monitor slot in the stack frame
+    llvm::Value* monitor_object_addr = stack()->monitor_object_addr(i);
+    llvm::Value* locked_obj = builder()->CreateLoad(
+      YuhuType::oop_addrspace1_type(), 
+      monitor_object_addr, 
+      "monitor_object"
+    );
+    
+    // Cast to i64 for uniform representation
+    llvm::Value* llvm_val = builder()->CreatePtrToInt(locked_obj, builder()->getInt64Ty());
+    deopt_operands.push_back(llvm_val);
+  }
+
+  // 4. bci
+    int current_bci = bci();
+    llvm::Value* bci_val = llvm::ConstantInt::get(builder()->getInt64Ty(), current_bci);
+    deopt_operands.push_back(bci_val);
+
+    // 5. num of locals
+    int locals_num = max_locals();
+    llvm::Value* locals_num_val = llvm::ConstantInt::get(builder()->getInt64Ty(), locals_num);
+    deopt_operands.push_back(locals_num_val);
+
+    // 6. num of expression stacks
+    int stacks_num = state->stack_depth();
+    llvm::Value* stacks_num_val = llvm::ConstantInt::get(builder()->getInt64Ty(), stacks_num);
+    deopt_operands.push_back(stacks_num_val);
+
+    // 7. num of monitors
+    llvm::Value* monitor_count_val = llvm::ConstantInt::get(builder()->getInt64Ty(), monitor_count);
+    deopt_operands.push_back(monitor_count_val);
+    
+    // Note: Each value in locals/stacks/monitors is preceded by its type metadata
+    // Total operands = (locals * 2) + (stacks * 2) + (monitors * 2) + 4 metadata
   
   // Create deopt operand bundle
   llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);
+
+    // NEW: Get unique virtual offset for this call site (MUST be before creating placeholders)
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+    // NEW: Create dual virtual addresses with same virtual_offset
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+    stack()->CreateCallSitePlaceholder(last_java_pc_va);
+
+    // NEW: Register call site for later patching
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&handle_deoptimization, CallSiteType::deopt_call, bci());
   
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
   // The deopt bundle preserves all live JVM state for frame reconstruction
-  builder()->CreateExperimentalDeoptimize({deopt_bundle});
+  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize({deopt_bundle});
+
+  builder()->CreateRet(deopt_result);
 
   // CRITICAL: Jump to the unified exit block (contains epilogue marker and ret)
   // This ensures we only have ONE marker in the entire function
-  builder()->CreateBr(function()->unified_exit_block());
+  // Remove it because Ret required by deoptimization is already a terminator
+//  builder()->CreateBr(function()->unified_exit_block());
 }
 
 void YuhuTopLevelBlock::call_register_finalizer(Value *receiver) {
