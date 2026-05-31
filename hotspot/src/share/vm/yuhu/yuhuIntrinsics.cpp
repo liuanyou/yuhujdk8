@@ -225,11 +225,8 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
 }
 
 void YuhuIntrinsics::do_Object_getClass() {
-  Value *klass = builder()->CreateValueOfStructEntry(
-    state()->pop()->jobject_value(),
-    in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(),
-    "klass");
+  Value *object = state()->pop()->jobject_value();
+  Value *klass = builder()->load_klass_from_object(object);
 
   state()->push(
     YuhuValue::create_jobject(

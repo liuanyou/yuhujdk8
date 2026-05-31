@@ -799,11 +799,7 @@ void YuhuTopLevelBlock::call_register_finalizer(Value *receiver) {
   BasicBlock *do_call = function()->CreateBlock("has_finalizer");
   BasicBlock *done    = function()->CreateBlock("done");
 
-  Value *klass = builder()->CreateValueOfStructEntry(
-    receiver,
-    in_ByteSize(oopDesc::klass_offset_in_bytes()),
-    YuhuType::klass_type(), // klass object is allocated in meta-space, no GC
-    "klass");
+  Value *klass = builder()->load_klass_from_object(receiver);
 
   Value *access_flags = builder()->CreateValueOfStructEntry(
     klass,
@@ -1985,11 +1981,6 @@ void YuhuTopLevelBlock::do_new() {
       fast_object, in_ByteSize(oopDesc::mark_offset_in_bytes()),
       PointerType::getUnqual(YuhuType::intptr_type()),
       "mark_addr");
-
-    Value *klass_addr = builder()->CreateAddressOfStructEntry(
-      fast_object, in_ByteSize(oopDesc::klass_offset_in_bytes()),
-      PointerType::getUnqual(YuhuType::klass_type()),
-      "klass_addr");
 
     // Set the mark
     intptr_t mark;
