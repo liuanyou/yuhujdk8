@@ -491,7 +491,39 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
     std::vector<Value*> args;
     args.push_back(check_klass);
     args.push_back(exception_klass);
-    Value* callee = builder()->is_subtype_of();  // Get the is_subtype_of function
+
+      // Manual call site registration (can't use call_vm from here)
+      uint64_t virtual_offset = code_buffer()->create_unique_offset();
+      uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+      uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+      // Extract actual helper address
+      uint64_t helper_address = 0;
+
+      Value* callee = builder()->is_subtype_of();  // Get the is_subtype_of function
+
+      if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+          if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+              if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                  helper_address = IntConst->getZExtValue();
+              }
+          }
+      }
+
+      // Replace callee with virtual address
+      if (helper_address != 0) {
+          llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+          callee = builder()->CreateIntToPtr(
+                  llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
+                  callee->getType());
+
+          stack()->CreateCallSitePlaceholder(last_java_pc_va);
+
+          YuhuDebugInformationRecorder::get()->register_call_site(
+                  virtual_offset, call_target_va, helper_address,
+                  CallSiteType::vm_call, bci());
+      }
+
     builder()->CreateCondBr(
       builder()->CreateICmpNE(
         builder()->CreateCall(func_type, callee, args),
@@ -1329,7 +1361,7 @@ void YuhuTopLevelBlock::do_call() {
 
   // Try to inline the call
   if (!call_is_virtual) {
-    if (YuhuInliner::attempt_inline(call_method, current_state())) {
+    if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
       return;
     }
   }
@@ -1676,9 +1708,39 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
     is_instance, subtype_check);
 
   builder()->SetInsertPoint(subtype_check);
-  // LLVM 20+ requires FunctionType for CreateCall
-  // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "KK" -> "c"
+
+    // Manual call site registration (can't use call_vm from here)
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+    // Extract actual helper address
+    uint64_t helper_address = 0;
+
   Value* callee = builder()->is_subtype_of();
+
+    if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+        if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+            if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                helper_address = IntConst->getZExtValue();
+            }
+        }
+    }
+
+    // Replace callee with virtual address
+    if (helper_address != 0) {
+        llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+        callee = builder()->CreateIntToPtr(
+                llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
+                callee->getType());
+
+        stack()->CreateCallSitePlaceholder(last_java_pc_va);
+
+        YuhuDebugInformationRecorder::get()->register_call_site(
+                virtual_offset, call_target_va, helper_address,
+                CallSiteType::vm_call, bci());
+    }
+
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;
   args.push_back(check_klass);

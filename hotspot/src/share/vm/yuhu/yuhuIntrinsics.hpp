@@ -34,18 +34,28 @@
 class YuhuIntrinsics : public YuhuTargetInvariants {
  public:
   static bool is_intrinsic(ciMethod* target);
-  static void inline_intrinsic(ciMethod* target, YuhuState* state);
+  static void inline_intrinsic(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci);
 
  private:
-  YuhuIntrinsics(YuhuState* state, ciMethod* target)
-    : YuhuTargetInvariants(state, target), _state(state) {}
+  YuhuIntrinsics(YuhuState* state, YuhuStack* stack, ciMethod* target, int bci)
+    : YuhuTargetInvariants(state, target), _state(state), _stack(stack), _bci(bci) {}
 
  private:
   YuhuState* _state;
+  YuhuStack* _stack;
+  int _bci;
 
  private:
   YuhuState* state() const {
     return _state;
+  }
+  
+  YuhuStack* stack() const {
+    return _stack;
+  }
+  
+  int bci() const {
+    return _bci;
   }
 
  private:

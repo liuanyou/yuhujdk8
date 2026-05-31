@@ -33,7 +33,7 @@
 
 class YuhuInliner : public AllStatic {
  public:
-  static bool attempt_inline(ciMethod* target, YuhuState* state);
+  static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci);
 
  private:
   static bool may_be_inlinable(ciMethod* target);

@@ -743,9 +743,9 @@ bool YuhuInlinerHelper::do_field_access(bool is_get, bool is_field) {
   return true;
 }
 
-bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state) {
+bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci) {
   if (YuhuIntrinsics::is_intrinsic(target)) {
-    YuhuIntrinsics::inline_intrinsic(target, state);
+    YuhuIntrinsics::inline_intrinsic(target, state, stack, bci);
     return true;
   }
 

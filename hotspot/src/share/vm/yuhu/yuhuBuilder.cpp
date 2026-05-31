@@ -343,7 +343,7 @@ Value* YuhuBuilder::decode_klass_not_null(Value* compressed_klass) {
       assert(LogKlassAlignmentInBytes == Universe::narrow_klass_shift(), "decode alg wrong");
       Value *shifted = CreateShl(
         CreateZExt(compressed_klass, YuhuType::intptr_type()),
-        LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+        LLVMValue::intptr_constant(Universe::narrow_klass_shift()));
       return CreateIntToPtr(shifted, YuhuType::klass_type()); // return ptr
     }
     return CreateIntToPtr(CreateZExt(compressed_klass, YuhuType::intptr_type()), YuhuType::klass_type()); // return ptr
@@ -353,7 +353,7 @@ Value* YuhuBuilder::decode_klass_not_null(Value* compressed_klass) {
   Value *base = LLVMValue::intptr_constant((intptr_t)Universe::narrow_klass_base());
   Value *shifted = CreateShl(
     CreateZExt(compressed_klass, YuhuType::intptr_type()),
-    LLVMValue::jint_constant(Universe::narrow_klass_shift()));
+    LLVMValue::intptr_constant(Universe::narrow_klass_shift()));
   return CreateIntToPtr(CreateAdd(base, shifted), YuhuType::klass_type()); // return ptr
 }
 
@@ -444,11 +444,11 @@ Value* YuhuBuilder::d2l() {
 }
 
 Value* YuhuBuilder::is_subtype_of() {
-  return make_function((address) YuhuRuntime::is_subtype_of, "KK", "c");
+  return make_function(YuhuRuntime::is_subtype_of_stub(), "KK", "c");
 }
 
 Value* YuhuBuilder::current_time_millis() {
-  return make_function((address) os::javaTimeMillis, "", "l");
+  return make_function(YuhuRuntime::current_time_millis_stub(), "", "l");
 }
 
 Value* YuhuBuilder::sin() {

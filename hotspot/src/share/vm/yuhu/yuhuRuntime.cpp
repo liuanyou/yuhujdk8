@@ -553,6 +553,8 @@ address YuhuRuntime::_monitorenter_stub = NULL;
 address YuhuRuntime::_monitorexit_stub = NULL;
 address YuhuRuntime::_register_finalizer_stub = NULL;
 address YuhuRuntime::_find_exception_handler_stub = NULL;
+address YuhuRuntime::_is_subtype_of_stub = NULL;
+address YuhuRuntime::_current_time_millis_stub = NULL;
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
 // Initialize all VM call stubs
@@ -565,6 +567,8 @@ void YuhuRuntime::initialize_vm_stubs() {
   _monitorexit_stub = generate_vm_stub("yuhu_monitorexit_stub", (address) YuhuRuntime::monitorexit);
   _register_finalizer_stub = generate_vm_stub("yuhu_register_finalizer_stub", (address) YuhuRuntime::register_finalizer);
   _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
+  _is_subtype_of_stub = generate_vm_stub("yuhu_is_subtype_of_stub", (address) YuhuRuntime::is_subtype_of);
+  _current_time_millis_stub = generate_vm_stub("yuhu_current_time_millis_stub", (address) os::javaTimeMillis);
 
   _handle_deoptimization_stub = generate_handle_deoptimization_stub();
   
@@ -578,6 +582,8 @@ void YuhuRuntime::initialize_vm_stubs() {
     tty->print_cr("  monitorexit_stub:            " PTR_FORMAT, p2i(_monitorexit_stub));
     tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT, p2i(_register_finalizer_stub));
     tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT, p2i(_find_exception_handler_stub));
+    tty->print_cr("  is_subtype_of_stub:          " PTR_FORMAT, p2i(_is_subtype_of_stub));
+    tty->print_cr("  current_time_millis_stub:    " PTR_FORMAT, p2i(_current_time_millis_stub));
     tty->print_cr("  handle_deoptimization_stub:  " PTR_FORMAT, p2i(_handle_deoptimization_stub));
   }
 }

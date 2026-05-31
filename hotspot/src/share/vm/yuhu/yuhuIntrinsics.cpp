@@ -26,6 +26,7 @@
 #include "precompiled.hpp"
 #include "ci/ciMethod.hpp"
 #include "yuhu/llvmHeaders.hpp"
+#include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuIntrinsics.hpp"
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuValue.hpp"
@@ -79,8 +80,8 @@ bool YuhuIntrinsics::is_intrinsic(ciMethod *target) {
   return false;
 }
 
-void YuhuIntrinsics::inline_intrinsic(ciMethod *target, YuhuState *state) {
-  YuhuIntrinsics intrinsic(state, target);
+void YuhuIntrinsics::inline_intrinsic(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci) {
+  YuhuIntrinsics intrinsic(state, stack, target, bci);
   intrinsic.do_intrinsic();
 }
 
@@ -241,19 +242,48 @@ void YuhuIntrinsics::do_Object_getClass() {
 }
 
 void YuhuIntrinsics::do_System_currentTimeMillis() {
-  // LLVM 20+ requires FunctionType for CreateCall
-  // current_time_millis signature: "" -> "l" (void -> long)
+  // Manual call site registration (can't use call_vm from here)
+  uint64_t virtual_offset = code_buffer()->create_unique_offset();
+  uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+  uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+  
+  // Extract actual helper address
+  uint64_t helper_address = 0;
+  Value* callee = builder()->current_time_millis();
+  if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+    if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+      if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+        helper_address = IntConst->getZExtValue();
+      }
+    }
+  }
+  
+  // Replace callee with virtual address
+  if (helper_address != 0) {
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    callee = builder()->CreateIntToPtr(
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
+      callee->getType());
+
+      stack()->CreateCallSitePlaceholder(last_java_pc_va);
+    
+    YuhuDebugInformationRecorder::get()->register_call_site(
+      virtual_offset, call_target_va, helper_address, 
+      CallSiteType::vm_call, bci());
+  }
+  
+  // Create the call
 #if LLVM_VERSION_MAJOR >= 20
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("", "l");
   std::vector<Value*> args;  // No arguments
   state()->push(
     YuhuValue::create_jlong(
-      builder()->CreateCall(func_type, builder()->current_time_millis(), args),
+      builder()->CreateCall(func_type, callee, args),
       false));
 #else
   state()->push(
     YuhuValue::create_jlong(
-      builder()->CreateCall(builder()->current_time_millis()),
+      builder()->CreateCall(callee),
       false));
 #endif
   state()->push(NULL);
