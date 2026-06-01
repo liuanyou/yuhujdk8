@@ -1626,6 +1626,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 // Patch adrp instruction
                 bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page(), blr_instr);
                 assert(new_adrp_polling_page_patched, "should patch successfully");
+                cb->relocate((address)(instr), relocInfo::poll_type);
                 cb->relocate((address)(instr+1), relocInfo::poll_type);
             } else if (function_address == (uint64_t)&handle_deoptimization) {
                 // patch with handle deoptimization stub address
