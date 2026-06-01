@@ -29,8 +29,6 @@ private:
      * @param ObjFile
      */
     void parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile);
-
-    llvm::Error disassembleObjectFile(llvm::MemoryBuffer &ObjBuffer);
 };
 
 #endif // SHARE_VM_YUHU_YUHUTRACINGIRCOMPILER_HPP

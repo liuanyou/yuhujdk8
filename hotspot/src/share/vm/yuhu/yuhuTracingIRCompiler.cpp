@@ -42,24 +42,6 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
         errs() << "Module: " << M.getName() << "\n";
         M.print(errs(), nullptr);
         errs() << "=== End of IR ===\n\n";
-
-        // 专门查找 sub 指令
-        for (auto &F : M) {
-            for (auto &BB : F) {
-                for (auto &I : BB) {
-                    if (I.getOpcode() == llvm::Instruction::Sub) {
-                        errs() << "Found sub in IR: ";
-                        I.print(errs());
-                        errs() << "\n";
-                        errs() << "  Operand 0: ";
-                        I.getOperand(0)->print(errs());
-                        errs() << "\n  Operand 1: ";
-                        I.getOperand(1)->print(errs());
-                        errs() << "\n";
-                    }
-                }
-            }
-        }
     }
 
     // 2. 调用真正的编译器（ConcurrentIRCompiler）
@@ -75,11 +57,6 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
     if (shouldTrace) {
         errs() << "✅ Compiled successfully, size: "
                << (*ObjBuffer)->getBufferSize() << " bytes\n";
-
-        // 可选：反汇编目标文件，检查 sub 指令
-        if (auto Err = disassembleObjectFile(**ObjBuffer)) {
-            errs() << "Warning: Failed to disassemble\n";
-        }
     }
 
     // ObjBuffer is a std::unique_ptr<MemoryBuffer>
@@ -105,7 +82,9 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         if (!NameOrErr) {
             continue;
         }
-        errs() << "Section: " << *NameOrErr << "\n";
+        if (YuhuTraceMachineCode) {
+            errs() << "Section: " << *NameOrErr << "\n";
+        }
         // Section.getName() returns in format of segment,section eg
         // Section: __TEXT,__text
         // Section: $__GOT
@@ -114,7 +93,9 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         // Section: __TEXT,__lcl_macho_hdr
         // Section: __TEXT,__unwind_info
         if (!Section.getName()->ends_with("__llvm_stackmaps")) continue;
-        errs() << "Size: " << Section.getSize() << "\n";
+        if (YuhuTraceMachineCode) {
+            errs() << "Size: " << Section.getSize() << "\n";
+        }
         auto ContentOrErr = Section.getContents();
         if (!ContentOrErr) {
             continue;
@@ -135,10 +116,9 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         for (auto StatepointRecord : Parser.records()) {
             uint64_t StatepointID = StatepointRecord.getID();
             uint32_t InstructionOffset = StatepointRecord.getInstructionOffset();
-            errs() << "[StackMap] ID: " << StatepointID << " , InstructionOffset: " << InstructionOffset
-                   << ", Locations: " << StatepointRecord.getNumLocations() << " , Liveouts: " << StatepointRecord.getNumLiveOuts() << "\n";
             if (YuhuTraceMachineCode) {
-                errs() << "[StackMap]   Statepoint at offset: " << InstructionOffset << " , ID: " << StatepointID << "\n";
+                errs() << "[StackMap] ID: " << StatepointID << " , InstructionOffset: " << InstructionOffset
+                       << ", Locations: " << StatepointRecord.getNumLocations() << " , Liveouts: " << StatepointRecord.getNumLiveOuts() << "\n";
             }
 
             if (DEOPT_STATEPOINT_ID == StatepointID) {
@@ -154,7 +134,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         case StackMapParser::LocationKind::Direct:
                             location.reg_num = LocationRecord.getDwarfRegNum();
                             location.offset = LocationRecord.getOffset();
-                            errs() << "[StackMap] Direct: " << location.reg_num << " , Offset: " << location.offset << "\n";
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at stack offset: " << location.offset << " , Direct: "
                                        << location.reg_num << "\n";
@@ -162,7 +141,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                             break;
                         case StackMapParser::LocationKind::Register:
                             location.reg_num = LocationRecord.getDwarfRegNum();
-                            errs() << "[StackMap] Register: " << location.reg_num << "\n";
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand in register: " << (int) location.reg_num << "\n";
                             }
@@ -170,7 +148,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         case StackMapParser::LocationKind::Indirect:
                             location.reg_num = LocationRecord.getDwarfRegNum();
                             location.offset = LocationRecord.getOffset();
-                            errs() << "[StackMap] Indirect: " << location.reg_num << " , Offset: " << location.offset << "\n";
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at stack offset: " << location.offset << " , Indirect: "
                                        << location.reg_num << "\n";
@@ -178,14 +155,12 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                             break;
                         case StackMapParser::LocationKind::Constant:
                             location.constant = LocationRecord.getSmallConstant();
-                            errs() << "[StackMap] Constant: " << location.constant << "\n";
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at Constant: " << location.constant << "\n";
                             }
                             break;
                         case StackMapParser::LocationKind::ConstantIndex:
                             uint32_t constantIndex = LocationRecord.getConstantIndex();
-                            errs() << "[StackMap] ConstantIndex: " << constantIndex << "\n";
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
                             }
@@ -282,7 +257,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                     if (Kind == StackMapParser::LocationKind::Direct) {
                         uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
                         int32_t Offset = LocationRecord.getOffset();
-                        errs() << "[StackMap] Direct: " << DwarfRegNum << " , Offset: " << Offset << "\n";
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Direct: "
                                    << DwarfRegNum << "\n";
@@ -293,7 +267,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                                                                 Offset);
                     } else if (Kind == StackMapParser::LocationKind::Register) {
                         uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
-                        errs() << "[StackMap] Register: " << DwarfRegNum << "\n";
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root in register: " << (int) DwarfRegNum << "\n";
                         }
@@ -304,7 +277,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                     } else if (Kind == StackMapParser::LocationKind::Indirect) {
                         uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
                         int32_t Offset = LocationRecord.getOffset();
-                        errs() << "[StackMap] Indirect: " << DwarfRegNum << " , Offset: " << Offset << "\n";
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Indirect: "
                                    << DwarfRegNum << "\n";
@@ -315,9 +287,8 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                                                                 Offset);
                     } else if (Kind == StackMapParser::LocationKind::Constant) {
                         uint32_t constant = LocationRecord.getSmallConstant();
-                        errs() << "[StackMap] Constant: " << constant << "\n";
                         if (YuhuTraceMachineCode) {
-                            errs() << "[StackMap] Constant: " << constant << "\n";
+                            errs() << "[StackMap] Ignore Constant: " << constant << "\n";
                         }
                         // record every location, otherwise call site may not find corresponding stack map
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
@@ -327,7 +298,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                                                                 constant);
                     } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
                         uint32_t constantIndex = LocationRecord.getConstantIndex();
-                        errs() << "[StackMap] ConstantIndex: " << constantIndex << "\n";
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
                         }
@@ -342,77 +312,4 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         }
 
     }
-}
-
-Error TracingIRCompiler::disassembleObjectFile(MemoryBuffer &ObjBuffer) {
-    // 创建 ObjectFile
-    auto Obj = object::ObjectFile::createObjectFile(ObjBuffer.getMemBufferRef());
-    if (!Obj) {
-        return Obj.takeError();
-    }
-
-    errs() << "\n=== Object File Disassembly ===\n";
-
-    for (auto &Section : (*Obj)->sections()) {
-        if (Section.isText()) {
-            auto Name = Section.getName();
-            if (Name) {
-                errs() << "Section: " << *Name << "\n";
-            }
-
-            auto Contents = Section.getContents();
-            if (Contents) {
-                auto Data = Contents->data();
-                auto Size = Contents->size();
-
-                errs() << "Size: " << Size << " bytes\n";
-                errs() << "First 64 bytes: ";
-                for (size_t i = 0; i < std::min(static_cast<uint64_t>(Size), static_cast<uint64_t>(64)); ++i) {
-                    errs() << format_hex_no_prefix(static_cast<unsigned int>(Data[i] & 0xFF), 2);
-                    if ((i + 1) % 4 == 0) errs() << " ";
-                }
-                errs() << "\n";
-
-                errs() << "  Instructions (32-bit):\n";
-                for (size_t i = 0; i + 4 <= Size; i += 4) {
-                    // 正确读取小端序的32位指令
-                    uint32_t instr = 0;
-                    for (size_t j = 0; j < 4; j++) {
-                        instr |= (static_cast<uint32_t>(Data[i + j] & 0xFF)) << (j * 8);
-                    }
-
-                    errs() << "    " << format_hex(instr, 8) << ": ";
-
-                    // 反汇编常见指令
-                    if (instr == 0xd65f03c0 || instr == 0xc0035fd6) {
-                        errs() << "ret";
-                    } else if ((instr & 0xff000000) == 0xcb000000) {
-                        // sub 指令
-                        uint32_t rd = (instr >> 0) & 0x1f;
-                        uint32_t rn = (instr >> 5) & 0x1f;
-                        uint32_t rm = (instr >> 16) & 0x1f;
-                        errs() << "sub x" << rd << ", x" << rn << ", x" << rm;
-                    } else if ((instr & 0xff000000) == 0xaa000000) {
-                        // mov (orr) 指令
-                        uint32_t rd = (instr >> 0) & 0x1f;
-                        uint32_t rn = (instr >> 5) & 0x1f;
-                        errs() << "mov x" << rd << ", x" << rn;
-                    } else if ((instr & 0xffc00000) == 0xf9400000) {
-                        // ldr 指令
-                        uint32_t rt = (instr >> 0) & 0x1f;
-                        uint32_t rn = (instr >> 5) & 0x1f;
-                        uint32_t imm = (instr >> 10) & 0xfff;
-                        errs() << "ldr x" << rt << ", [x" << rn << ", #" << imm << "]";
-                    } else {
-                        errs() << "unknown";
-                    }
-                    errs() << "\n";
-                }
-                errs() << "\n";
-            }
-        }
-    }
-    errs() << "=== End of Disassembly ===\n\n";
-
-    return Error::success();
 }

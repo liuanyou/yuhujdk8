@@ -267,7 +267,7 @@ YuhuCompiler::YuhuCompiler()
     Layer->addPlugin(std::make_unique<CallSiteExtractorPlugin>());
 
     // Add MachineCodePrinterPlugin to trace generated machine code
-    Layer->addPlugin(std::make_unique<MachineCodePrinterPlugin>());
+//    Layer->addPlugin(std::make_unique<MachineCodePrinterPlugin>());
 
     return Layer;
   };
@@ -551,6 +551,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 //        env->record_failure("normal-only test mode: skipping implWrite compilation");
 //        return;
 //    }
+    if (strcmp(target->holder()->name()->as_utf8(), "java/lang/Math") == 0
+        && strcmp(target->name()->as_utf8(), "min") == 0
+        && strcmp(target->signature()->as_symbol()->as_utf8(), "(II)I") == 0) {
+        assert(true, "just checking");
+    }
   // ========== 临时测试代码结束 ==========
   
   const char *base_name = methodname(

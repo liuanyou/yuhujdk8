@@ -108,6 +108,10 @@ public:
               i++;
               continue;
           }
+          if (YuhuTraceOffset) {
+              tty->print_cr("Yuhu: remove call site entry: index=%d, virtual_offset=%d, call_site_type=%d",
+                            i, _call_site_entries->at(i)->virtual_offset, static_cast<uint8_t>(_call_site_entries->at(i)->call_site_type));
+          }
           _call_site_entries->remove_at(i);
           // scan the same position again
       }
@@ -186,16 +190,27 @@ public:
       return _call_site_entries->at(index)->call_site_type;
   }
 
-  CallSiteType get_call_site_type_by_helper_address_and_call_target_offset(uint64_t helper_address, uint64_t call_target_offset) const {
-      if (!_call_site_entries) return CallSiteType::none;
+  CallSiteEntry* get_call_site_by_helper_address_and_call_target_offset(uint64_t helper_address, uint64_t call_target_offset) const {
+      if (!_call_site_entries) return NULL;
       std::pair<uint64_t, uint64_t> pair(helper_address, call_target_offset);
       int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
           auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
           return ha == entry->helper_address && cto == entry->call_target_offset;
       });
-      if (index == -1) return CallSiteType::none;
-      return _call_site_entries->at(index)->call_site_type;
+      if (index == -1) return NULL;
+      return _call_site_entries->at(index);
   }
+
+    CallSiteEntry* get_call_site_by_helper_address_and_blr_offset(uint64_t helper_address, uint64_t blr_offset) const {
+        if (!_call_site_entries) return NULL;
+        std::pair<uint64_t, uint64_t> pair(helper_address, blr_offset);
+        int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
+            auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
+            return ha == entry->helper_address && cto == entry->blr_offset;
+        });
+        if (index == -1) return NULL;
+        return _call_site_entries->at(index);
+    }
 
     uint64_t get_call_site_blr_offset_by_helper_address_and_call_target_offset(uint64_t helper_address, uint64_t call_target_offset) const {
         if (!_call_site_entries) return 0;
@@ -220,7 +235,7 @@ public:
   void update_call_site_machine_code_offsets(uint64_t virtual_offset,
                                              uint64_t return_pc_offset,
                                              uint64_t blr_offset,
-                                             uint64_t call_target_offset) const {
+                                             uint64_t call_target_offset = 0) const {
       if (!_call_site_entries) return;
       int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
           return *((uint64_t*)token) == entry->virtual_offset;
@@ -228,7 +243,9 @@ public:
       if (index == -1) return;
       _call_site_entries->at(index)->return_pc_offset = return_pc_offset;
       _call_site_entries->at(index)->blr_offset = blr_offset;
-      _call_site_entries->at(index)->call_target_offset = call_target_offset;
+      if (call_target_offset) {
+          _call_site_entries->at(index)->call_target_offset = call_target_offset;
+      }
   }
 
   // stack map related functions

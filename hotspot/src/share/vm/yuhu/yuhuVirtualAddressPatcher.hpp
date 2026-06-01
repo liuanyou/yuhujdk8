@@ -183,7 +183,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
         for (uint64_t b_offset = 0; b_offset + 4 <= 100; b_offset += 4) {
             uint32_t* b_instr = (uint32_t*)(code_buffer + target_offset + b_offset);
             uint32_t b_inst = b_instr[0];
-            if ((b_inst & BLR_MASK) == BLR_PATTERN) {
+            if (is_blr_pattern(b_instr)) {
                 // Always use first blr instruction as blr offset
                 out_match->call_target_blr_offset = target_offset + b_offset;
                 *found_blr = true;
@@ -231,6 +231,11 @@ class YuhuVirtualAddressScanner : public AllStatic {
         }
         return false;
     };
+
+    static bool is_blr_pattern(uint32_t* instr) {
+        uint32_t inst = instr[0];
+        return (inst & BLR_MASK) == BLR_PATTERN;
+    }
 };
 
 #endif // SHARE_VM_YUHU_YUHUVIRTUALADDRESSPATCHER_HPP

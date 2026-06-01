@@ -335,8 +335,12 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                 if (YuhuTraceOffset) {
                     tty->print_cr("Yuhu: Call site is safepoint poll call");
                 }
-                pc_offset = call_site_entry->call_target_offset + 4 +
-                            plus_offset; // pc_offset should be ldr instruction, not adrp instruction
+                if (call_site_entry->call_target_offset) {
+                    pc_offset = call_site_entry->call_target_offset + 4 +
+                                plus_offset; // pc_offset should be ldr instruction, not adrp instruction
+                } else {
+                    pc_offset = call_site_entry->blr_offset + plus_offset;
+                }
             }
 
             GrowableArray<int32_t> processed_stack_offsets;
