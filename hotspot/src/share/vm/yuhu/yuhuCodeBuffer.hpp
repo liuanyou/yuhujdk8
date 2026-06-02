@@ -65,8 +65,6 @@ class YuhuCodeBuffer : public StackObj {
   void* malloc(size_t size) const {
     masm().align(BytesPerWord);
     void *result = masm().pc();
-    // advance() is implemented by setting the end of the code section
-    int offset = masm().offset();
     masm().code_section()->set_end(masm().code_section()->end() + size);
     return result;
   }
@@ -84,22 +82,6 @@ class YuhuCodeBuffer : public StackObj {
  public:
   int current_offset() const {
     return masm().offset();
-  }
-
-  // Inline an oop into the buffer and return its offset.
- public:
-  int inline_oop(jobject object) const {
-    masm().align(BytesPerWord);
-    int offset = masm().offset();
-    masm().store_oop(object);
-    return offset;
-  }
-
-  int inline_Metadata(Metadata* metadata) const {
-    masm().align(BytesPerWord);
-    int offset = masm().offset();
-    masm().store_Metadata(metadata);
-    return offset;
   }
 
   // Inline a block of non-oop data into the buffer and return its offset.

@@ -43,7 +43,6 @@ namespace llvm {
 }
 class YuhuBuilder;
 class YuhuContext;
-class YuhuMemoryManager;
 class YuhuEntry;
 class YuhuFunction;
 class YuhuRuntime;
@@ -102,51 +101,16 @@ class YuhuCompiler : public AbstractCompiler {
 
   // Track stubs that need patching for x28 restoration
  private:
+    struct Impl;
+    std::unique_ptr<Impl> _p_impl;
 
  public:
-
-  // Each thread generating IR needs its own context.  The normal
-  // context is used for bytecode methods, and is protected from
-  // multiple simultaneous accesses by being restricted to the
-  // compiler thread.  The native context is used for JNI methods,
-  // and is protected from multiple simultaneous accesses by the
-  // adapter handler library lock.
- private:
-  YuhuContext* _normal_context;
-  YuhuContext* _native_context;
-
- public:
-  YuhuContext* context() const {
-    if (JavaThread::current()->is_Compiler_thread()) {
-      return _normal_context;
-    }
-    else {
-      assert(AdapterHandlerLibrary_lock->owned_by_self(), "should be");
-      return _native_context;
-    }
-  }
-
-  // The LLVM execution engine is the JIT we use to generate native
-  // code.  It is thread safe, but we need to protect it with a lock
-  // of our own because otherwise LLVM's lock and HotSpot's locks
-  // interleave and deadlock.
-  // Note: We use ORC JIT (LLVM 11+), which requires LLVM 11 or later.
-  // LLVM 20 is recommended and fully supported.
- private:
-  Monitor*               _execution_engine_lock;
-  // ORC JIT (LLVM 11+) - recommended for LLVM 20
-  std::unique_ptr<llvm::orc::LLJIT> _jit;
-  // MemoryManager 由 ORC JIT 内部管理，或通过自定义 MemoryMapper
-  // TODO: In stage 2, integrate CodeCache via MemoryMapper
+  YuhuContext* context() const;
 
  private:
-  Monitor* execution_engine_lock() const {
-    return _execution_engine_lock;
-  }
-  llvm::orc::LLJIT* jit() const {
-    assert(execution_engine_lock()->owned_by_self(), "should be");
-    return _jit.get();
-  }
+//  Monitor* execution_engine_lock() const;
+//  llvm::orc::LLJIT* jit() const;
+
   // Release last code blob without requiring lock (safe after nmethod installation)
   void release_last_code_blob_unlocked();
 
@@ -163,11 +127,10 @@ class YuhuCompiler : public AbstractCompiler {
   // Helpers
  private:
   static const char* methodname(const char* klass, const char* method);
-  void generate_native_code(YuhuEntry*     entry,
-                            llvm::Function* function,
-                            const char*     name,
-                            YuhuBuilder*    builder);
-  void free_queued_methods();
+//  void generate_native_code(YuhuEntry*     entry,
+//                            llvm::Function* function,
+//                            const char*     name);
+//  void free_queued_methods();
 };
 
 #endif // SHARE_VM_YUHU_YUHUCOMPILER_HPP
