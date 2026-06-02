@@ -499,10 +499,6 @@ public:
             fatal(err_msg("Function %s has no parent Module!", name));
         }
 
-        // Debug 2: Verify Module pointer validity
-        llvm::Module* normal_mod = _normal_context->module();
-        llvm::Module* native_mod = _native_context->module();
-
         // Debug: Collect all instructions and verify they are in basic blocks
         std::set<llvm::Instruction*> all_instructions_in_blocks;
         int total_instructions = 0;

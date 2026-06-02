@@ -233,8 +233,6 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
             uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
 
-            // For now, scan for call instructions (blr) and look backwards for placeholders
-            VirtualAddressMatch last_match{};
             for (size_t offset = 0; offset + 4 <= Size; offset += 4) {
 
                 // Let's scan forward. Coz sometime llvm uses b instruction to jump to common machine code in order to share machine code for multiple call targets,
@@ -323,7 +321,6 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         if (YuhuTraceMachineCode) {
                             errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
                         }
-                        last_match = match;
                     } else if (found && (match.call_target_type == CallTargetType::safepoint_poll || match.call_target_type == CallTargetType::deopt)) {
                         assert(match.last_java_pc_va != 0, "placeholder should exist");
                         if (match.last_java_pc_va == 0) {
@@ -363,9 +360,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                                    << " , blr_offset=" << block_offset + match.call_target_blr_offset
                                    << " , call_target_offset=" << block_offset + match.call_target_placeholder_offset << "\n";
                         }
-
-                        last_match = match;
-                    } else if (found && last_match.call_target_type == CallTargetType::safepoint_poll) {
+                    } else if (found) {
                         // The third scenario: it is possible that two safepoint poll calls share the same adrp instructions, and here
                         // we are catching the second safepoint poll call. We don't expect the very rare scenario that three safepoint
                         // poll calls share the same adrp instructions.
@@ -392,8 +387,6 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                                    << " , return_pc_offset=" << block_offset + return_pc_offset
                                    << " , blr_offset=" << block_offset + match.call_target_blr_offset << "\n";
                         }
-
-                        last_match = match;
                     }
                 }
             }

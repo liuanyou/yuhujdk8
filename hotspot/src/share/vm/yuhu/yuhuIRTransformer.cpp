@@ -37,7 +37,24 @@ void declareGCSafepointPoll(Module& M) {
 }
 
 static void saveIRToFile(Module &M) {
-    std::string ir_filename = std::string("/tmp/yuhu_ir_after_gc.ll");
+    std::string ir_filename = std::string("/tmp/yuhu_ir_RS4GC");
+
+    // Iterate through all functions in the module
+    for (auto &F : M.functions()) {
+        if (F.isDeclaration()) continue;  // Skip declarations
+
+        // Get the function name
+        std::string func_name = F.getName().str();
+
+        // This is the unmangled name, e.g., "java.lang.String::indexOf"
+        errs() << "Processing function: " << func_name << "\n";
+
+        ir_filename += "_" + func_name;
+
+        break;
+    }
+
+    ir_filename += ".ll";
     // Replace invalid filename characters
     for (size_t i = 0; i < ir_filename.length(); i++) {
         if (ir_filename[i] == ':' || ir_filename[i] == '/' || ir_filename[i] == ' ') {
