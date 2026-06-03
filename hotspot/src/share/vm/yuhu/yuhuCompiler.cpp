@@ -982,6 +982,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // Removing the ".osr.<entry_bci>" suffix that was added for MCJIT compatibility.
   const char *func_name = base_name;
 
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Start compiling method %s", func_name);
+    }
+
   // Do the typeflow analysis
   ciTypeFlow *flow;
   if (entry_bci == InvocationEntryBci)
@@ -1005,6 +1009,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       return;
     }
   }
+
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Continue compiling method %s", func_name);
+    }
+
   if (YuhuPrintTypeflowOf != NULL) {
     if (!fnmatch(YuhuPrintTypeflowOf, base_name, 0))
       flow->print_on(tty);
@@ -1044,6 +1053,10 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                   base_name, func_name, entry_bci, env->comp_level());
     return;
   }
+
+    if (YuhuTraceInstalls) {
+        tty->print_cr("Yuhu: Generate native code for method %s", func_name);
+    }
   
   // NEW: Embed call site mappings as metadata before compilation
   // This allows the JITLink plugin to extract virtual address mappings

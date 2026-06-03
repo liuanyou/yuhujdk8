@@ -2162,9 +2162,8 @@ void YuhuTopLevelBlock::acquire_lock(Value *lockee, int exception_action) {
 #else
   Value *check = builder()->CreateAtomicCmpXchg(mark_addr, disp, lock, llvm::AtomicOrdering::Acquire);
 #endif
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(disp, check),
-    acquired_fast, try_recursive);
+    Value *success = builder()->CreateExtractValue(check, 1);
+    builder()->CreateCondBr(success, acquired_fast, try_recursive);
 
   // Locking failed, but maybe this thread already owns it
   builder()->SetInsertPoint(try_recursive);
@@ -2256,9 +2255,8 @@ void YuhuTopLevelBlock::release_lock(int exception_action) {
 #else
   Value *check = builder()->CreateAtomicCmpXchg(mark_addr, lock, disp, llvm::AtomicOrdering::Release);
 #endif
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(lock, check),
-    released_fast, slow_path);
+    Value *success = builder()->CreateExtractValue(check, 1);
+    builder()->CreateCondBr(success, released_fast, slow_path);
 
   // Create an edge for the state merge
   builder()->SetInsertPoint(released_fast);
