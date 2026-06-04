@@ -1039,131 +1039,147 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
   assert(will_link, "typeflow responsibility");
   assert(is_field != field->is_static(), "mismatch");
 
-  // Pop the value off the stack where necessary
   YuhuValue *value = NULL;
-  if (!is_get)
-    value = pop();
-
-  // Find the object we're accessing, if necessary
   Value *object = NULL;
-  if (is_field) {
-    YuhuValue *obj_value = pop();
-    // Explicit null check for field access - always perform the check
-    // to ensure Java semantics (NPE instead of segfault)
-    check_null(obj_value);
-    object = obj_value->generic_value();
-  }
-  
-  // Check if this is a constant static field
-  if (is_get && field->is_constant() && field->is_static()) {
-    YuhuConstant *constant = YuhuConstant::for_field(iter());
-    if (constant->is_loaded())
-      value = constant->value(builder());
-  }
-  
-  // Perform the actual field access
-  if (!is_get || value == NULL) {
-    if (!is_field) {
-      // === GETSTATIC: Load static field value directly from klass mirror ===
-      int cp_index = iter()->get_field_index();
-      Value* field_value = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
-      
-      // CreateInlineOopForStaticField now returns the correct type directly:
-      // - Object fields: ptr addrspace(1)
-      // - Primitive fields: appropriate LLVM type (i64, i32, float, double, etc.)
-      // No conversion needed
-      
-      value = YuhuValue::create_generic(field->type(), field_value, false);
+
+    // for do_getstatic
+    if (is_get && !is_field) {
+        // Check if this is a constant static field
+        if (field->is_constant()) {
+            YuhuConstant *constant = YuhuConstant::for_field(iter());
+            if (constant->is_loaded()) {
+                value = constant->value(builder());
+                push(value);
+                return;
+            }
+        }
+        // === GETSTATIC: Load static field value directly from klass mirror ===
+        int cp_index = iter()->get_field_index();
+        Value *field_value = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
+
+        // CreateInlineOopForStaticField now returns the correct type directly:
+        // - Object fields: ptr addrspace(1)
+        // - Primitive fields: appropriate LLVM type (i64, i32, float, double, etc.)
+        // No conversion needed
+        value = YuhuValue::create_generic(field->type(), field_value, false);
+        push(value);
+        return;
+    } else if (is_get) {
+        // for do_getfield
+        // Find the object we're accessing, if necessary
+        YuhuValue *obj_value = pop();
+        // Explicit null check for field access - always perform the check
+        // to ensure Java semantics (NPE instead of segfault)
+        check_null(obj_value);
+        object = obj_value->generic_value();
+
+        // === GETFIELD: Access instance field from object ===
+        BasicType   basic_type = field->type()->basic_type();
+        llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
+        llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
+        llvm::Type *type = field_type;
+        if (field->is_volatile()) {
+            if (field_type == YuhuType::jfloat_type()) {
+                type = YuhuType::jint_type();
+            } else if (field_type == YuhuType::jdouble_type()) {
+                type = YuhuType::jlong_type();
+            }
+        }
+        Value *addr = builder()->CreateAddressOfStructEntry(
+                object, in_ByteSize(field->offset_in_bytes()),
+                PointerType::getUnqual(type),
+                "addr");
+
+        // Do the load
+        Value* field_value;
+        if (field->is_volatile()) {
+            field_value = builder()->CreateAtomicLoad(addr);
+            field_value = builder()->CreateBitCast(field_value, field_type);
+        } else {
+            // LLVM 20+ requires explicit type parameter for CreateLoad
+            field_value = builder()->CreateLoad(field_type, addr);
+        }
+
+        // Handle compressed oops for object references
+        if (!field->type()->is_primitive_type() && field_type != stack_type) {
+            // For object references, we need to handle compressed oops
+            // If field_type is jint (compressed oop) and stack_type is pointer (full oop),
+            // we need to call decode_heap_oop to expand the compressed pointer
+            if (field_type == YuhuType::jint_type() &&
+                stack_type->isPointerTy() &&
+                UseCompressedOops) {
+                // Call decode_heap_oop to convert narrowOop to oop
+                field_value = builder()->CreateDecodeHeapOop(field_value);
+            }
+        }
+
+        if (field_type != stack_type) {
+            field_value = builder()->CreateIntCast(
+                    field_value, stack_type, basic_type != T_CHAR);
+        }
+
+        value = YuhuValue::create_generic(field->type(), field_value, false);
+        push(value);
+        return;
+    } else if (!is_field) {
+        // for do_putstatic
+        value = pop();  // Pop the value to store (no object to pop for static fields)
+        // Get the klass mirror and calculate field address
+        object = builder()->CreateInlineOop(field->holder()->java_mirror());
     } else {
-      // === GETFIELD: Access instance field from object ===
-      BasicType   basic_type = field->type()->basic_type();
-      llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
-      llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
-      llvm::Type *type = field_type;
-      if (field->is_volatile()) {
-        if (field_type == YuhuType::jfloat_type()) {
-          type = YuhuType::jint_type();
-        } else if (field_type == YuhuType::jdouble_type()) {
-          type = YuhuType::jlong_type();
-        }
-      }
-      Value *addr = builder()->CreateAddressOfStructEntry(
-        object, in_ByteSize(field->offset_in_bytes()),
-        PointerType::getUnqual(type),
-        "addr");
-
-      // Do the load
-      Value* field_value;
-      if (field->is_volatile()) {
-        field_value = builder()->CreateAtomicLoad(addr);
-        field_value = builder()->CreateBitCast(field_value, field_type);
-      } else {
-        // LLVM 20+ requires explicit type parameter for CreateLoad
-        field_value = builder()->CreateLoad(field_type, addr);
-      }
-      
-      // Handle compressed oops for object references
-      if (!field->type()->is_primitive_type() && field_type != stack_type) {
-        // For object references, we need to handle compressed oops
-        // If field_type is jint (compressed oop) and stack_type is pointer (full oop),
-        // we need to call decode_heap_oop to expand the compressed pointer
-        if (field_type == YuhuType::jint_type() && 
-            stack_type->isPointerTy() &&
-            UseCompressedOops) {
-          // Call decode_heap_oop to convert narrowOop to oop
-          field_value = builder()->CreateDecodeHeapOop(field_value);
-        }
-      }
-      
-      if (field_type != stack_type) {
-        field_value = builder()->CreateIntCast(
-          field_value, stack_type, basic_type != T_CHAR);
-      }
-
-      value = YuhuValue::create_generic(field->type(), field_value, false);
+        // for do_putfield
+        value = pop();
+        YuhuValue *obj_value = pop();
+        // Explicit null check for field access - always perform the check
+        // to ensure Java semantics (NPE instead of segfault)
+        check_null(obj_value);
+        object = obj_value->generic_value();
     }
-    
-    // === PUTFIELD: Store value into instance field ===
-    if (!is_get) {
-      Value *field_value = value->generic_value();
-      BasicType   basic_type = field->type()->basic_type();
-      llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
-      llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
-      
-      if (field_type != stack_type) {
-        field_value = builder()->CreateIntCast(
-          field_value, field_type, basic_type != T_CHAR);
-      }
 
-      llvm::Type *type = field_type;
-      if (field->is_volatile()) {
+    // for both do_putstatic and do_putfield
+    Value *field_value = value->generic_value();
+    BasicType   basic_type = field->type()->basic_type();
+    llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
+    llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
+
+    // Determine the actual storage type (volatile fields may use different types)
+    llvm::Type *type = field_type;
+    if (field->is_volatile()) {
         if (field_type == YuhuType::jfloat_type()) {
-          type = YuhuType::jint_type();
+            type = YuhuType::jint_type();
         } else if (field_type == YuhuType::jdouble_type()) {
-          type = YuhuType::jlong_type();
+            type = YuhuType::jlong_type();
         }
-      }
-      Value *addr = builder()->CreateAddressOfStructEntry(
-        object, in_ByteSize(field->offset_in_bytes()),
-        PointerType::getUnqual(type),
-        "addr");
-      
-      if (field->is_volatile()) {
+    }
+
+    // Convert stack type to storage type
+    if (type != stack_type && field->type()->is_primitive_type()) {
+        field_value = builder()->CreateIntCast(
+                field_value, type, basic_type != T_CHAR);
+    }
+
+    // Handle compressed oops for object reference fields
+    if (!field->type()->is_primitive_type() && UseCompressedOops) {
+        // Encode full pointer to compressed oop (ptr addrspace(1)* -> i32)
+        field_value = builder()->CreateEncodeHeapOop(field_value);
+        type = YuhuType::jint_type();  // Compressed oop is stored as i32
+    }
+
+    Value *addr = builder()->CreateAddressOfStructEntry(
+            object, in_ByteSize(field->offset_in_bytes()),
+            PointerType::getUnqual(type),
+            "addr");
+
+    if (field->is_volatile()) {
         field_value = builder()->CreateBitCast(field_value, type);
         builder()->CreateAtomicStore(field_value, addr);
-      } else {
+    } else {
         builder()->CreateStore(field_value, addr);
-      }
-
-      if (!field->type()->is_primitive_type()) {
-        builder()->CreateUpdateBarrierSet(oopDesc::bs(), addr);
-      }
     }
-  }
 
-  // Push the value onto the stack where necessary
-  if (is_get)
-    push(value);
+    if (!field->type()->is_primitive_type()) {
+        builder()->CreateUpdateBarrierSet(oopDesc::bs(), addr);
+    }
 }
 
 void YuhuBlock::do_lcmp() {
