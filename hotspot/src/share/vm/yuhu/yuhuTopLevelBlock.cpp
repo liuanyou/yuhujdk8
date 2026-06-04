@@ -784,7 +784,11 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   // The deopt bundle preserves all live JVM state for frame reconstruction
   llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize({deopt_bundle});
 
-  builder()->CreateRet(deopt_result);
+  if (target()->return_type()->is_void()) {
+      builder()->CreateRetVoid();
+  } else {
+      builder()->CreateRet(deopt_result);
+  }
 
   // CRITICAL: Jump to the unified exit block (contains epilogue marker and ret)
   // This ensures we only have ONE marker in the entire function

@@ -515,11 +515,13 @@ Value* YuhuBuilder::uncommon_trap() {
 }
 
 CallInst* YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
+    llvm::Type* return_type = YuhuType::to_stackType(function()->target_method()->return_type());
+
   // Get or create the llvm.experimental.deoptimize intrinsic declaration
   llvm::Function* deopt_intrinsic = llvm::Intrinsic::getDeclaration(
     GetInsertBlock()->getModule(),
     llvm::Intrinsic::experimental_deoptimize,
-    { YuhuType::oop_addrspace1_type() });
+    { return_type });
   
   // Create the call with deopt bundle
   llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, Bundles);
