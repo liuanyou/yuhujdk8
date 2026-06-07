@@ -72,6 +72,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
 
  public:
   llvm::LoadInst* CreateAtomicLoad(llvm::Value* ptr,
+                                   llvm::Type* load_type,
                                    unsigned align = HeapWordSize,
                                    llvm::AtomicOrdering ordering = llvm::AtomicOrdering::SequentiallyConsistent,
                                    bool isVolatile = true,

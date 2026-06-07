@@ -1249,12 +1249,14 @@ BasicBlock* YuhuBuilder::CreateBlock(BasicBlock* ip, const char* name) const {
     YuhuContext::current(), name, GetInsertBlock()->getParent(), ip);
 }
 
-LoadInst* YuhuBuilder::CreateAtomicLoad(Value* ptr, unsigned align, AtomicOrdering ordering, bool isVolatile, const char* name) {
+LoadInst* YuhuBuilder::CreateAtomicLoad(Value* ptr, llvm::Type* load_type, unsigned align, AtomicOrdering ordering, bool isVolatile, const char* name) {
   // LLVM 20 uses opaque pointers, so we need to get the type from the value being loaded
   // For atomic loads, we typically load a word-sized value
   // Since we don't know the exact type from the pointer, we use intptr_type as a default
   // The actual type should be determined by the caller based on the context
-  llvm::Type* load_type = YuhuType::intptr_type();
+  if (!load_type) {
+      load_type = YuhuType::intptr_type();
+  }
   // LoadInst constructor: LoadInst(Type *Ty, Value *Ptr, const Twine &NameStr, bool isVolatile, Align Align, AtomicOrdering Order, SyncScope::ID SSID, ...)
   return Insert(new LoadInst(load_type, ptr, name, isVolatile, llvm::Align(align), ordering, llvm::SyncScope::System), name);
 }
