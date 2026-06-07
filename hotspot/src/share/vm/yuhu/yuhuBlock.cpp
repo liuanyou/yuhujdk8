@@ -1094,7 +1094,12 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
         Value* field_value;
         if (field->is_volatile()) {
             field_value = builder()->CreateAtomicLoad(addr);
-            field_value = builder()->CreateBitCast(field_value, field_type);
+            // Convert i64 → actual field type (trunc for smaller types, bitcast for same-size)
+            if (field_type->isIntegerTy() && field_type->getIntegerBitWidth() < 64) {
+                field_value = builder()->CreateTrunc(field_value, field_type);
+            } else {
+                field_value = builder()->CreateBitCast(field_value, field_type);
+            }
         } else {
             // LLVM 20+ requires explicit type parameter for CreateLoad
             field_value = builder()->CreateLoad(field_type, addr);
