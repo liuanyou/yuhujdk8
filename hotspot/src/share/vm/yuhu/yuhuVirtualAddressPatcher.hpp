@@ -90,16 +90,6 @@ class YuhuVirtualAddressScanner : public AllStatic {
     uint64_t new_value
   );
   
-  // Patch adr instruction with new PC-relative offset
-  // adr_address: absolute address of the adr instruction
-  // target_address: absolute address that adr should point to (return address after bl)
-  static void patch_adr_instruction(
-    uint8_t* code_buffer,
-    uint64_t adr_offset,
-    uint64_t adr_address,  // Absolute address of adr instruction
-    uint64_t target_address  // Absolute address of target (return address after bl)
-  );
-  
   // Validate that a virtual address has the correct magic number
   static bool is_last_java_pc_placeholder(uint64_t va) {
     return (va & 0xFFFF0000) == LAST_JAVA_PC_MAGIC;
@@ -115,15 +105,6 @@ class YuhuVirtualAddressScanner : public AllStatic {
   }
 
   static bool is_placeholder_pc_pattern(uint32_t* instr) {
-      auto is_mov_32_or_movz_32 = [](uint32_t inst) -> bool {
-          // expected instruction sequences for last java pc
-          // mov    w19, #0x20
-          // movk   w19, #0xdead, lsl #16
-          bool is_mov_32 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_32);
-          bool is_movz_32 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_32) && ((inst >> 21) & 0x3) == 0;
-          return is_mov_32 || is_movz_32;
-      };
-
       if (instr == NULL) {
           return false;
       }
@@ -236,6 +217,109 @@ class YuhuVirtualAddressScanner : public AllStatic {
         uint32_t inst = instr[0];
         return (inst & BLR_MASK) == BLR_PATTERN;
     }
+
+    // oop_relocation related functions
+    // Helper function to check if instruction sequence matches marker pattern
+    static bool is_oop_marker_pattern(uint32_t* instr) {
+        // Check instruction encoding (little-endian):
+        // [0] mov w19, #0xCAFE       → 0x52995FD3
+        // [1] movk w19, #0xBABE, lsl #16 → 0x72B757D3
+        // [2] mov w20, #imm16        → 0x528xxxxxB4 (bits 5-20 contain imm16)
+        // [3] nop                    → 0xD503201F
+        // [4] nop                    → 0xD503201F
+
+        if (instr[0] == 0x52995FD3 &&  // mov w19, #0xCAFE
+            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
+            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop (allow low 4 bits variation)
+            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
+            return true;
+        }
+        return false;
+    };
+
+    // metadata_relocation marker pattern
+    // Same shape as oop marker but with low immediate 0xDEAD (vs 0xCAFE).
+    //   [0] mov  w19, #0xDEAD            → 0x529BD5B3
+    //   [1] movk w19, #0xBABE, lsl #16   → 0x72B757D3
+    //   [2] mov  w20, #metadata_id       → 0x528xxxxxB4 (bits 5-20 = metadata_id)
+    //   [3] nop, [4] nop
+    // Distinguished from last_Java_pc marker (which has 0xDEAD in the HIGH 16 bits).
+    static bool is_metadata_marker_pattern(uint32_t* instr) {
+        if (instr[0] == 0x529BD5B3 &&  // mov w19, #0xDEAD
+            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
+            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop
+            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
+            return true;
+        }
+        return false;
+    };
+
+    static bool is_call_site_with_call_target_marker_pattern(uint32_t* instr) {
+        return is_placeholder_pc_pattern(instr) && (instr[3] & 0xFFFFFFF0) == 0xD5032010 && (instr[4] & 0xFFFFFFF0) == 0xD5032010;
+    }
+
+    // Helper function to check if 3 instructions form a mov/movk sequence
+    static bool is_mov_movk_sequence(uint32_t* instr) {
+        // Check for mov/movk sequence (C1 compatible format):
+        // [0] mov xN, #imm16         → 0xD28xxxxx (bit 31-23 = 0b110100101)
+        // [1] movk xN, #imm16, lsl #16 → 0xF2Axxxxx (bit 31-23 = 0b1111001010)
+        // [2] movk xN, #imm16, lsl #32 → 0xF2Cxxxxx (bit 31-23 = 0b1111001011)
+
+        // All must be AArch64 mov/movk immediate instructions
+        if ((instr[0] & 0xFF800000) != 0xD2800000 ||  // mov xN, #imm16
+            (instr[1] & 0xFFE00000) != 0xF2A00000 ||  // movk xN, #imm16, lsl #16
+            (instr[2] & 0xFFE00000) != 0xF2C00000) {  // movk xN, #imm16, lsl #32
+            return false;
+        }
+
+        // Verify all 3 instructions use the same destination register
+        int rd0 = instr[0] & 0x1F;  // bits 4-0
+        int rd1 = instr[1] & 0x1F;
+        int rd2 = instr[2] & 0x1F;
+
+        return (rd0 == rd1 && rd1 == rd2);
+    };
+
+    // Helper function to extract oop_id from marker
+    static int extract_w20_imm16(uint32_t* instr) {
+        // Extract imm16 from: mov w20, #imm16
+        // Encoding: 0x528xxxxxB4, where bits 5-20 contain imm16
+        uint32_t mov_instr = instr[2];
+        uint16_t imm16 = (mov_instr >> 5) & 0xFFFF;
+        return (int)imm16;
+    };
+
+    // Helper function to extract 64-bit value from mov/movk sequence
+    static uint64_t extract_from_movk_sequence(uint32_t* instr) {
+        uint16_t imm0 = (instr[0] >> 5) & 0xFFFF;   // bits [15:0]
+        uint16_t imm1 = (instr[1] >> 5) & 0xFFFF;   // bits [31:16]
+        uint16_t imm2 = (instr[2] >> 5) & 0xFFFF;   // bits [47:32]
+
+        return ((uint64_t)imm2 << 32) | ((uint64_t)imm1 << 16) | (uint64_t)imm0;
+    };
+
+    static bool is_mov_32_or_movz_32(uint32_t inst) {
+        // expected instruction sequences for last java pc
+        // mov    w19, #0x20
+        // movk   w19, #0xdead, lsl #16
+        bool is_mov_32 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_32);
+        bool is_movz_32 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_32) && ((inst >> 21) & 0x3) == 0;
+        return is_mov_32 || is_movz_32;
+    };
+
+    static bool is_mov_64_or_movz_64(uint32_t inst) {
+        // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
+        // movz   x8, #0xbeef, lsl #0
+        // movk   x8, #0x20, lsl #16
+        // movk   x8, #0x20, lsl #32
+        // or
+        // mov    x8, #0xbeef
+        // movk   x8, #0x20, lsl #16
+        // movk   x8, #0x20, lsl #32
+        bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
+        bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64) && ((inst >> 21) & 0x3) == 0;
+        return is_mov_64 || is_movz_64;
+    };
 };
 
 #endif // SHARE_VM_YUHU_YUHUVIRTUALADDRESSPATCHER_HPP

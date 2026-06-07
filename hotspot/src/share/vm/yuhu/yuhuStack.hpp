@@ -34,6 +34,7 @@ class YuhuFunction;
 class YuhuNativeWrapper;
 class YuhuStackWithNormalFrame;
 class YuhuStackWithNativeFrame;
+enum class CallSiteType : uint8_t;
 
 class YuhuStack : public YuhuCompileInvariants {
  public:
@@ -111,6 +112,8 @@ class YuhuStack : public YuhuCompileInvariants {
   void CreateResetLastJavaFrameWithNoPC();
 
   void CreateCallSitePlaceholder(uint64_t virtual_address);
+
+  llvm::Value* CreateCallSitePlaceholderWithCallTarget(uint64_t virtual_address, uint64_t call_target_va, CallSiteType call_site_type);
 
  private:
   void CreateAssertLastJavaSPIsNull() const PRODUCT_RETURN;

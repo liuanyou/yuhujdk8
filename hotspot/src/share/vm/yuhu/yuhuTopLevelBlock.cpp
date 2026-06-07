@@ -510,19 +510,17 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
           }
       }
 
+      assert(helper_address != 0, "helper_address should have a value");
+
       // Replace callee with virtual address
-      if (helper_address != 0) {
-          llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-          callee = builder()->CreateIntToPtr(
-                  llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
-                  callee->getType());
+      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
 
-          stack()->CreateCallSitePlaceholder(last_java_pc_va);
+      callee = builder()->CreateIntToPtr(call_target,
+              callee->getType());
 
-          YuhuDebugInformationRecorder::get()->register_call_site(
-                  virtual_offset, call_target_va, helper_address,
-                  CallSiteType::vm_call, bci());
-      }
+      YuhuDebugInformationRecorder::get()->register_call_site(
+              virtual_offset, call_target_va, helper_address,
+              CallSiteType::vm_call, bci());
 
     builder()->CreateCondBr(
       builder()->CreateICmpNE(
@@ -594,20 +592,21 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     uint64_t virtual_offset = code_buffer()->create_unique_offset();
     uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
     uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t helper_address = (uint64_t)&gc_safepoint_poll;
     // call_target_va is not used in the CreateCall, just create one for no use
     YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
                                                             call_target_va,
-                                                            (uint64_t)&gc_safepoint_poll,
+                                                            helper_address,
                                                             CallSiteType::safepoint_poll,
                                                             is_method_entry_safepoint ? -1 : bci());
-    // we use virtual last java pc only, coz adrp instructions must be used for gc.safepoint_poll,
-    // otherwise, poll_type relocation record can't be created. hence patching adr logic is a little different
-    // than call site in CallSiteExtractorPlugin
-    stack()->CreateCallSitePlaceholder(last_java_pc_va);
+
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::safepoint_poll);
+
     llvm::Module* mod = builder()->GetInsertBlock()->getModule();
     llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
-    llvm::FunctionCallee poll_fn = mod->getOrInsertFunction("gc.safepoint_poll", poll_ftype);
-    builder()->CreateCall(poll_ftype, poll_fn.getCallee(), {});
+    llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
+
+    builder()->CreateCall(poll_ftype, callee, {});
 
   current_state()->set_has_safepointed(true);
 }
@@ -1484,7 +1483,7 @@ void YuhuTopLevelBlock::do_call() {
   uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
   uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
 
-  stack()->CreateCallSitePlaceholder(last_java_pc_va);
+  llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::java_call);
   
   // NEW: Register call site for later patching
   YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address, CallSiteType::java_call, bci());
@@ -1526,9 +1525,7 @@ void YuhuTopLevelBlock::do_call() {
 
   // NEW: Use virtual address placeholder as call target if we extracted the real address
   Value *compiled_entry_ptr;
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    compiled_entry_ptr = builder()->CreateIntToPtr(
-      llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
+    compiled_entry_ptr = builder()->CreateIntToPtr(call_target,
       PointerType::getUnqual(compiled_ftype),
       "compiled_entry_virtual");
 
@@ -1727,19 +1724,17 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
         }
     }
 
+    assert(helper_address != 0, "helper_address should have a value");
+
     // Replace callee with virtual address
-    if (helper_address != 0) {
-        llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-        callee = builder()->CreateIntToPtr(
-                llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
-                callee->getType());
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
 
-        stack()->CreateCallSitePlaceholder(last_java_pc_va);
+    callee = builder()->CreateIntToPtr(call_target,
+            callee->getType());
 
-        YuhuDebugInformationRecorder::get()->register_call_site(
-                virtual_offset, call_target_va, helper_address,
-                CallSiteType::vm_call, bci());
-    }
+    YuhuDebugInformationRecorder::get()->register_call_site(
+            virtual_offset, call_target_va, helper_address,
+            CallSiteType::vm_call, bci());
 
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;

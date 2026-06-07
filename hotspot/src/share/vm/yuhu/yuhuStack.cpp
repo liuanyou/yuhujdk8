@@ -407,7 +407,7 @@ void YuhuStack::CreateSetLastJavaFrameWithPlaceholderNoPC(uint64_t virtual_addre
     llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "~{x19}",  // Constraint string
+            "~{x19},~{memory}",  // Constraint string
             true, // hasSideEffects
             true  // isAlignStack
     );
@@ -425,6 +425,61 @@ void YuhuStack::CreateResetLastJavaFrame() {
 void YuhuStack::CreateResetLastJavaFrameWithNoPC() {
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_sp_addr());
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_fp_addr());
+}
+
+/**
+ * It returns i64 value. And caller must convert return value to function type when doing CreateCall.
+ *
+ * @param virtual_address
+ * @param call_target_va
+ * @return
+ */
+llvm::Value* YuhuStack::CreateCallSitePlaceholderWithCallTarget(uint64_t virtual_address, uint64_t call_target_va, CallSiteType call_site_type) {
+    // Extract virtual_offset from the virtual address (low 16 bits)
+    int virtual_offset = virtual_address & 0xFFFF;
+    int call_site_kind = (static_cast<uint8_t>(call_site_type)) & 0xFFFF;
+
+    // Generate inline asm with marker + adr instruction
+    // The marker embeds virtual_offset for correlation during patching
+    // asm template:
+    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
+    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
+
+    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+    llvm::LLVMContext& ctx = mod->getContext();
+
+    // Inline asm string with marker and adr (no label needed)
+    // Use virtual_offset in the marker for identification during patching
+    char asm_string[512];
+    snprintf(asm_string, sizeof(asm_string),
+             "mov w19, #%d\n"
+             "movk w19, #0xDEAD, lsl #16\n"
+             "mov w20, #%d\n"
+             "nop\n"
+             "nop\n"
+             "movz ${0:x}, #0x%04lx, lsl #0\n"
+             "movk ${0:x}, #0x%04lx, lsl #16\n"
+             "movk ${0:x}, #0x%04lx, lsl #32",
+             virtual_offset,  // virtual_offset
+             call_site_kind,  // call_site_type
+             (call_target_va >> 0) & 0xFFFF,   // low 16 bits
+             (call_target_va >> 16) & 0xFFFF,  // mid-low 16 bits
+             (call_target_va >> 32) & 0xFFFF); // mid-high 16 bits
+
+    llvm::FunctionType* asm_type = llvm::FunctionType::get(
+            llvm::Type::getInt64Ty(ctx), {}, false);
+
+    llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
+            asm_type,
+            asm_string,
+            "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+            true,            // Has side effects: yes (to prevent optimization)
+            false,           // Is align stack: no
+            llvm::InlineAsm::AD_ATT
+    );
+
+    // Create the inline asm call
+    return builder()->CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>());
 }
 
 void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
@@ -461,7 +516,7 @@ void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
     llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "~{x19}",  // Constraint string
+            "~{x19},~{memory}",  // Constraint string
             true, // hasSideEffects
             true  // isAlignStack
     );

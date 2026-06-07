@@ -321,7 +321,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         if (YuhuTraceMachineCode) {
                             errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
                         }
-                    } else if (found && (match.call_target_type == CallTargetType::safepoint_poll || match.call_target_type == CallTargetType::deopt)) {
+                    } else if (found && match.call_target_type == CallTargetType::deopt) {
                         assert(match.last_java_pc_va != 0, "placeholder should exist");
                         if (match.last_java_pc_va == 0) {
                             if (YuhuTraceMachineCode) {
@@ -339,11 +339,10 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                         // Look up the actual helper address from virtual_offset mapping
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-                        assert(helper_addr == (uint64_t)&gc_safepoint_poll || helper_addr == (uint64_t)&handle_deoptimization,
-                               "helper address should be either safepoint poll call or deoptimization call");
-                        if (helper_addr != (uint64_t)&gc_safepoint_poll && helper_addr != (uint64_t)&handle_deoptimization) {
+                        assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
+                        if (helper_addr != (uint64_t)&handle_deoptimization) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Not safepoint poll call or not deopt call for virtual_offset "
+                                errs() << "[CallSite Extractor] ERROR: Not deopt call for virtual_offset "
                                        << virtual_offset << "\n";
                             }
                             continue;
@@ -361,18 +360,19 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                                    << " , call_target_offset=" << block_offset + match.call_target_placeholder_offset << "\n";
                         }
                     } else if (found) {
-                        // The third scenario: it is possible that two safepoint poll calls share the same adrp instructions, and here
-                        // we are catching the second safepoint poll call. We don't expect the very rare scenario that three safepoint
-                        // poll calls share the same adrp instructions.
+                        // The third scenario: not sure if this could happen that two deoptimization calls share the same adrp instructions,
+                        // and here
+                        // we are catching the second deoptimization call. We don't expect the very rare scenario that three deoptimization
+                        // calls share the same adrp instructions.
                         assert(match.last_java_pc_va != 0, "placeholder should exist");
                         uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
                         uint64_t virtual_offset = ljpc_offset;
 
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-                        assert(helper_addr == (uint64_t)&gc_safepoint_poll, "helper address should be safepoint poll call");
-                        if (helper_addr != (uint64_t)&gc_safepoint_poll) {
+                        assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
+                        if (helper_addr != (uint64_t)&handle_deoptimization) {
                             if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Not safepoint poll call for virtual_offset "
+                                errs() << "[CallSite Extractor] ERROR: Not deoptimization call for virtual_offset "
                                        << virtual_offset << "\n";
                             }
                             continue;

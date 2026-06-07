@@ -317,20 +317,15 @@ class YuhuTopLevelBlock : public YuhuBlock {
         }
       }
     }
-    
-    // Step 4: Replace callee with virtual address placeholder
-    llvm::Value* virtual_callee = callee;
-    if (helper_address != 0) {
-      llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-      virtual_callee = builder()->CreateIntToPtr(
-        llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
-        callee->getType());
+
+      assert(helper_address != 0, "helper_address should have a value");
+
+    // Step 4: Store last_Java_pc placeholder
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
+    // Step 5: Replace callee with virtual address placeholder
+    llvm::Value* virtual_callee = builder()->CreateIntToPtr(call_target, callee->getType());
 
       YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci());
-    }
-
-    // Step 5: Store last_Java_pc placeholder
-    stack()->CreateCallSitePlaceholder(last_java_pc_va);
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
     decache_for_VM_call(virtual_offset);

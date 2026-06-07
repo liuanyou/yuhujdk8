@@ -1326,82 +1326,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return;
     }
 
-    // oop_relocation related functions
-    // Helper function to check if instruction sequence matches marker pattern
-    auto is_marker_pattern = [](uint32_t* instr) -> bool {
-        // Check instruction encoding (little-endian):
-        // [0] mov w19, #0xCAFE       → 0x52995FD3
-        // [1] movk w19, #0xBABE, lsl #16 → 0x72B757D3
-        // [2] mov w20, #imm16        → 0x528xxxxxB4 (bits 5-20 contain imm16)
-        // [3] nop                    → 0xD503201F
-        // [4] nop                    → 0xD503201F
-
-        if (instr[0] == 0x52995FD3 &&  // mov w19, #0xCAFE
-            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
-            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop (allow low 4 bits variation)
-            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
-            return true;
-        }
-        return false;
-    };
-
-    // metadata_relocation marker pattern
-    // Same shape as oop marker but with low immediate 0xDEAD (vs 0xCAFE).
-    //   [0] mov  w19, #0xDEAD            → 0x529BD5B3
-    //   [1] movk w19, #0xBABE, lsl #16   → 0x72B757D3
-    //   [2] mov  w20, #metadata_id       → 0x528xxxxxB4 (bits 5-20 = metadata_id)
-    //   [3] nop, [4] nop
-    // Distinguished from last_Java_pc marker (which has 0xDEAD in the HIGH 16 bits).
-    auto is_metadata_marker_pattern = [](uint32_t* instr) -> bool {
-        if (instr[0] == 0x529BD5B3 &&  // mov w19, #0xDEAD
-            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
-            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop
-            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
-            return true;
-        }
-        return false;
-    };
-
-    // Helper function to extract oop_id from marker
-    auto extract_oop_id = [](uint32_t* instr) -> int {
-        // Extract imm16 from: mov w20, #imm16
-        // Encoding: 0x528xxxxxB4, where bits 5-20 contain imm16
-        uint32_t mov_instr = instr[2];
-        uint16_t imm16 = (mov_instr >> 5) & 0xFFFF;
-        return (int)imm16;
-    };
-
-    // Helper function to check if 3 instructions form a mov/movk sequence
-    auto is_mov_movk_sequence = [](uint32_t* instr) -> bool {
-        // Check for mov/movk sequence (C1 compatible format):
-        // [0] mov xN, #imm16         → 0xD28xxxxx (bit 31-23 = 0b110100101)
-        // [1] movk xN, #imm16, lsl #16 → 0xF2Axxxxx (bit 31-23 = 0b1111001010)
-        // [2] movk xN, #imm16, lsl #32 → 0xF2Cxxxxx (bit 31-23 = 0b1111001011)
-
-        // All must be AArch64 mov/movk immediate instructions
-        if ((instr[0] & 0xFF800000) != 0xD2800000 ||  // mov xN, #imm16
-            (instr[1] & 0xFFE00000) != 0xF2A00000 ||  // movk xN, #imm16, lsl #16
-            (instr[2] & 0xFFE00000) != 0xF2C00000) {  // movk xN, #imm16, lsl #32
-            return false;
-        }
-
-        // Verify all 3 instructions use the same destination register
-        int rd0 = instr[0] & 0x1F;  // bits 4-0
-        int rd1 = instr[1] & 0x1F;
-        int rd2 = instr[2] & 0x1F;
-
-        return (rd0 == rd1 && rd1 == rd2);
-    };
-
-    // Helper function to extract 64-bit value from mov/movk sequence
-    auto extract_from_movk_sequence = [](uint32_t* instr) -> uint64_t {
-        uint16_t imm0 = (instr[0] >> 5) & 0xFFFF;   // bits [15:0]
-        uint16_t imm1 = (instr[1] >> 5) & 0xFFFF;   // bits [31:16]
-        uint16_t imm2 = (instr[2] >> 5) & 0xFFFF;   // bits [47:32]
-
-        return ((uint64_t)imm2 << 32) | ((uint64_t)imm1 << 16) | (uint64_t)imm0;
-    };
-
     auto patch_oop_index = [](uint32_t* instr, uint32_t* placeholder_instrs, int oop_index) -> bool {
         // Update marker: change w20 from oop_id to oop_index
         uint32_t new_mov_w20 = 0x52800000 | ((oop_index & 0xFFFF) << 5) | (instr[2] & 0x1F);
@@ -1431,30 +1355,17 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         int64_t page_diff = (int64_t)(func_page - new_pc_page) >> 12;  // Page difference
 
         // Encode new ADRP
-        uint32_t new_adrp = (instr[0] & 0x9F000000) | rd;  // Keep opcode and Rd
+        uint32_t new_adrp = 0x90000000 | rd;  // adrp opcode and Rd
         new_adrp |= (page_diff & 0x3) << 29;  // immlo (bits [30:29])
         new_adrp |= ((page_diff >> 2) & 0x7FFFF) << 5;  // immhi (bits [23:5])
 
         instr[0] = new_adrp;
+        instr[1] = 0xD503201F; // nop instruction
+        instr[2] = 0xD503201F; // nop instruction
 
         // Patch ldr instruction
         uint32_t ldr_wzr = 0xB9400000 | 31 | (rd << 5); // Rd = wzr (31), Rn = rd
 
-        instr[1] = ldr_wzr;
-
-        blr_instr[0] = 0xD503201F; // nop instruction
-        return true;
-    };
-
-    auto patch_new_ldr_wzr = [](uint32_t* blr_instr) -> bool {
-        // Extract register from blr instruction (bits [4:0])
-        uint32_t rn = (blr_instr[0] >> 5) & 0x1F;
-        
-        // Generate ldr wzr, [xN] instruction
-        // Encoding: 11111001 01000000 00000000 11111 (Rn) = 0xB9400000 | Rn | (31 << 0)
-        // wzr = register 31, Rn = source register
-        uint32_t ldr_wzr = 0xB9400000 | (rn << 5) | 31;
-        
         blr_instr[0] = ldr_wzr;
         return true;
     };
@@ -1497,15 +1408,22 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     int adrp_count = 0;
     int blr_count = 0;
 
+    struct RelocEntry {
+        relocInfo::relocType reloc_type;
+        size_t offset;
+        int spec_index;
+    };
+
     GrowableArray<uint64_t> processed_llvm_blr_offsets;
+    GrowableArray<RelocEntry> reloc_entries;
 
     // Scan machine code for marker pattern
     for (size_t i = 0; i < llvm_code_size / 4; i++) {
-        uint32_t* llvm_instr = (uint32_t*)(llvm_code_start + i * 4);
+        uint32_t *llvm_instr = (uint32_t *) (llvm_code_start + i * 4);
 
-        if (is_marker_pattern(llvm_instr)) {
+        if (YuhuVirtualAddressScanner::is_oop_marker_pattern(llvm_instr)) {
             // Extract oop_id from marker
-            int oop_id = extract_oop_id(llvm_instr);
+            int oop_id = YuhuVirtualAddressScanner::extract_w20_imm16(llvm_instr);
 
             // Look up the real jobject from pending_oops using oop_id
             assert(oop_id >= 0 && oop_id < _pending_oops->length(), "oop_id out of range");
@@ -1517,27 +1435,30 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             // Placeholder is immediately after marker (5 instructions = 20 bytes)
             // Check if the next 3 instructions are mov/movk sequence
-            uint32_t* llvm_placeholder_instrs = (uint32_t*)(llvm_code_start + (i + 5) * 4);
+            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
 
-            assert(is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
             // here we are manipulating actual machine code in code buffer
-            uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
-            assert(is_marker_pattern(instr), "should be marker pattern");
-            uint32_t* placeholder_instrs = (uint32_t*)(code_start + (i + 5) * 4 + adapter_size);
-            assert(is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
+            uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_oop_marker_pattern(instr), "should be oop marker pattern");
+            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
 
-            uint64_t full_placeholder = extract_from_movk_sequence(placeholder_instrs);
-            int placeholder_oop_id = (int)(full_placeholder & 0xFFFFFFFFFFFFULL);
+            uint64_t full_placeholder = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
+            int placeholder_oop_id = (int) (full_placeholder & 0xFFFFFFFFFFFFULL);
 
             assert(placeholder_oop_id == oop_id, "should be the same oop_id");
             bool oop_index_patched = patch_oop_index(instr, placeholder_instrs, oop_index);
             assert(oop_index_patched, "should patch successfully");
 
-            // Generate HotSpot relocation record using CodeBuffer::relocate
-            RelocationHolder rspec = oop_Relocation::spec(oop_index);
-            cb->relocate((address)placeholder_instrs, rspec);
+            RelocEntry reloc_entry{};
+            reloc_entry.offset = (i + 5) * 4 + adapter_size;
+            reloc_entry.reloc_type = relocInfo::relocType::oop_type;
+            reloc_entry.spec_index = oop_index;
+            reloc_entries.append(reloc_entry);
+
             marker_count++;
-        } else if (is_metadata_marker_pattern(llvm_instr)) {
+        } else if (YuhuVirtualAddressScanner::is_metadata_marker_pattern(llvm_instr)) {
             // Metadata marker handling.
             // Unlike oops, the placeholder already holds the real Metadata*
             // address (CreateInlineMetadata embeds the address directly).
@@ -1547,7 +1468,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             //   3. sanity-check that the placeholder address matches
             //   4. allocate a metadata_index and emit metadata_Relocation
             // The instruction stream is NOT patched (the immediate is already correct).
-            int metadata_id = extract_oop_id(llvm_instr);  // same imm16-from-w20 extraction
+            int metadata_id = YuhuVirtualAddressScanner::extract_w20_imm16(
+                    llvm_instr);  // same imm16-from-w20 extraction
 
             assert(metadata_id >= 0 && metadata_id < _pending_metadata->length(), "metadata_id out of range");
             ::Metadata *metadata = _pending_metadata->at(metadata_id);
@@ -1555,18 +1477,18 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             assert(metadata->is_metaspace_object(), "sanity check");
 
             // Placeholder is immediately after the 5-instruction marker block.
-            uint32_t *llvm_placeholder_instrs = (uint32_t*) (llvm_code_start + (i + 5) * 4);
-            assert(is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
+            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
 
             // Locate the matching placeholder in the actual CodeBuffer.
-            uint32_t *instr = (uint32_t*) (code_start + i * 4 + adapter_size);
-            assert(is_metadata_marker_pattern(instr), "should be metadata marker pattern");
-            uint32_t *placeholder_instrs = (uint32_t*) (code_start + (i + 5) * 4 + adapter_size);
-            assert(is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
+            uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_metadata_marker_pattern(instr), "should be metadata marker pattern");
+            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
 
             // Verify the embedded address matches the recorded Metadata*.
             // The placeholder encodes 48 bits; metaspace addresses fit in 48 bits.
-            uint64_t embedded_addr = extract_from_movk_sequence(placeholder_instrs);
+            uint64_t embedded_addr = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
             uint64_t expected_addr = (uint64_t) (uintptr_t) metadata;
             assert((expected_addr & 0xFFFF000000000000ULL) == 0, "metadata address must fit in 48 bits");
             assert(embedded_addr == expected_addr, "placeholder address must match recorded Metadata*");
@@ -1577,29 +1499,70 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
             assert(metadata_index > 0, "metadata_index must be > 0");
 
-            // Emit the relocation record at the placeholder PC. The first
-            // instruction of the mov/movk/movk triplet is the relocation
-            // address (HotSpot AArch64 convention).
-            RelocationHolder rspec = metadata_Relocation::spec(metadata_index);
-            cb->relocate((address) placeholder_instrs, rspec);
-            metadata_marker_count++;
-        } else if (is_mov_movk_sequence(llvm_instr)) {
-            uint64_t llvm_target_address = extract_from_movk_sequence(llvm_instr);
-            CallSiteEntry* call_site = YuhuDebugInformationRecorder::get()->get_call_site_by_helper_address_and_call_target_offset(llvm_target_address,
-                                                                                                                                      i * 4);
-            if (!call_site || (call_site->call_site_type != CallSiteType::vm_call && call_site->call_site_type != CallSiteType::java_call)) {
-                if (YuhuTraceOffset) {
-                    tty->print_cr("Yuhu: found no vm/java call site by helper address %d and  offset %d", llvm_target_address, i * 4);
-                }
-                continue;
-            }
+            RelocEntry reloc_entry{};
+            reloc_entry.offset = (i + 5) * 4 + adapter_size;
+            reloc_entry.reloc_type = relocInfo::relocType::metadata_type;
+            reloc_entry.spec_index = metadata_index;
+            reloc_entries.append(reloc_entry);
 
-            uint32_t *instr = (uint32_t*) (code_start + i * 4 + adapter_size);
-            assert(is_mov_movk_sequence(instr), "should be mov/movk sequences");
-            uint64_t target_address = extract_from_movk_sequence(instr);
+            metadata_marker_count++;
+        } else if (YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern(llvm_instr)) {
+            // Placeholder is immediately after the 5-instruction marker block.
+            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
+
+            uint64_t llvm_target_address = YuhuVirtualAddressScanner::extract_from_movk_sequence(llvm_placeholder_instrs);
+            CallSiteEntry* call_site = YuhuDebugInformationRecorder::get()->get_call_site_by_helper_address_and_call_target_offset(llvm_target_address, (i + 5) * 4);
+            assert(call_site != NULL, "call site should exist");
+
+            // Locate the matching placeholder in the actual CodeBuffer.
+            uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern(instr), "should be call site with call target marker pattern");
+            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
+
+            uint64_t target_address = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
             assert(llvm_target_address == target_address, "should be the same");
 
-            cb->relocate((address)instr, relocInfo::runtime_call_type);
+            if (call_site->call_site_type == CallSiteType::safepoint_poll) {
+                uint64_t llvm_blr_offset = call_site->blr_offset;
+                assert(llvm_blr_offset != 0, "should be valid offset");
+                uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
+                // Before patch :
+                //
+                // mov x8, #imm16                  # Loads lower 0-15 bits of safepoint_poll
+                // movk x8, #imm16, lsl #16        # Loads mid 16-31 bits of safepoint_poll
+                // movk x8, #imm16, lsl #32        # Loads mid 32-47 bits of safepoint_poll
+                // ...inst...
+                // blr    x8                       # Branches to function
+
+                // After patch :
+                //
+                // adrp   x8, <polling_page>       # Points to polling page
+                // nop                             # nop
+                // nop                             # nop
+                // ...inst...
+                // ldr    wzr, [x8]                # Loads polling page
+
+                // Patch adrp instruction
+                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(placeholder_instrs, (uint64)os::get_polling_page(), blr_instr);
+                assert(new_adrp_polling_page_patched, "should patch successfully");
+
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = (i + 5) * 4 + adapter_size;
+                reloc_entry.reloc_type = relocInfo::relocType::poll_type;
+                reloc_entries.append(reloc_entry);
+
+                RelocEntry reloc_entry2{};
+                reloc_entry2.offset = llvm_blr_offset + adapter_size;
+                reloc_entry2.reloc_type = relocInfo::relocType::poll_type;
+                reloc_entries.append(reloc_entry2);
+            } else {
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = (i + 5) * 4 + adapter_size;
+                reloc_entry.reloc_type = relocInfo::relocType::poll_type;
+                reloc_entries.append(reloc_entry);
+            }
 
             processed_llvm_blr_offsets.append(call_site->blr_offset);
             movz_movk_count++;
@@ -1622,35 +1585,17 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_adrp_pattern(instr), "should be adrp instructions");
-            uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
 
             // Create relocation record
-            if (function_address == (uint64_t)&gc_safepoint_poll) {
-                // Before patch :
-                //
-                // adrp   x8, <GOT_page>           # Points to GOT
-                // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
-                // ...inst...
-                // blr    x8                       # Branches to function
-
-                // After patch :
-                //
-                // adrp   x8, <polling_page>       # Points to polling page
-                // ldr    wzr, [x8]                # Loads polling page
-                // ...inst...
-                // nop                             # nop
-
-                // Patch adrp instruction
-                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(instr, (uint64)os::get_polling_page(), blr_instr);
-                assert(new_adrp_polling_page_patched, "should patch successfully");
-                cb->relocate((address)(instr), relocInfo::poll_type);
-                cb->relocate((address)(instr+1), relocInfo::poll_type);
-            } else if (function_address == (uint64_t)&handle_deoptimization) {
+            if (function_address == (uint64_t)&handle_deoptimization) {
                 // patch with handle deoptimization stub address
                 bool new_adrp_patched = patch_new_adrp(instr, (uint64_t) YuhuRuntime::handle_deoptimization_stub());
                 assert(new_adrp_patched, "should patch successfully");
                 // maybe do something special for deopt, not for now
-                cb->relocate((address)instr, relocInfo::runtime_call_type);
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = i * 4 + adapter_size;
+                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                reloc_entries.append(reloc_entry);
             } else {
                 // this case doesn't exist for now, because right now we only use adrp for safepoint poll call and deoptimization call
                 // just add it for code completeness
@@ -1667,26 +1612,51 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 // blr    x8                       # Branches to function
                 bool new_adrp_patched = patch_new_adrp(instr, function_address);
                 assert(new_adrp_patched, "should patch successfully");
-                cb->relocate((address)instr, relocInfo::runtime_call_type);
+
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = i * 4 + adapter_size;
+                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                reloc_entries.append(reloc_entry);
             }
             processed_llvm_blr_offsets.append(llvm_blr_offset);
             adrp_count++;
         } else if (YuhuVirtualAddressScanner::is_blr_pattern(llvm_instr) && !processed_llvm_blr_offsets.contains(i * 4)) {
-            // In case it is the special safepoint poll case that it only has blr instruction but shares adrp instructions with previous safepoint poll call
-            CallSiteEntry* call_site = YuhuDebugInformationRecorder::get()->get_call_site_by_helper_address_and_blr_offset((uint64_t)&gc_safepoint_poll, i * 4);
+            // In case it is the special deoptimization poll case that it only has blr instruction but shares adrp instructions with previous deoptimization call
+            CallSiteEntry* call_site = YuhuDebugInformationRecorder::get()->get_call_site_by_helper_address_and_blr_offset((uint64_t)&handle_deoptimization, i * 4);
             if (!call_site) {
                 if (YuhuTraceOffset) {
-                    tty->print_cr("Yuhu: found no safepoint call site by helper address %d and offset %d", (uint64_t)&gc_safepoint_poll, i * 4);
+                    tty->print_cr("Yuhu: found no deoptimization call site by helper address %d and offset %d", (uint64_t)&handle_deoptimization, i * 4);
                 }
                 continue;
             }
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_blr_pattern(instr), "should be blr instruction");
-            bool new_ldr_wzr_patched = patch_new_ldr_wzr(instr);
-            assert(new_ldr_wzr_patched, "should patch successfully");
-            cb->relocate((address)(instr), relocInfo::poll_type);
+            // no need to create runtime_call_type for blr instruction
             processed_llvm_blr_offsets.append(i * 4);
             blr_count++;
+        }
+    }
+
+    // sort by offset, relocation should be registered in ascending order
+    reloc_entries.sort([](RelocEntry* a, RelocEntry* b) -> int {
+        if ((*a).offset < (*b).offset) return -1;
+        if ((*a).offset > (*b).offset) return  1;
+        return 0;
+    });;
+
+    for (int i = 0; i < reloc_entries.length(); ++i) {
+        RelocEntry reloc_entry = reloc_entries.at(i);
+        uint32_t *instr = (uint32_t *) (code_start + reloc_entry.offset);
+        if (reloc_entry.reloc_type == relocInfo::relocType::oop_type) {
+            RelocationHolder rspec = oop_Relocation::spec(reloc_entry.spec_index);
+            cb->relocate((address)instr, rspec);
+        } else if (reloc_entry.reloc_type == relocInfo::relocType::metadata_type) {
+            RelocationHolder rspec = metadata_Relocation::spec(reloc_entry.spec_index);
+            cb->relocate((address) instr, rspec);
+        } else if (reloc_entry.reloc_type == relocInfo::relocType::poll_type) {
+            cb->relocate((address)(instr), relocInfo::poll_type);
+        } else if (reloc_entry.reloc_type == relocInfo::relocType::runtime_call_type) {
+            cb->relocate((address)(instr), relocInfo::runtime_call_type);
         }
     }
 

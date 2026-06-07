@@ -50,29 +50,6 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
     bool found_ljpc = false;
     bool found_blr = false;
 
-    auto is_mov_32_or_movz_32 = [](uint32_t inst) -> bool {
-        // expected instruction sequences for last java pc
-        // mov    w19, #0x20
-        // movk   w19, #0xdead, lsl #16
-        bool is_mov_32 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_32);
-        bool is_movz_32 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_32) && ((inst >> 21) & 0x3) == 0;
-        return is_mov_32 || is_movz_32;
-    };
-
-    auto is_mov_64_or_movz_64 = [](uint32_t inst) -> bool {
-        // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
-        // movz   x8, #0xbeef, lsl #0
-        // movk   x8, #0x20, lsl #16
-        // movk   x8, #0x20, lsl #32
-        // or
-        // mov    x8, #0xbeef
-        // movk   x8, #0x20, lsl #16
-        // movk   x8, #0x20, lsl #32
-        bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
-        bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64) && ((inst >> 21) & 0x3) == 0;
-        return is_mov_64 || is_movz_64;
-    };
-
     // Scan forwards from statepoint call
     for (uint64_t offset = scan_start; offset + 4 <= scan_end; offset += 4) {
         // Read instruction at current offset
@@ -106,6 +83,11 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
                             // Mismatched virtual_offsets - this is a critical error
                             assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
                             return false;  // Early exit in all builds
+                        }
+
+                        if ((instr[3] & 0xFFFFFFF0) == 0xD5032010 && (instr[4] & 0xFFFFFFF0) == 0xD5032010) {
+                            int call_site_type = extract_w20_imm16(instr);
+                            out_match.call_target_type = static_cast<CallTargetType>(call_site_type);
                         }
                         found_ljpc = true;
                     }
@@ -157,12 +139,10 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
             uint64_t target_address = target_page + offset_within_page;
 
             uint64_t function_address = *(uint64_t*)target_address;
-            // this is good as adrp target is only gc_safepoint_poll and handle_deoptimization for now.
+            // this is good as adrp target is only handle_deoptimization for now.
             // will change condition for other adrp function call in the future.
-            if (function_address == (uint64_t)&gc_safepoint_poll) {
-                out_match.call_target_type = CallTargetType::safepoint_poll;
-                out_match.call_target_placeholder_offset = offset;
-            } else if (function_address == (uint64_t)&handle_deoptimization) {
+            assert(function_address == (uint64_t)&handle_deoptimization, "should be deoptimization call");
+            if (function_address == (uint64_t)&handle_deoptimization) {
                 out_match.call_target_type = CallTargetType::deopt;
                 out_match.call_target_placeholder_offset = offset;
             }
@@ -236,46 +216,4 @@ void YuhuVirtualAddressScanner::patch_call_target_instructions(
          "Expected movk instruction with lsl #32");
   movk_inst2 = (movk_inst2 & ~(0xFFFF << 5)) | (imm2 << 5);  // Replace imm16
   instructions[2] = movk_inst2;
-}
-
-void YuhuVirtualAddressScanner::patch_adr_instruction(
-  uint8_t* code_buffer,
-  uint64_t adr_offset,
-  uint64_t adr_address,  // Absolute address of adr instruction
-  uint64_t target_address  // Absolute address of target (return address after bl)
-) {
-  // Calculate PC-relative offset
-  // ADR calculates: target = current_PC + offset
-  // current_PC is the address of the adr instruction itself
-  int64_t pc_offset = (int64_t)(target_address - adr_address);
-  
-  // Verify offset fits in 21-bit signed range (-1MB to +1MB)
-  assert(pc_offset >= -0x100000 && pc_offset < 0x100000, "ADR offset out of range");
-  
-  // AArch64 ADR instruction encoding:
-  // adr xd, label
-  // = 0001 0000 | immlo (2 bits) | 00000 | immhi (19 bits) | rd (5 bits)
-  // 
-  // Bits:
-  // 30-29: immlo (bits 0-1 of offset)
-  // 28-24: 00010 (opcode)
-  // 23-5: immhi (bits 2-20 of offset)
-  // 4-0: rd (destination register, x20 = 20)
-  
-  uint32_t* adr_instr = (uint32_t*)(code_buffer + adr_offset);
-  
-  // Build new ADR instruction
-  uint32_t new_adr = 0x10000000;  // ADR opcode base (bits 28-24 = 00010)
-  
-  // Encode immlo (bits 0-1 of offset) into bits 29-30
-  new_adr |= ((pc_offset & 0x3) << 29);
-  
-  // Encode immhi (bits 2-20 of offset) into bits 5-23
-  new_adr |= (((pc_offset >> 2) & 0x7FFFF) << 5);
-  
-  // Set destination register to x20 (rd = 20)
-  new_adr |= 20;
-  
-  // Patch the instruction
-  *adr_instr = new_adr;
 }

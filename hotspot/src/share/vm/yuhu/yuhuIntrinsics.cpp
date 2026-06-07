@@ -254,20 +254,16 @@ void YuhuIntrinsics::do_System_currentTimeMillis() {
       }
     }
   }
+
+  assert(helper_address != 0, "helper_address should have a value");
   
   // Replace callee with virtual address
-  if (helper_address != 0) {
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    callee = builder()->CreateIntToPtr(
-      llvm::ConstantInt::get(llvm::Type::getInt64Ty(mod->getContext()), call_target_va),
-      callee->getType());
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
+    callee = builder()->CreateIntToPtr(call_target, callee->getType());
 
-      stack()->CreateCallSitePlaceholder(last_java_pc_va);
-    
     YuhuDebugInformationRecorder::get()->register_call_site(
-      virtual_offset, call_target_va, helper_address, 
+      virtual_offset, call_target_va, helper_address,
       CallSiteType::vm_call, bci());
-  }
   
   // Create the call
 #if LLVM_VERSION_MAJOR >= 20
