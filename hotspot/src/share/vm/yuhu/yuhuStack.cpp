@@ -53,14 +53,19 @@ void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
   // Calculate frame size in bytes
   // NOTE: LR and FP are saved by LLVM's prologue (stp x29, x30, [sp, #-16]!)
   // Yuhu frame only contains: locals, stack, header (NO separate LR/FP)
-  int frame_size_bytes = extended_frame_size() * wordSize;
+  int frame_size_bytes_before_align = extended_frame_size() * wordSize;
   
   // AArch64 requires 16-byte stack alignment
   // Align frame size up to 16 bytes
-  frame_size_bytes = align_size_up(frame_size_bytes, 16);
+  int frame_size_bytes = align_size_up(frame_size_bytes_before_align, 16);
 
   // Convert back to words for alloca array size
   int aligned_frame_size_words = frame_size_bytes / wordSize;
+
+  if (YuhuTraceInstalls) {
+      tty->print_cr("Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, bytes_before_align=%d, bytes_after_align=%d",
+                    header_words, monitor_words, stack_words, locals_words, frame_size_bytes_before_align, frame_size_bytes);
+  }
 
   llvm::AllocaInst* extended_sp = builder()->CreateAlloca(YuhuType::intptr_type(),
                                                           ConstantInt::get(YuhuType::intptr_type(), aligned_frame_size_words),
