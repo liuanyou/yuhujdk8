@@ -70,12 +70,36 @@ Expected<std::unique_ptr<MemoryBuffer>> TracingIRCompiler::operator()(Module &M)
         return ObjBuffer;
     }
 
-    parseStackMap(ObjFile);
+    parseStackMap(ObjFile, M);
 
     return ObjBuffer;
 }
 
-void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile) {
+void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile, llvm::Module &M) {
+    fileStream fs;
+    if (YuhuStackMapFile != NULL) {
+        FILE *f = fopen(YuhuStackMapFile, "a");
+        fs = fileStream(f, true);
+    }
+
+    // Iterate through all functions in the module
+    for (auto &F : M.functions()) {
+        if (F.isDeclaration()) continue;  // Skip declarations
+
+        // Get the function name
+        std::string func_name = F.getName().str();
+
+        if (YuhuTraceMachineCode) {
+            // This is the unmangled name, e.g., "java.lang.String::indexOf"
+            errs() << "[StackMap] Function Name: " << func_name << "\n";
+            if (YuhuStackMapFile != NULL) {
+                fs.print_cr("[StackMap] Function Name: %s", func_name.c_str());
+                fs.flush();
+            }
+        }
+        break;
+    }
+
     // 1. 找到 __LLVM_StackMaps 段
     for (auto &Section : (*ObjFile)->sections()) {
         auto NameOrErr = Section.getName();
@@ -83,7 +107,11 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
             continue;
         }
         if (YuhuTraceMachineCode) {
-            errs() << "Section: " << *NameOrErr << "\n";
+            errs() << "[StackMap] Section: " << *NameOrErr << "\n";
+            if (YuhuStackMapFile != NULL) {
+                fs.print_cr("[StackMap] Section: %s", (*NameOrErr).str().c_str());
+                fs.flush();
+            }
         }
         // Section.getName() returns in format of segment,section eg
         // Section: __TEXT,__text
@@ -94,7 +122,11 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         // Section: __TEXT,__unwind_info
         if (!Section.getName()->ends_with("__llvm_stackmaps")) continue;
         if (YuhuTraceMachineCode) {
-            errs() << "Size: " << Section.getSize() << "\n";
+            errs() << "[StackMap] Size: " << Section.getSize() << "\n";
+            if (YuhuStackMapFile != NULL) {
+                fs.print_cr("[StackMap] Section: %d", Section.getSize());
+                fs.flush();
+            }
         }
         auto ContentOrErr = Section.getContents();
         if (!ContentOrErr) {
@@ -118,7 +150,13 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
             uint32_t InstructionOffset = StatepointRecord.getInstructionOffset();
             if (YuhuTraceMachineCode) {
                 errs() << "[StackMap] ID: " << StatepointID << " , InstructionOffset: " << InstructionOffset
-                       << ", Locations: " << StatepointRecord.getNumLocations() << " , Liveouts: " << StatepointRecord.getNumLiveOuts() << "\n";
+                       << " , Locations: " << StatepointRecord.getNumLocations() << " , Liveouts: " << StatepointRecord.getNumLiveOuts() << "\n";
+                if (YuhuStackMapFile != NULL) {
+                    fs.print_cr("[StackMap] ID: %d , InstructionOffset: %d , Locations: %d , Liveouts: %d",
+                                StatepointID, InstructionOffset, StatepointRecord.getNumLocations(),
+                                StatepointRecord.getNumLiveOuts());
+                    fs.flush();
+                }
             }
 
             if (DEOPT_STATEPOINT_ID == StatepointID) {
@@ -137,12 +175,22 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at stack offset: " << location.offset << " , Direct: "
                                        << location.reg_num << "\n";
+                                if (YuhuStackMapFile != NULL) {
+                                    fs.print_cr("[StackMap]     Deopt Bundle operand at stack offset: %d , Direct: %d",
+                                                location.offset, location.reg_num);
+                                    fs.flush();
+                                }
                             }
                             break;
                         case StackMapParser::LocationKind::Register:
                             location.reg_num = LocationRecord.getDwarfRegNum();
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand in register: " << (int) location.reg_num << "\n";
+                                if (YuhuStackMapFile != NULL) {
+                                    fs.print_cr("[StackMap]     Deopt Bundle operand in register: %d",
+                                                (int) location.reg_num);
+                                    fs.flush();
+                                }
                             }
                             break;
                         case StackMapParser::LocationKind::Indirect:
@@ -151,18 +199,33 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at stack offset: " << location.offset << " , Indirect: "
                                        << location.reg_num << "\n";
+                                if (YuhuStackMapFile != NULL) {
+                                    fs.print_cr(
+                                            "[StackMap]     Deopt Bundle operand at stack offset: %d , Indirect: %d",
+                                            location.offset, location.reg_num);
+                                    fs.flush();
+                                }
                             }
                             break;
                         case StackMapParser::LocationKind::Constant:
                             location.constant = LocationRecord.getSmallConstant();
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap]     Deopt Bundle operand at Constant: " << location.constant << "\n";
+                                if (YuhuStackMapFile != NULL) {
+                                    fs.print_cr("[StackMap]     Deopt Bundle operand at Constant: %d",
+                                                location.constant);
+                                    fs.flush();
+                                }
                             }
                             break;
                         case StackMapParser::LocationKind::ConstantIndex:
                             uint32_t constantIndex = LocationRecord.getConstantIndex();
                             if (YuhuTraceMachineCode) {
                                 errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
+                                if (YuhuStackMapFile != NULL) {
+                                    fs.print_cr("[StackMap] Ignore ConstantIndex: %d", constantIndex);
+                                    fs.flush();
+                                }
                             }
                             break;
                     }
@@ -260,6 +323,11 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Direct: "
                                    << DwarfRegNum << "\n";
+                            if (YuhuStackMapFile != NULL) {
+                                fs.print_cr("[StackMap]     GC Root at stack offset: %d , Direct: %d", Offset,
+                                            DwarfRegNum);
+                                fs.flush();
+                            }
                         }
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
                                                                                 static_cast<uint8_t>(Kind),
@@ -269,6 +337,10 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root in register: " << (int) DwarfRegNum << "\n";
+                            if (YuhuStackMapFile != NULL) {
+                                fs.print_cr("[StackMap]     GC Root in register: %d", (int) DwarfRegNum);
+                                fs.flush();
+                            }
                         }
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
                                                                                 static_cast<uint8_t>(Kind),
@@ -280,6 +352,11 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Indirect: "
                                    << DwarfRegNum << "\n";
+                            if (YuhuStackMapFile != NULL) {
+                                fs.print_cr("[StackMap]     GC Root at stack offset: %d , Indirect: %d", Offset,
+                                            DwarfRegNum);
+                                fs.flush();
+                            }
                         }
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
                                                                                 static_cast<uint8_t>(Kind),
@@ -289,6 +366,10 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         uint32_t constant = LocationRecord.getSmallConstant();
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap] Ignore Constant: " << constant << "\n";
+                            if (YuhuStackMapFile != NULL) {
+                                fs.print_cr("[StackMap] Ignore Constant: %d", constant);
+                                fs.flush();
+                            }
                         }
                         // record every location, otherwise call site may not find corresponding stack map
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
@@ -300,6 +381,10 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         uint32_t constantIndex = LocationRecord.getConstantIndex();
                         if (YuhuTraceMachineCode) {
                             errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
+                            if (YuhuStackMapFile != NULL) {
+                                fs.print_cr("[StackMap] Ignore ConstantIndex: %d", constantIndex);
+                                fs.flush();
+                            }
                         }
                         // record every location, otherwise call site may not find corresponding stack map
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,

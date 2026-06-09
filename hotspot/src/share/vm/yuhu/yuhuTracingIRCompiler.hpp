@@ -27,8 +27,9 @@ private:
      * parse stack map for gc and deopt, both stack map are in the same section.
      *
      * @param ObjFile
+     * @param M
      */
-    void parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile);
+    void parseStackMap(llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> &ObjFile, llvm::Module &M);
 };
 
 #endif // SHARE_VM_YUHU_YUHUTRACINGIRCOMPILER_HPP

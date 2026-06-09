@@ -21,7 +21,7 @@ namespace llvm {
 
     namespace orc {
 
-// Forward declarations
+        // Forward declarations
         class ObjectLinkingLayer;
 
         class MaterializationResponsibility;

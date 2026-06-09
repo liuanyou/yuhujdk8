@@ -53,6 +53,9 @@
                                                                               \
   diagnostic(bool, YuhuTraceMachineCode, false,                               \
           "Trace machine code generation from LinkGraph (AArch64 disassembly)") \
+                                                                                     \
+  diagnostic(ccstr, YuhuStackMapFile, NULL,                                    \
+          "Dump stack map to file (default file is yuhu_stack_map.txt)")                            \
                                                                               \
   diagnostic(bool, YuhuTraceIRCompilation, false,                             \
           "Trace IR to object file compilation (print IR and disassemble object file)") \
@@ -70,7 +73,7 @@
           "Runs LLVM verify over LLVM IR")                                    \
                                                                               \
   diagnostic(bool, YuhuDumpIRToFile, false,                                   \
-          "Dump LLVM IR to /tmp/yuhu_ir_*.ll files for debugging")            \
+          "Dump LLVM IR to _tmp_yuhu_ir_*.ll files for debugging")            \
                                                                               \
   diagnostic(bool, YuhuTraceOsrCompilation, false,                            \
           "Trace osr compilation")                                            \
