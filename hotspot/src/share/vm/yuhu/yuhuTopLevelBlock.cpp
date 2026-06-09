@@ -2246,11 +2246,17 @@ void YuhuTopLevelBlock::release_lock(int exception_action) {
 
   // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
 #if LLVM_VERSION_MAJOR >= 20
+    // successOrdering	        allowedFailureOrdering
+    // Monotonic	            Monotonic
+    // Acquire	                Monotonic, Acquire
+    // Release	                Monotonic（only this one）
+    // AcquireRelease	        Monotonic, Acquire
+    // SequentiallyConsistent	Monotonic, Acquire, SequentiallyConsistent
   Value *check = builder()->CreateAtomicCmpXchg(
     mark_addr, lock, disp,
     llvm::MaybeAlign(HeapWordSize),  // Alignment
     llvm::AtomicOrdering::Release,  // Success ordering
-    llvm::AtomicOrdering::Release);  // Failure ordering
+    llvm::AtomicOrdering::Monotonic);  // Failure ordering
 #else
   Value *check = builder()->CreateAtomicCmpXchg(mark_addr, lock, disp, llvm::AtomicOrdering::Release);
 #endif
