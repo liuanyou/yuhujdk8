@@ -1562,7 +1562,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             } else {
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = (i + 5) * 4 + adapter_size;
-                reloc_entry.reloc_type = relocInfo::relocType::poll_type;
+                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
             }
 
