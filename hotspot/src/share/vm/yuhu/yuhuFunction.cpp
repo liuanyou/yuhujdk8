@@ -248,41 +248,16 @@ void YuhuFunction::initialize(const char *name) {
   _unified_exit_block = NULL;
   _return_slot = NULL;
   if (!is_osr()) {
-    // Create function-scope return slot Alloca in the entry block for non-void methods.
-    // This allows handle_return to store the return value and the unified exit block
-    // to load and ret it. Mem2Reg promotes this to a register, so zero runtime cost.
-    BasicType ret_type = target()->return_type()->basic_type();
-    if (ret_type != T_VOID) {
-      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
-      _return_slot = builder()->CreateAlloca(ret_llvm_type, NULL, "return_slot");
-    }
-
     // For normal entry, create unified exit block now
+    // Return slot will be set after stack creation (reuses pc_slot in frame header)
     _unified_exit_block = llvm::BasicBlock::Create(
       YuhuContext::current(),
       "unified_exit",
       function());
 
-    // Set insert point to the exit block
-    llvm::BasicBlock* orig_insert_block = builder()->GetInsertBlock();
-    builder()->SetInsertPoint(_unified_exit_block);
-
-    // Insert the epilogue marker (will be replaced with "add sp, x29, #0" after compilation)
-//    builder()->CreateEpiloguePlaceholder();
-
-    // Create ret instruction based on return type
-    if (ret_type == T_VOID) {
-      builder()->CreateRetVoid();
-    } else {
-      // Load from return slot (will be populated by handle_return)
-      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
-      builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
-    }
-
-    // Restore original insert point
-    if (orig_insert_block) {
-      builder()->SetInsertPoint(orig_insert_block);
-    }
+    // NOTE: No ret instruction created here yet.
+    // The ret will be added after stack creation when return_slot_addr is available.
+    // See CreateUnifiedExitBlock() which adds the ret after _return_slot is assigned.
   }
 
   // Create the list of blocks
@@ -372,6 +347,42 @@ void YuhuFunction::initialize(const char *name) {
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
   // Pass sp_storage_alloca so YuhuStack uses the alloca created in the entry block
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
+
+  // Set return slot to pc_slot in frame header (for non-void methods)
+  if (!is_osr() && _unified_exit_block != NULL) {
+      // Now create the ret instruction in the unified exit block
+      llvm::BasicBlock* orig_insert_block = builder()->GetInsertBlock();
+      builder()->SetInsertPoint(_unified_exit_block);
+
+      BasicType ret_type = target()->return_type()->basic_type();
+
+      if (ret_type == T_VOID) {
+          builder()->CreateRetVoid();
+      } else {
+          _return_slot = stack()->return_slot_addr();
+
+          llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
+          
+          // Handle different return types from intptr slot
+          if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
+              // Load as i64, then inttoptr to oop pointer
+              llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
+              builder()->CreateRet(builder()->CreateIntToPtr(loaded, ret_llvm_type));
+          } else if (ret_type == T_FLOAT || ret_type == T_DOUBLE) {
+              // Load as i64, then bitcast to FP type
+              llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
+              builder()->CreateRet(builder()->CreateBitCast(loaded, ret_llvm_type));
+          } else {
+              // T_INT, T_LONG, etc. — direct load
+              builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+          }
+      }
+
+      // Restore original insert point
+      if (orig_insert_block) {
+          builder()->SetInsertPoint(orig_insert_block);
+      }
+  }
 
   // NOTE: We no longer call CreateResetLastJavaFrame() here.
   // The last_Java_sp/fp/pc are set directly in yuhuStack.cpp::initialize()
@@ -521,13 +532,23 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
     BasicType ret_type = target()->return_type()->basic_type();
     if (ret_type == T_VOID) {
       builder()->CreateRetVoid();
-    } else if (_return_slot != NULL) {
-      llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
-      builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
     } else {
-      // Fallback: return a zero of the correct type if no return slot exists.
+      // Use return_slot for OSR case too
+      if (_return_slot == NULL) {
+        _return_slot = stack()->return_slot_addr();
+      }
       llvm::Type* ret_llvm_type = YuhuType::to_stackType(ret_type);
-      builder()->CreateRet(llvm::Constant::getNullValue(ret_llvm_type));
+      
+      // Handle different return types from intptr slot
+      if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
+          llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
+          builder()->CreateRet(builder()->CreateIntToPtr(loaded, ret_llvm_type));
+      } else if (ret_type == T_FLOAT || ret_type == T_DOUBLE) {
+          llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
+          builder()->CreateRet(builder()->CreateBitCast(loaded, ret_llvm_type));
+      } else {
+          builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
+      }
     }
 
     // Restore original insert point

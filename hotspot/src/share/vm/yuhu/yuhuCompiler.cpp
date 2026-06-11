@@ -1082,15 +1082,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();
-  int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start);
+  int num_of_prologue_registers = 0;
+  int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start, &num_of_prologue_registers);
   int actual_prologue_words = actual_prologue_bytes / wordSize;
+  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, num_of_prologue_registers);
 
   // Step 3: Calculate final frame_size using actual prologue size
 //  int frame_size = frame_words + locals_words + actual_prologue_words;
   int frame_size = actual_prologue_words;
   // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
   // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
-  frame_size = align_size_up(frame_size, 2);
+//  frame_size = align_size_up(frame_size, 2);
 
   // Install the method into the VM
   CodeOffsets offsets;

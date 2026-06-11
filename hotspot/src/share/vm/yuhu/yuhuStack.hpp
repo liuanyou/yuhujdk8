@@ -81,6 +81,7 @@ class YuhuStack : public YuhuCompileInvariants {
  private:
   // Frame pointer is stored in the frame header
   mutable llvm::Value* _frame_pointer_addr;  // Address where frame pointer is stored in frame header
+  mutable llvm::Value* _return_slot_addr;        // PC slot address (reused as return slot)
   
   llvm::Value* frame_pointer_addr() const {
     // Frame pointer is stored in the frame header
@@ -137,7 +138,6 @@ class YuhuStack : public YuhuCompileInvariants {
   int _monitors_slots_offset;
   int _oop_tmp_slot_offset;
   int _method_slot_offset;
-  int _pc_slot_offset;
   int _locals_slots_offset;
 
  public:
@@ -150,9 +150,7 @@ class YuhuStack : public YuhuCompileInvariants {
   int method_slot_offset() const {
     return _method_slot_offset;
   }
-  int pc_slot_offset() const {
-    return _pc_slot_offset;
-  }
+
   int locals_slots_offset() const {
     return _locals_slots_offset;
   }
@@ -202,6 +200,12 @@ class YuhuStack : public YuhuCompileInvariants {
       monitor_header_offset(index),
       YuhuType::intptr_type(),
       "displaced_header_addr");
+  }
+
+  // PC slot address (reused as return slot for non-void methods)
+  llvm::Value* return_slot_addr() const {
+    assert(_return_slot_addr != NULL, "return_slot_addr not initialized");
+    return _return_slot_addr;
   }
 
   // oopmap helpers

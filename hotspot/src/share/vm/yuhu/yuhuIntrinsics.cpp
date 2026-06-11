@@ -263,7 +263,7 @@ void YuhuIntrinsics::do_System_currentTimeMillis() {
 
     YuhuDebugInformationRecorder::get()->register_call_site(
       virtual_offset, call_target_va, helper_address,
-      CallSiteType::vm_call, bci());
+      CallSiteType::vm_call, bci(), state()->num_monitors());
   
   // Create the call
 #if LLVM_VERSION_MAJOR >= 20

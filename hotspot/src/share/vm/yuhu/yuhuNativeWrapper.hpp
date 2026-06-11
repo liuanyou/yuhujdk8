@@ -71,7 +71,7 @@ class YuhuNativeWrapper : public YuhuCompileInvariants {
   llvm::Function* _function;
   YuhuStack*     _stack;
   llvm::Value*    _oop_tmp_slot;
-  llvm::AllocaInst* _return_slot;     // Function-scope return value slot
+  llvm::Value*    _return_slot;     // Return slot (pc_slot in frame header)
   OopMapSet*      _oop_maps;
   int             _receiver_slot_offset;
   int             _lock_slot_offset;
@@ -108,7 +108,7 @@ class YuhuNativeWrapper : public YuhuCompileInvariants {
   llvm::Function* function() const {
     return _function;
   }
-  llvm::AllocaInst* return_slot() const { return _return_slot; }
+  llvm::Value* return_slot() const { return _return_slot; }
 
   // The Zero stack and our frame on it.
  protected:

@@ -537,6 +537,22 @@ CallInst* YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::Operand
   return call;
 }
 
+llvm::CallInst* YuhuBuilder::CreateStackMap(uint64_t id, uint32_t num_shadow_bytes, llvm::ArrayRef<llvm::Value*> live_values) {
+    llvm::Function* stackmap_intrinsic = llvm::Intrinsic::getDeclaration(
+            GetInsertBlock()->getModule(),
+            llvm::Intrinsic::experimental_stackmap);
+
+    std::vector<llvm::Value*> args;
+    args.push_back(llvm::ConstantInt::get(
+            llvm::Type::getInt64Ty(getContext()), id));
+    args.push_back(llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(getContext()), num_shadow_bytes));
+    args.insert(args.end(), live_values.begin(), live_values.end());
+
+    llvm::CallInst* call = CreateCall(stackmap_intrinsic, args);
+    return call;
+}
+
 Value* YuhuBuilder::debug_stack_overflow_check() {
   // Signature: "Txxxxxx" -> "v" (Thread*, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t -> void)
   return make_function((address) YuhuRuntime::debug_stack_overflow_check, "Txxxxxx", "v");

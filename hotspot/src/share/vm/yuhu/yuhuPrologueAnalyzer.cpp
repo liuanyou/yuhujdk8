@@ -3,7 +3,6 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  */
 
-#include "precompiled.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "utilities/globalDefinitions.hpp"
 
@@ -11,7 +10,7 @@
 // NOTE: This includes both callee-saved register saves AND spill space allocated by LLVM.
 // LLVM allocates spill space (sub sp, sp, #N) AFTER setting up the frame pointer,
 // and we need to count it as part of the prologue for correct frame_size calculation.
-int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
+int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start, int *num_of_prologue_registers) {
   if (code_start == NULL) {
     return 0;
   }
@@ -19,6 +18,9 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
   int total_prologue_bytes = 0;
   unsigned char* pc = (unsigned char*)code_start;
   bool found_frame_setup = false;
+
+  int sub_sp_sp_index = 0;
+  int add_x29_sp_index = 0;
 
   // Scan the first 10 instructions (prologue is typically 6-10 instructions)
   for (int i = 0; i < 10; i++) {
@@ -32,12 +34,14 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
     }
     // Check for add x29, sp, #imm (frame pointer setup)
     else if (is_add_x29_sp_imm(inst)) {
+        add_x29_sp_index = i;
       found_frame_setup = true;
     }
     // Check for sub sp, sp, #imm (LLVM spill space allocation)
     // IMPORTANT: We MUST count this! LLVM generates this after setting FP
     // to allocate space for spilled registers. This IS part of the prologue.
     else if (is_sub_sp_imm(inst)) {
+        sub_sp_sp_index = i;
       int imm = extract_sub_sp_immediate(inst);
       // imm is positive (e.g., 64 for sub sp, sp, #0x40)
       total_prologue_bytes += imm;  // 先累加！
@@ -49,6 +53,9 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start) {
 
     pc += 4;  // AArch64 instructions are 4 bytes
   }
+
+  // Ideally, stp instruction is used in prologue
+  *num_of_prologue_registers = (add_x29_sp_index - sub_sp_sp_index - 1) * 2;
 
   return total_prologue_bytes;
 }

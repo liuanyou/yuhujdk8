@@ -58,10 +58,9 @@ void YuhuNativeWrapper::initialize(const char *name) {
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
   NOT_PRODUCT(method = NULL);
 
-  // Create function-scope return slot Alloca in the entry block for non-void native wrappers
+  // Use pc_slot in frame header as return slot for non-void native wrappers
   if (return_type() != T_VOID) {
-    llvm::Type* ret_llvm_type = YuhuType::to_stackType(return_type());
-    _return_slot = builder()->CreateAlloca(ret_llvm_type, NULL, "return_slot");
+    _return_slot = stack()->return_slot_addr();
   } else {
     _return_slot = NULL;
   }
@@ -197,9 +196,9 @@ void YuhuNativeWrapper::initialize(const char *name) {
   _oop_maps = new OopMapSet();
   oop_maps()->add_gc_map(pc_offset, oopmap);
 
-  builder()->CreateStore(
-    builder()->code_buffer_address(pc_offset),
-    stack()->slot_addr(stack()->pc_slot_offset()));
+//  builder()->CreateStore(
+//    builder()->code_buffer_address(pc_offset),
+//    stack()->slot_addr(stack()->pc_slot_offset()));
 
   // Set up the Java frame anchor
   stack()->CreateSetLastJavaFrame();

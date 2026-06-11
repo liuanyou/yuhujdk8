@@ -49,33 +49,40 @@ void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
   int frame_words   = header_words + monitor_words + stack_words;
 
   _extended_frame_size = frame_words + locals_words;
-  
-  // Calculate frame size in bytes
-  // NOTE: LR and FP are saved by LLVM's prologue (stp x29, x30, [sp, #-16]!)
-  // Yuhu frame only contains: locals, stack, header (NO separate LR/FP)
-  int frame_size_bytes_before_align = extended_frame_size() * wordSize;
-  
-  // AArch64 requires 16-byte stack alignment
-  // Align frame size up to 16 bytes
-  int frame_size_bytes = align_size_up(frame_size_bytes_before_align, 16);
-
-  // Convert back to words for alloca array size
-  int aligned_frame_size_words = frame_size_bytes / wordSize;
+  // No need to align 16 bytes here, llvm will handle it
 
   if (YuhuTraceInstalls) {
-      tty->print_cr("Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, bytes_before_align=%d, bytes_after_align=%d",
-                    header_words, monitor_words, stack_words, locals_words, frame_size_bytes_before_align, frame_size_bytes);
+      if (YuhuStackMapFile != NULL) {
+          FILE *f = fopen(YuhuStackMapFile, "a");
+          fileStream fs(f, true);
+          fs.print_cr("Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                      header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
+          fs.flush();
+      } else {
+          tty->print_cr(
+                  "Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                  header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
+      }
   }
+  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_frame_fields(header_words,
+                                                                                    monitor_words,
+                                                                                    stack_words,
+                                                                                    locals_words,
+                                                                                    _extended_frame_size);
 
   llvm::AllocaInst* extended_sp = builder()->CreateAlloca(YuhuType::intptr_type(),
-                                                          ConstantInt::get(YuhuType::intptr_type(), aligned_frame_size_words),
+                                                          ConstantInt::get(YuhuType::intptr_type(), _extended_frame_size),
                                                           "extended_sp");
 
-  // Create the frame
+    std::vector<llvm::Value*> live_values;
+    live_values.push_back(extended_sp);
+    builder()->CreateStackMap(EXTENDED_SP_ALLOCA_STATEPOINT_ID, 0, live_values); // create stack map to locate the offset from sp/fp
+
+  // Create the frame, but don't clear memory to zero, will call CreateMemset if necessary
   _frame = builder()->CreateBitCast(
     extended_sp,
     PointerType::getUnqual(
-      llvm::ArrayType::get(YuhuType::intptr_type(), aligned_frame_size_words)),
+      llvm::ArrayType::get(YuhuType::intptr_type(), _extended_frame_size)),
     "frame");
 
   int offset = 0;
@@ -102,8 +109,8 @@ void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
   // Unextended SP
   builder()->CreateStore(final_sp, slot_addr(offset++));
 
-  // PC
-  _pc_slot_offset = offset++;
+  // PC slot (reused as return slot for non-void methods)
+  _return_slot_addr = slot_addr(offset++, YuhuType::intptr_type(), "return_slot");
 
   // Frame header
   // For AArch64, we use a simple frame marker (not Zero-specific)

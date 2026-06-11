@@ -59,7 +59,7 @@ void YuhuStateScanner::scan(YuhuState* state) {
   process_oop_tmp_slot(
     state->oop_tmp_addr(), stack()->oop_tmp_slot_offset());
   process_method_slot(state->method_addr(), stack()->method_slot_offset());
-  process_pc_slot(stack()->pc_slot_offset());
+//  process_pc_slot(stack()->pc_slot_offset());
   end_frame_header();
 
   // Local variables

@@ -520,7 +520,7 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
 
       YuhuDebugInformationRecorder::get()->register_call_site(
               virtual_offset, call_target_va, helper_address,
-              CallSiteType::vm_call, bci());
+              CallSiteType::vm_call, bci(), current_state()->num_monitors());
 
     builder()->CreateCondBr(
       builder()->CreateICmpNE(
@@ -598,7 +598,8 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
                                                             call_target_va,
                                                             helper_address,
                                                             CallSiteType::safepoint_poll,
-                                                            is_method_entry_safepoint ? -1 : bci());
+                                                            is_method_entry_safepoint ? -1 : bci(),
+                                                            current_state()->num_monitors());
 
     llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::safepoint_poll);
 
@@ -702,7 +703,7 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     }
   }
   
-  // 2. Expression stack (in order bottom..top)
+  // 2. Expression stack (in order top..bottom)
   for (int i = 0; i < state->stack_depth(); i++) {
     YuhuValue* stack_val = state->stack(i);
     
@@ -776,7 +777,12 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     stack()->CreateCallSitePlaceholder(last_java_pc_va);
 
     // NEW: Register call site for later patching
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t)&handle_deoptimization, CallSiteType::deopt_call, bci());
+    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
+                                                            call_target_va,
+                                                            (uint64_t)&handle_deoptimization,
+                                                            CallSiteType::deopt_call,
+                                                            bci(),
+                                                            current_state()->num_monitors());
   
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
@@ -858,7 +864,7 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
   // interpreter expression stack — a location the i2c adapter never reads
   // after a compiled method return (the i2c adapter only consumes x0).
   if (type != T_VOID) {
-    llvm::AllocaInst* ret_slot = function()->return_slot();
+    llvm::Value* ret_slot = function()->return_slot();
     assert(ret_slot != NULL, "return slot must exist for non-void returns");
     builder()->CreateStore(
       pop_result(type)->generic_value(),
@@ -1486,7 +1492,12 @@ void YuhuTopLevelBlock::do_call() {
   llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::java_call);
   
   // NEW: Register call site for later patching
-  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, (uint64_t) compiled_entry_address, CallSiteType::java_call, bci());
+  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
+                                                          call_target_va,
+                                                          (uint64_t) compiled_entry_address,
+                                                          CallSiteType::java_call,
+                                                          bci(),
+                                                          current_state()->num_monitors());
 
   // Save callee-saved registers that Yuhu uses but interpreter may corrupt
 //  builder()->CreateSaveCalleeSavedRegisters();
@@ -1734,7 +1745,7 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
 
     YuhuDebugInformationRecorder::get()->register_call_site(
             virtual_offset, call_target_va, helper_address,
-            CallSiteType::vm_call, bci());
+            CallSiteType::vm_call, bci(), current_state()->num_monitors());
 
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;

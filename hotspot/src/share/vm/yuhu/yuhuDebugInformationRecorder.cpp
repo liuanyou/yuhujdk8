@@ -48,6 +48,8 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   _stack_map_entries = new GrowableArray<StackMapEntry*>();
 
   _deopt_bundles = new GrowableArray<DeoptBundle*>();
+
+  _frame_layout_info = new FrameLayoutInfo();
 }
 
 // Destructor
@@ -93,7 +95,8 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
                                                        uint64_t virtual_address, 
                                                        uint64_t helper_address,
                                                        CallSiteType call_site_type,
-                                                       int bci) {
+                                                       int bci,
+                                                       int num_monitors) {
     int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
         return *((uint64_t*)token) == entry->virtual_offset;
     });
@@ -107,6 +110,7 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
     call_site_entry->helper_address = helper_address;
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
+    call_site_entry->num_monitors = num_monitors;
     call_site_entry->return_pc_offset = 0;
     call_site_entry->blr_offset = 0;
     call_site_entry->call_target_offset = 0;
@@ -290,6 +294,25 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
     bundle->monitors->append(location);
 }
 
+void YuhuDebugInformationRecorder::register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words) {
+    _frame_layout_info->header_words = header_words;
+    _frame_layout_info->monitor_words = monitor_words;
+    _frame_layout_info->stack_words = stack_words;
+    _frame_layout_info->locals_words = locals_words;
+    _frame_layout_info->extended_frame_words = extended_frame_words;
+}
+
+void YuhuDebugInformationRecorder::register_frame_layout_info_with_prologue_fields(int total_frame_size_in_bytes, int num_of_prologue_registers) {
+    _frame_layout_info->total_frame_size_in_bytes = total_frame_size_in_bytes;
+    _frame_layout_info->num_of_prologue_registers = num_of_prologue_registers;
+}
+
+void YuhuDebugInformationRecorder::register_frame_layout_info_with_stack_map_fields(int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset) {
+    _frame_layout_info->extended_frame_reg_num = extended_frame_reg_num;
+    _frame_layout_info->extended_frame_kind = extended_frame_kind;
+    _frame_layout_info->extended_frame_offset = extended_frame_offset;
+}
+
 void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                       ciMethod* method,
                                       int plus_offset,
@@ -376,6 +399,60 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                     oopmap->set_oop(YuhuStack::slot2reg(offset_in_bytes >> LogBytesPerWord));
                 }
             }
+
+            if (call_site_entry->num_monitors > 0) {
+                // RS4GC doesn't include monitor objects in stack map, need to handle it manually
+                // a normal frame layout should be like:
+                /*  0x000000016da16410:   000000016da16410 00000001045ef938 - spill area
+                    0x000000016da16420:   0000000144809800 0000000104545558 - spill area
+                    0x000000016da16430:   000000076af84580 000000076af845a0 - spill area
+                    0x000000016da16440:   0000000000000000 000000076acfffa8 - expression stack [2] (bottom) / expression stack [1]
+                    0x000000016da16450:   000000076af84580 0000000000000031 - expression stack [0] (top) / monitor [0] (newest at higher address) header
+                    0x000000016da16460:   000000076ad181d8 000000000000000b - monitor [0] (newest at higher address) object / oop tmp
+                    0x000000016da16470:   00000001045ef938 000000016da16410 - method slot / final sp
+                    0x000000016da16480:   000000076acfffa8 00000000deadbeef - return slot / frame marker
+                    0x000000016da16490:   000000016da164e0 000000010451e4ed - fp / local [3]
+                    0x000000016da164a0:   000000076af84580 000000076af845a0 - local [2] / local [1]
+                    0x000000016da164b0:   000000076af84580 000000010451e508 - local [0] / padding
+                    0x000000016da164c0:   000000010451e4f0 000000010e10d060 - prologue x22 / x21
+                    0x000000016da164d0:   0000000000000003 00000000dead0324 - prologue x20 / x19
+                    0x000000016da164e0:   000000016da16500 000000010f8e24ac - prologue x29 / x30
+                 */
+                assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
+                       _frame_layout_info->num_of_prologue_registers != -1 &&
+                       _frame_layout_info->header_words != -1 &&
+                       _frame_layout_info->monitor_words != -1 &&
+                       _frame_layout_info->stack_words != -1 &&
+                       _frame_layout_info->locals_words != -1 &&
+                       _frame_layout_info->extended_frame_words != -1 &&
+                       _frame_layout_info->extended_frame_reg_num != -1 &&
+                       _frame_layout_info->extended_frame_kind != -1 &&
+                       _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
+                // Usually it should be fp register, sometimes it uses sp register,
+                // but don't know when, assume it is always fp register
+                assert(_frame_layout_info->extended_frame_reg_num == 29 &&
+                       _frame_layout_info->extended_frame_offset < 0 &&
+                       _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+
+                // 2 words is for x29,x30 in prologue
+                int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
+                                    - (-_frame_layout_info->extended_frame_offset / wordSize);
+
+                int max_monitors = _frame_layout_info->monitor_words / 2;
+                // from oldest to newest
+                for (int j = 0; j < call_site_entry->num_monitors; ++j) {
+                    int monitor_object_offset_in_bytes =
+                            (spill_words + _frame_layout_info->stack_words + (max_monitors - j - 1) * 2 + 1) * wordSize;
+                    if (YuhuTraceOffset && YuhuStackMapFile != NULL) {
+                        FILE *f = fopen(YuhuStackMapFile, "a");
+                        fileStream fs(f, true);
+                        fs.print_cr("[StackMap] monitor_object_offset_in_bytes: %d", monitor_object_offset_in_bytes);
+                        fs.flush();
+                    }
+                    oopmap->set_oop(YuhuStack::slot2reg(monitor_object_offset_in_bytes >> LogBytesPerWord));
+                }
+            }
+
             // call sites need an oopmap even there is no live oop
             real_recorder->add_safepoint(pc_offset, oopmap);
             real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
@@ -388,7 +465,6 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                                           NULL, // DebugToken* for expression stack (can be NULL/empty)
                                           NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
             real_recorder->end_safepoint(pc_offset);
-
         } else {
             // add plus_offset to get offset in code cache
             int pc_offset = return_pc_offset + plus_offset;

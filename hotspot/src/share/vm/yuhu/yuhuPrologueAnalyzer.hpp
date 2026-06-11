@@ -13,7 +13,7 @@ class YuhuPrologueAnalyzer : public AllStatic {
 public:
   // Analyze the prologue of an AArch64 function starting at code_start.
   // Returns the total stack bytes allocated by the prologue (from stp instructions).
-  static int analyze_prologue_stack_bytes(address code_start);
+  static int analyze_prologue_stack_bytes(address code_start, int *num_of_prologue_registers);
 
   // Find the offset of x28's saved value relative to x29 (frame pointer)
   // Returns the offset as a positive number for use in: ldr x8, [x29, #offset]

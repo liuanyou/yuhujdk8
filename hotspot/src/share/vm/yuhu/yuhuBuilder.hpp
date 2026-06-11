@@ -192,6 +192,8 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // LLVM intrinsics for deoptimization
   llvm::CallInst* CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles);
 
+  llvm::CallInst* CreateStackMap(uint64_t id, uint32_t num_shadow_bytes, llvm::ArrayRef<llvm::Value*> live_values);
+
   // Intrinsics and external functions, part 4: Native-Java transition.
   //   This is a special case in that it is invoked during a thread
   //   state transition.  The stack must be set up for walking, and it

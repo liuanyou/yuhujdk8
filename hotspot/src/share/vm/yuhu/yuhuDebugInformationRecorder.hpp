@@ -28,6 +28,7 @@ struct CallSiteEntry {
     uint64_t helper_address; // generated at IR phase
     CallSiteType call_site_type; // generated at IR phase
     int bci; // generated at IR phase
+    int num_monitors; // generated at IR phase
     uint64_t call_target_offset; // extracted by ORC plugin
     uint64_t blr_offset; // extracted by ORC plugin
     uint64_t return_pc_offset; // extracted by ORC plugin
@@ -54,6 +55,19 @@ struct DeoptBundle {
     GrowableArray<StackMapLocation*>* monitors;
 };
 
+struct FrameLayoutInfo {
+    int total_frame_size_in_bytes = -1; // extracted from machine code's prologue
+    int num_of_prologue_registers = -1; // extracted from machine code's prologue
+    int header_words = -1; // initialized in YuhuStack::initialize method
+    int monitor_words = -1; // initialized in YuhuStack::initialize method
+    int stack_words = - 1; // initialized in YuhuStack::initialize method
+    int locals_words = -1; // initialized in YuhuStack::initialize method
+    int extended_frame_words = -1; // initialized in YuhuStack::initialize method
+    int extended_frame_reg_num = -1; // extracted from stack map
+    int extended_frame_kind = -1; // extracted from stack map
+    int extended_frame_offset = -1; // extracted from stack map
+};
+
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
 
@@ -72,6 +86,8 @@ private:
 
   // deopt statepoint locations
   GrowableArray<DeoptBundle*>* _deopt_bundles;
+
+  FrameLayoutInfo* _frame_layout_info;
 
   // Mangled function name
   std::string _mangled_func_name;
@@ -98,7 +114,8 @@ public:
                           uint64_t virtual_address,
                           uint64_t helper_address,
                           CallSiteType call_site_type,
-                          int bci);
+                          int bci,
+                          int num_monitors);
 
   void clean_eliminated_call_sites() {
       // remove call sites which don't appear in llvm machine code
@@ -258,6 +275,12 @@ public:
   void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_VOID);
 
   void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_OBJECT);
+
+  void register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
+
+  void register_frame_layout_info_with_prologue_fields(int total_frame_size_in_bytes, int num_of_prologue_registers);
+
+  void register_frame_layout_info_with_stack_map_fields(int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset);
 
   void set_mangled_func_name(std::string mangled_func_name) {
       _mangled_func_name = mangled_func_name;

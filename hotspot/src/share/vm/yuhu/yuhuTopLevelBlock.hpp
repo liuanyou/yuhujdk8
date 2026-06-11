@@ -325,7 +325,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
     // Step 5: Replace callee with virtual address placeholder
     llvm::Value* virtual_callee = builder()->CreateIntToPtr(call_target, callee->getType());
 
-      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci());
+      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci(), current_state()->num_monitors());
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
     decache_for_VM_call(virtual_offset);
