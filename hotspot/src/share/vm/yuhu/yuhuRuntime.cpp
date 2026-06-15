@@ -712,7 +712,7 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
     CodeBuffer cb(name, stub_size, stub_size);
     YuhuMacroAssembler masm(&cb);
 
-    masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::deopt_blob()->unpack()));
+    masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::deopt_blob()->unpack_with_reexecution()));
     masm.flush();
 
     int frame_size_in_words = 0;
