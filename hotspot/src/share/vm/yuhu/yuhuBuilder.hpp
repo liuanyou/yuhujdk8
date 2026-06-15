@@ -186,7 +186,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   //   the semi VM call returns.
  public:
   llvm::Value* throw_StackOverflowError();
-  llvm::Value* uncommon_trap();
   llvm::Value* debug_stack_overflow_check();
   
   // LLVM intrinsics for deoptimization

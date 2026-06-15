@@ -30,7 +30,8 @@
 #include "runtime/deoptimization.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/thread.hpp"
-#include "yuhu/llvmHeaders.hpp"
+#include "runtime/frame.hpp"
+#include "runtime/registerMap.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #ifdef TARGET_ARCH_aarch64
@@ -217,14 +218,6 @@ bool YuhuRuntime::is_subtype_of(Klass* check_klass, Klass* object_klass) {
   return object_klass->is_subtype_of(check_klass);
 }
 
-int YuhuRuntime::uncommon_trap(JavaThread* thread, int trap_request) {
-  Thread *THREAD = thread;
-
-  // TODO: AArch64 implementation
-  // For AArch64, deoptimization uses standard frame API, not ZeroStack
-  return 0;
-}
-
 void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
                                              intptr_t current_sp,
                                              intptr_t new_sp,
@@ -278,6 +271,8 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   const int stub_size = 64;
   CodeBuffer cb("yuhu_static_call_stub", stub_size, stub_size);
   YuhuMacroAssembler masm(&cb);
+
+  address begin = masm.current_pc();
   
   // Get the Method* address (target method)
   Method* method_ptr = target_method->get_Method();
@@ -324,6 +319,29 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   
   // Return
   masm.write_inst("ret");
+
+  address exception_handler_begin = masm.current_pc();
+
+  if (!_static_call_stub_exception_handler_offset) {
+      _static_call_stub_exception_handler_offset = (int)(exception_handler_begin - begin);
+  } else {
+      assert(_static_call_stub_exception_handler_offset == (int)(exception_handler_begin - begin), "should be always the same offset");
+  }
+
+    // pop frame
+    masm.write_inst("ldp x29, x30, [sp, #16]");
+    masm.write_inst("ldp xzr, x19, [sp]");
+    masm.write_inst("add sp, sp, #32");
+    // get caller's exception handler
+    masm.write_inst("stp x0, x30, [sp, #-16]!");
+    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                                         SharedRuntime::exception_handler_for_return_address),
+                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
+    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
+    masm.write_inst_br(YuhuMacroAssembler::x1);
+
   masm.flush();
   
   // Create RuntimeStub
@@ -358,6 +376,8 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   const int stub_size = 64;
   CodeBuffer buffer("yuhu_virtual_call_stub", stub_size, stub_size);
   YuhuMacroAssembler masm(&buffer);
+
+  address begin = masm.current_pc();
   
   // Frame layout: same as static call stub
   
@@ -395,6 +415,29 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
 
     // Return
     masm.write_inst("ret");
+
+    address exception_handler_begin = masm.current_pc();
+
+    if (!_virtual_call_stub_exception_handler_offset) {
+        _virtual_call_stub_exception_handler_offset = (int)(exception_handler_begin - begin);
+    } else {
+        assert(_virtual_call_stub_exception_handler_offset == (int)(exception_handler_begin - begin), "should be always the same offset");
+    }
+
+    // pop frame
+    masm.write_inst("ldp x29, x30, [sp, #16]");
+    masm.write_inst("ldp xzr, x19, [sp]");
+    masm.write_inst("add sp, sp, #32");
+    // get caller's exception handler
+    masm.write_inst("stp x0, x30, [sp, #-16]!");
+    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                                         SharedRuntime::exception_handler_for_return_address),
+                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
+    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
+    masm.write_inst_br(YuhuMacroAssembler::x1);
+
     masm.flush();
   
   // Create RuntimeStub
@@ -427,6 +470,8 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   const int stub_size = 128;
   CodeBuffer cb("yuhu_interface_call_stub", stub_size, stub_size);
   YuhuMacroAssembler masm(&cb);
+
+  address begin = masm.current_pc();
   
   ciInstanceKlass* ci_interface_klass = target_method->holder();
   InstanceKlass* interface_klass = ci_interface_klass->get_instanceKlass();
@@ -508,6 +553,29 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
 
     // Return
     masm.write_inst("ret");
+
+    address exception_handler_begin = masm.current_pc();
+
+    if (!_interface_call_stub_exception_handler_offset) {
+        _interface_call_stub_exception_handler_offset = (int)(exception_handler_begin - begin);
+    } else {
+        assert(_interface_call_stub_exception_handler_offset == (int)(exception_handler_begin - begin), "should be always the same offset");
+    }
+
+    // pop frame
+    masm.write_inst("ldp x29, x30, [sp, #16]");
+    masm.write_inst("ldp xzr, x19, [sp]");
+    masm.write_inst("add sp, sp, #32");
+    // get caller's exception handler
+    masm.write_inst("stp x0, x30, [sp, #-16]!");
+    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
+                                                         SharedRuntime::exception_handler_for_return_address),
+                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
+    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
+    masm.write_inst_br(YuhuMacroAssembler::x1);
+
     masm.flush();
   
   // Create RuntimeStub
@@ -556,6 +624,10 @@ address YuhuRuntime::_find_exception_handler_stub = NULL;
 address YuhuRuntime::_is_subtype_of_stub = NULL;
 address YuhuRuntime::_current_time_millis_stub = NULL;
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
+
+volatile int YuhuRuntime::_static_call_stub_exception_handler_offset = 0;
+volatile int YuhuRuntime::_virtual_call_stub_exception_handler_offset = 0;
+volatile int YuhuRuntime::_interface_call_stub_exception_handler_offset = 0;
 
 // Initialize all VM call stubs
 void YuhuRuntime::initialize_vm_stubs() {
@@ -659,4 +731,37 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
 
 #endif // TARGET_ARCH_aarch64
 
+// Check if an address belongs to a Yuhu RuntimeStub
+// All Yuhu RuntimeStubs have names starting with "yuhu_"
+bool YuhuRuntime::is_yuhu_call_stub(address addr) {
+  CodeBlob* blob = CodeCache::find_blob(addr);
+  if (blob == NULL || !blob->is_runtime_stub()) {
+    return false;
+  }
+  
+  // Check if the stub name starts with "yuhu_"
+  const char* name = blob->name();
+  if (name == NULL) {
+    return false;
+  }
+  
+  return strcmp(name, "yuhu_static_call_stub") == 0 ||
+            strcmp(name, "yuhu_virtual_call_stub") == 0 ||
+            strcmp(name, "yuhu_interface_call_stub") == 0;
+}
 
+address YuhuRuntime::exception_begin(address addr) {
+    CodeBlob* blob = CodeCache::find_blob(addr);
+    assert(blob->is_runtime_stub(), "must be runtime stub");
+    const char* name = blob->name();
+
+    if (strcmp(name, "yuhu_static_call_stub") == 0) {
+        return blob->code_begin() + _static_call_stub_exception_handler_offset;
+    } else if (strcmp(name, "yuhu_virtual_call_stub") == 0) {
+        return blob->code_begin() + _virtual_call_stub_exception_handler_offset;
+    } else if (strcmp(name, "yuhu_interface_call_stub") == 0) {
+        return blob->code_begin() + _interface_call_stub_exception_handler_offset;
+    }
+    ShouldNotReachHere();
+    return NULL;
+}

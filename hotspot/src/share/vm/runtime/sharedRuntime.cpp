@@ -35,6 +35,7 @@
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interpreterRuntime.hpp"
 #include "interpreter/yuhu/yuhu_interpreter.hpp"
+#include "yuhu/yuhuRuntime.hpp"
 #include "memory/gcLocker.inline.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/oop.inline.hpp"
@@ -499,6 +500,8 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
     } else {
       return nm->exception_begin();
     }
+  } else if (YuhuRuntime::is_yuhu_call_stub(return_address)) {
+      return YuhuRuntime::exception_begin(return_address);
   }
 
   // Entry code
@@ -545,8 +548,10 @@ address SharedRuntime::get_poll_stub(address pc) {
   assert( cb && cb->is_nmethod(), "safepoint polling: pc must refer to an nmethod" );
 
   // Look up the relocation information
-  assert( ((nmethod*)cb)->is_at_poll_or_poll_return(pc),
-    "safepoint polling: type must be poll" );
+  if (!((nmethod *) cb)->is_at_poll_or_poll_return(pc)) {
+      assert(((nmethod *) cb)->is_at_poll_or_poll_return(pc),
+             "safepoint polling: type must be poll");
+  }
 
   assert( ((NativeInstruction*)pc)->is_safepoint_poll(),
     "Only polling locations are used for safepoint");

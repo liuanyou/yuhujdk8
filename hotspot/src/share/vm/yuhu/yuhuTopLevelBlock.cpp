@@ -1835,7 +1835,7 @@ void YuhuTopLevelBlock::do_trapping_instance_check(ciKlass* klass) {
   set_current_state(saved_state->copy());
   do_trap(
     Deoptimization::make_trap_request(
-      Deoptimization::Reason_uninitialized,
+      Deoptimization::Reason_unloaded,
       Deoptimization::Action_reinterpret));
 
   // If it's null then we're ok

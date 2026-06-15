@@ -967,9 +967,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 //        env->record_failure("normal-only test mode: skipping implWrite compilation");
 //        return;
 //    }
-    if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/StreamEncoder") == 0
-        && strcmp(target->name()->as_utf8(), "ensureOpen") == 0
-        && strcmp(target->signature()->as_symbol()->as_utf8(), "()V") == 0) {
+    if (strcmp(target->holder()->name()->as_utf8(), "com/example/DeoptTest") == 0
+        && strcmp(target->name()->as_utf8(), "thrower") == 0
+        && strcmp(target->signature()->as_symbol()->as_utf8(), "(I)V") == 0) {
+        assert(true, "just checking");
+    }
+    if (strcmp(target->holder()->name()->as_utf8(), "com/example/DeoptTest") == 0
+        && strcmp(target->name()->as_utf8(), "callerWithHandler") == 0
+        && strcmp(target->signature()->as_symbol()->as_utf8(), "(I)V") == 0) {
         assert(true, "just checking");
     }
   // ========== 临时测试代码结束 ==========

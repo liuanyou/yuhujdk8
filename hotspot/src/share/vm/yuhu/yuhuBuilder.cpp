@@ -510,10 +510,6 @@ Value* YuhuBuilder::throw_StackOverflowError() {
   return make_function((address) SharedRuntime::throw_StackOverflowError, "T", "v");
 }
 
-Value* YuhuBuilder::uncommon_trap() {
-  return make_function((address) YuhuRuntime::uncommon_trap, "Ti", "i");
-}
-
 CallInst* YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
     llvm::Type* return_type = YuhuType::to_stackType(function()->target_method()->return_type());
 

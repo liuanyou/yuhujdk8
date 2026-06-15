@@ -28,8 +28,6 @@
 
 #include "memory/allocation.hpp"
 #include "runtime/thread.hpp"
-#include "yuhu/llvmHeaders.hpp"
-#include "yuhu/llvmValue.hpp"
 
 class ciMethod;
 
@@ -51,6 +49,10 @@ class YuhuRuntime : public AllStatic {
   static address _current_time_millis_stub;
 
   static address _handle_deoptimization_stub;
+
+  static volatile int _static_call_stub_exception_handler_offset; // this is the offset from the insts begin
+  static volatile int _virtual_call_stub_exception_handler_offset; // this is the offset from the insts begin
+  static volatile int _interface_call_stub_exception_handler_offset; // this is the offset from the insts begin
   
   // Stub generation functions
   static address generate_vm_stub(const char* name, address C_function);
@@ -76,6 +78,11 @@ class YuhuRuntime : public AllStatic {
 
   static address handle_deoptimization_stub() { return _handle_deoptimization_stub; }
   
+  // Check if an address belongs to a Yuhu RuntimeStub
+  static bool is_yuhu_call_stub(address addr);
+
+  static address exception_begin(address addr);
+
   // Generate static call stub for direct method calls
   static address generate_static_call_stub(ciMethod* target_method, 
                                            ciMethod* current_method);
@@ -140,7 +147,6 @@ class YuhuRuntime : public AllStatic {
  public:
   static void dump(const char *name, intptr_t value);
   static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
-  static int uncommon_trap(JavaThread* thread, int trap_request);
   
   // Debug helper for stack overflow check
   static void debug_stack_overflow_check(JavaThread* thread,
