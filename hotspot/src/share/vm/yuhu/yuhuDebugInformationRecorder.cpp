@@ -313,6 +313,32 @@ void YuhuDebugInformationRecorder::register_frame_layout_info_with_stack_map_fie
     _frame_layout_info->extended_frame_offset = extended_frame_offset;
 }
 
+static ScopeValue* createScopeValue(StackMapLocation* loc, Location::Type loc_type, uint8_t basic_type) {
+    using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
+    ScopeValue* scopeValue = NULL;
+
+    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
+        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
+        // Stack location
+        scopeValue = new LocationValue(Location::new_stk_loc(loc_type, loc->offset));
+    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
+        // Register location
+        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
+        scopeValue = new LocationValue(Location::new_reg_loc(loc_type, reg));
+    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+        // Constant value (likely null or primitive constant)
+        if (basic_type == T_LONG) {
+            scopeValue = new ConstantLongValue(loc->constant);
+        } else if (basic_type == T_DOUBLE) {
+            scopeValue = new ConstantDoubleValue(loc->constant);
+        } else {
+            scopeValue = new ConstantIntValue(loc->constant);
+        }
+    }
+    // Skip unsupported location kinds
+    return scopeValue;
+}
+
 void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                       ciMethod* method,
                                       int plus_offset,
@@ -481,104 +507,150 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             // Convert locals
             if (bundle->locals && bundle->locals->length() > 0) {
                 locals = new GrowableArray<ScopeValue*>();
-                for (int i = 0; i < bundle->locals->length(); i++) {
-                    StackMapLocation* loc = bundle->locals->at(i);
-                    Location location;
+                for (int j = 0; j < bundle->locals->length(); j++) {
+                    StackMapLocation* loc = bundle->locals->at(j);
                     
                     // Determine Location::Type based on BasicType
-                    Location::Type loc_type = Location::normal; // Default for integers
+                    Location::Type loc_type;
                     switch (loc->basic_type) {
                         case T_OBJECT:
-                        case T_ARRAY:
+                        case T_ARRAY: {
                             loc_type = Location::oop;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue && scopeValue->is_location(), "scope value should be created as location value, check LocationKind");
+                            locals->append(scopeValue);
+                        }
                             break;
-                        case T_LONG:
+                        case T_LONG: {
+                            // in deopt bundle, first slot is T_LONG with actual value, second slot is T_LONG2 with padding
+                            // but in order to reconstruct T_LONG for interpreter, first slot should be padding, second slot should be actual value
+                            // construct second slot
                             loc_type = Location::lng;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // construct first slot
+                            assert(bundle->locals->at(j++)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            Location invalid_location;
+
+                            locals->append(new LocationValue(invalid_location));
+                            locals->append(scopeValue);
+                        }
                             break;
-                        case T_FLOAT:
-                            loc_type = Location::float_in_dbl;
-                            break;
-                        case T_DOUBLE:
+                        case T_DOUBLE: {
+                            // in deopt bundle, first slot is T_DOUBLE with actual value, second slot is T_LONG2 with padding
+                            // but in order to reconstruct T_DOUBLE for interpreter, first slot should be padding, second slot should be actual value
+                            // construct second slot
                             loc_type = Location::dbl;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // construct first slot
+                            assert(bundle->locals->at(j++)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
+                                   "should be T_DOUBLE2 type");
+                            Location invalid_location;
+
+                            locals->append(new LocationValue(invalid_location));
+                            locals->append(scopeValue);
+                        }
                             break;
-                        default:
+                        case T_FLOAT: {
+                            loc_type = Location::float_in_dbl;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            locals->append(scopeValue);
+                        }
+                            break;
+                        case ciTypeFlow::StateVector::T_BOTTOM: {
+                            Location invalid_location; // use Location::invalid for default constructor
+                            locals->append(new LocationValue(invalid_location));
+                        }
+                            break;
+                        default: {
                             loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            locals->append(scopeValue);
+                        }
                             break;
                     }
-                    
-                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
-                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-                        // Stack location
-                        location = Location::new_stk_loc(loc_type, loc->offset);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-                        // Register location
-                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
-                        location = Location::new_reg_loc(loc_type, reg);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
-                        // Constant value (likely null or primitive constant)
-                        locals->append(new ConstantIntValue(loc->constant));
-                        continue;
-                    } else {
-                        continue; // Skip unsupported location kinds
-                    }
-                    
-                    locals->append(new LocationValue(location));
                 }
             }
 
             // Convert expression stacks
             if (bundle->expression_stacks && bundle->expression_stacks->length() > 0) {
                 expressions = new GrowableArray<ScopeValue*>();
-                for (int i = 0; i < bundle->expression_stacks->length(); i++) {
-                    StackMapLocation* loc = bundle->expression_stacks->at(i);
-                    Location location;
-                    
+                for (int j = 0; j < bundle->expression_stacks->length(); j++) {
+                    StackMapLocation* loc = bundle->expression_stacks->at(j);
+
                     // Determine Location::Type based on BasicType
-                    Location::Type loc_type = Location::normal; // Default for integers
+                    Location::Type loc_type;
                     switch (loc->basic_type) {
                         case T_OBJECT:
-                        case T_ARRAY:
+                        case T_ARRAY: {
                             loc_type = Location::oop;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue && scopeValue->is_location(), "scope value should be created as location value, check LocationKind");
+                            expressions->append(scopeValue);
+                        }
                             break;
-                        case T_LONG:
+                        case T_LONG: {
+                            // in deopt bundle, first slot is T_LONG with actual value, second slot is T_LONG2 with padding
+                            // but in order to reconstruct T_LONG for interpreter, first slot should be padding, second slot should be actual value
+                            // construct second slot
                             loc_type = Location::lng;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // construct first slot
+                            assert(bundle->expression_stacks->at(j++)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            Location invalid_location;
+
+                            expressions->append(new LocationValue(invalid_location));
+                            expressions->append(scopeValue);
+                        }
                             break;
-                        case T_FLOAT:
-                            loc_type = Location::float_in_dbl;
-                            break;
-                        case T_DOUBLE:
+                        case T_DOUBLE: {
+                            // in deopt bundle, first slot is T_DOUBLE with actual value, second slot is T_LONG2 with padding
+                            // but in order to reconstruct T_DOUBLE for interpreter, first slot should be padding, second slot should be actual value
+                            // construct second slot
                             loc_type = Location::dbl;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // construct first slot
+                            assert(bundle->expression_stacks->at(j++)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
+                                   "should be T_DOUBLE2 type");
+                            Location invalid_location;
+
+                            expressions->append(new LocationValue(invalid_location));
+                            expressions->append(scopeValue);
+                        }
                             break;
-                        default:
+                        case T_FLOAT: {
+                            loc_type = Location::float_in_dbl;
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            expressions->append(scopeValue);
+                        }
+                            break;
+                        case ciTypeFlow::StateVector::T_BOTTOM: {
+                            Location invalid_location; // use Location::invalid for default constructor
+                            expressions->append(new LocationValue(invalid_location));
+                        }
+                            break;
+                        default: {
                             loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
+                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
+                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            expressions->append(scopeValue);
+                        }
                             break;
                     }
-                    
-                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
-                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-                        // Stack location
-                        location = Location::new_stk_loc(loc_type, loc->offset);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-                        // Register location
-                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
-                        location = Location::new_reg_loc(loc_type, reg);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
-                        // Constant value
-                        expressions->append(new ConstantIntValue(loc->constant));
-                        continue;
-                    } else {
-                        continue; // Skip unsupported location kinds
-                    }
-                    
-                    expressions->append(new LocationValue(location));
                 }
             }
 
             // Convert monitors
             if (bundle->monitors && bundle->monitors->length() > 0) {
                 monitors = new GrowableArray<MonitorValue*>();
-                for (int i = 0; i < bundle->monitors->length(); i++) {
-                    StackMapLocation* loc = bundle->monitors->at(i);
+                for (int j = 0; j < bundle->monitors->length(); j++) {
+                    StackMapLocation* loc = bundle->monitors->at(j);
                     Location owner_loc;
                     
                     // Monitors are always T_OBJECT

@@ -681,12 +681,29 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   // 1. Local variables (in order 0..max_locals-1)
   for (int i = 0; i < max_locals(); i++) {
     YuhuValue* local = state->local(i);
-    if (local != NULL) {
-      // Push type metadata first
-      BasicType basic_type = local->basic_type();
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
-      
-      llvm::Value* llvm_val = local->generic_value();
+    ciType* type = state->local_type_at(i);
+    BasicType slot_type = type->basic_type();
+    
+    // Skip padding slots (second half of long/double)
+    if (slot_type == ciTypeFlow::StateVector::T_LONG2 ||
+        slot_type == ciTypeFlow::StateVector::T_DOUBLE2) {
+      // Include padding slots with type marker
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), slot_type));
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
+      continue;
+    }
+    
+    // Push type metadata first
+    BasicType basic_type;
+    llvm::Value* llvm_val = NULL;
+    
+    if (local == NULL) {
+      // Empty/uninitialized slot
+      basic_type = static_cast<BasicType>(ciTypeFlow::StateVector::T_BOTTOM);
+      llvm_val = llvm::ConstantInt::get(builder()->getInt64Ty(), 0);
+    } else {
+      basic_type = local->basic_type();
+      llvm_val = local->generic_value();
       
       // Cast to i64 for uniform representation
       if (llvm_val->getType()->isPointerTy()) {
@@ -694,18 +711,29 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
       } else if (llvm_val->getType()->getIntegerBitWidth() != 64) {
         llvm_val = builder()->CreateIntCast(llvm_val, builder()->getInt64Ty(), false);
       }
-      
-      deopt_operands.push_back(llvm_val);
-    } else {
-      // Null local - push T_OBJECT type and null value
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), T_OBJECT));
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
     }
+    
+    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+    deopt_operands.push_back(llvm_val);
   }
   
   // 2. Expression stack (in order top..bottom)
   for (int i = 0; i < state->stack_depth(); i++) {
     YuhuValue* stack_val = state->stack(i);
+    
+    // Include padding slots (second half of long/double)
+    if (stack_val == NULL) {
+      // Padding slot - determine type from previous slot
+      assert(i > 0, "padding can't be first slot");
+      YuhuValue* prev = state->stack(i - 1);
+      assert(prev != NULL && prev->is_two_word(), "previous must be wide value");
+      BasicType padding_type = (prev->basic_type() == T_LONG) 
+        ? (BasicType)ciTypeFlow::StateVector::T_LONG2 
+        : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
+      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
+      continue;
+    }
     
     // Push type metadata first
     BasicType basic_type = stack_val->basic_type();
@@ -1427,12 +1455,16 @@ void YuhuTopLevelBlock::do_call() {
           break;
         case T_LONG:
           call_args.push_back(v->jlong_value());
+          // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
+          i--;
           break;
         case T_FLOAT:
           call_args.push_back(v->jfloat_value());
           break;
         case T_DOUBLE:
           call_args.push_back(v->jdouble_value());
+          // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
+          i--;
           break;
         case T_OBJECT:
         case T_ARRAY:
@@ -1461,12 +1493,16 @@ void YuhuTopLevelBlock::do_call() {
           break;
         case T_LONG:
           call_args.push_back(v->jlong_value());
+          // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
+          i--;
           break;
         case T_FLOAT:
           call_args.push_back(v->jfloat_value());
           break;
         case T_DOUBLE:
           call_args.push_back(v->jdouble_value());
+          // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
+          i--;
           break;
         case T_OBJECT:
         case T_ARRAY:

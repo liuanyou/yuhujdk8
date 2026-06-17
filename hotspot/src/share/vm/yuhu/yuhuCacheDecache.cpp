@@ -182,23 +182,71 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
                                                int          offset) {
   YuhuValue *value = *addr;
 
+  // Skip padding slots (second half of long/double)
+  if (value == NULL) {
+    return;
+  }
+
   // Only populate for real arguments
   if (local_slot_needs_read(index, value) && index < arg_size()) {
     llvm::Type* stack_ty = YuhuType::to_stackType(value->basic_type());
     llvm::Value* loaded = NULL;
     
-    // According to 021 design:
-    // - Parameters 0-7 are in registers (x0-x7), passed as function arguments
-    // - Parameters >= 8 are on the stack, read from x20 (esp)
+    // Calculate the LLVM argument index by counting actual parameters (not slots)
+    // For example, if we have: long_i, index, buf (static method)
+    // Bytecode slots: 0-1(long_i), 2(index), 3(buf)
+    // LLVM args: arg0=long_i, arg1=index, arg2=buf
+    // When index=0, arg_index=0; when index=2, arg_index=1
+    int arg_index = 0;
+    ciSignature* sig = function()->target()->signature();
+    bool is_static = function()->target()->is_static();
     
-    if (index < 8) {
+    // Count parameters before this slot to get the argument index
+    int current_slot = is_static ? 0 : 1;  // Slot 0 is 'this' for non-static
+    if (!is_static) {
+      if (index == 0) {
+        // This is the receiver (this)
+        arg_index = 0;
+      } else {
+        // Count through parameters to find which argument this slot belongs to
+        arg_index = 1;  // Start after receiver
+        for (int i = 0; i < sig->count(); i++) {
+          int slot_size = sig->type_at(i)->size();  // 2 for long/double, 1 for others
+          if (current_slot < index && current_slot + slot_size > index) {
+            // This slot belongs to parameter i
+            break;
+          }
+          if (current_slot >= index) {
+            break;
+          }
+          current_slot += slot_size;
+          arg_index++;
+        }
+      }
+    } else {
+      // Static method: count from slot 0
+      for (int i = 0; i < sig->count(); i++) {
+        int slot_size = sig->type_at(i)->size();
+        if (current_slot < index && current_slot + slot_size > index) {
+          // This slot belongs to parameter i
+          break;
+        }
+        if (current_slot >= index) {
+          break;
+        }
+        current_slot += slot_size;
+        arg_index++;
+      }
+    }
+    
+    if (arg_index < 8) {
       // Parameters 0-7: read from registers
-      if (index == 7) {
+      if (arg_index == 7) {
         // Special handling for p7 (8th parameter): read from x22 register where it was saved
         loaded = builder()->CreateReadX22Register();
       } else {
         // Parameters 0-6: read from function arguments (x1-x7)
-        llvm::Argument* arg = get_function_arg(index);
+        llvm::Argument* arg = get_function_arg(arg_index);
         assert(arg != NULL, "function argument should exist");
         loaded = arg;
       }
@@ -227,18 +275,10 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
       }
     } else {
       // Parameters >= 8: read from stack via x20 (esp)
-      // In AArch64 calling convention, arguments are passed as:
-      // - Non-static: x0-x7 = args[0-7], stack = args[8+]
-      //   So local[8] = arg[8] (in stack, calling convention arg_index = 8)
-      // - Static: x0 = NULL (from i2c adapter), x1-x7 = args[0-6], stack = args[7+]
-      //   So local[7] = arg[7] (in stack, calling convention arg_index = 7)
-      //   local[8] = arg[8] (in stack, calling convention arg_index = 8)
-      // 
-      // The calling convention arg_index is the same as local_index for both cases
-      // because local_index already accounts for the receiver (non-static) or NULL (static)
-      int arg_index = index;
+      // Use the argument index (not bytecode slot index) for stack offset calculation
+      int stack_arg_index = arg_index;
       
-      loaded = read_stack_arg(arg_index);
+      loaded = read_stack_arg(stack_arg_index);
       
       // Cast to the expected type if needed
       if (loaded->getType() != stack_ty) {

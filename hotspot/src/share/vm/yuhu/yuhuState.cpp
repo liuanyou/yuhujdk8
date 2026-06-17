@@ -39,9 +39,11 @@ using namespace llvm;
 
 void YuhuState::initialize(const YuhuState *state) {
   _locals = NEW_RESOURCE_ARRAY(YuhuValue*, max_locals());
+  _local_types = NEW_RESOURCE_ARRAY(ciType*, max_locals());
   _stack  = NEW_RESOURCE_ARRAY(YuhuValue*, max_stack());
 
   NOT_PRODUCT(memset(_locals, 23, max_locals() * sizeof(YuhuValue *)));
+  NOT_PRODUCT(memset(_local_types, 23, max_locals() * sizeof(ciType*)));
   NOT_PRODUCT(memset(_stack,  23, max_stack()  * sizeof(YuhuValue *)));
   _sp = _stack;
 
@@ -51,6 +53,7 @@ void YuhuState::initialize(const YuhuState *state) {
       if (value)
         value = value->clone();
       set_local(i, value);
+      _local_types[i] = state->_local_types[i];  // Copy type info
     }
 
     for (int i = state->stack_depth() - 1; i >= 0; i--) {
@@ -206,6 +209,7 @@ YuhuNormalEntryState::YuhuNormalEntryState(YuhuTopLevelBlock* block,
   // Local variables
   for (int i = 0; i < max_locals(); i++) {
     ciType *type = block->local_type_at_entry(i);
+    set_local_type(i, type);  // Track slot type
 
     YuhuValue *value = NULL;
     switch (type->basic_type()) {
@@ -254,6 +258,7 @@ YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
   // Local variables
   for (int i = 0; i < max_locals(); i++) {
     ciType *type = block->local_type_at_entry(i);
+    set_local_type(i, type);  // Track slot type
 
     YuhuValue *value = NULL;
     switch (type->basic_type()) {

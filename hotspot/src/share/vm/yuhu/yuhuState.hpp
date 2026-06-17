@@ -53,6 +53,7 @@ class YuhuState : public YuhuTargetInvariants {
  private:
   llvm::Value* _method;
   YuhuValue** _locals;
+  ciType** _local_types;  // Track slot types (T_LONG2, T_BOTTOM, etc.)
   YuhuValue** _stack;
   YuhuValue** _sp;
   int          _num_monitors;
@@ -83,6 +84,27 @@ class YuhuState : public YuhuTargetInvariants {
   }
   void set_local(int index, YuhuValue* value) {
     *local_addr(index) = value;
+    // Update type tracking
+    if (value != NULL) {
+      _local_types[index] = value->type();
+      // For wide values (long/double), mark next slot as padding
+      if (value->is_two_word() && index + 1 < max_locals()) {
+        _local_types[index + 1] = (value->basic_type() == T_LONG) 
+          ? ciTypeFlow::StateVector::long2_type() 
+          : ciTypeFlow::StateVector::double2_type();
+      }
+    } else {
+      _local_types[index] = ciTypeFlow::StateVector::bottom_type();
+    }
+  }
+  
+  ciType* local_type_at(int index) const {
+    assert(index >= 0 && index < max_locals(), "bad local variable index");
+    return _local_types[index];
+  }
+  void set_local_type(int index, ciType* type) {
+    assert(index >= 0 && index < max_locals(), "bad local variable index");
+    _local_types[index] = type;
   }
 
   // Expression stack

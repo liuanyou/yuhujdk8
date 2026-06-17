@@ -147,7 +147,7 @@ class YuhuTargetInvariants : public YuhuCompileInvariants {
   int         _max_monitors;
 
   // The method being compiled.
- protected:
+ public:
   ciMethod* target() const {
     return _target;
   }
