@@ -238,7 +238,9 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                 // Let's scan forward. Coz sometime llvm uses b instruction to jump to common machine code in order to share machine code for multiple call targets,
                 // and blr instruction is not always right after movz/movk sequences.
                 // Need 2 instructions at least.
-                if (offset + 8 <= Size && YuhuVirtualAddressScanner::is_placeholder_pc_pattern((uint32_t*)(CodeData + offset))) {
+                if (offset + 8 <= Size &&
+                    (YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern((uint32_t*)(CodeData + offset)) ||
+                    YuhuVirtualAddressScanner::is_call_site_without_call_target_marker_pattern((uint32_t*)(CodeData + offset)))) {
                     VirtualAddressMatch match;
 
                     bool found = YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
