@@ -164,7 +164,7 @@ void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offse
                                                       uint8_t location_kind,
                                                       uint32_t location_reg_num,
                                                       int32_t location_offset,
-                                                      uint32_t constant) {
+                                                      uint64_t constant) {
     int index = _stack_map_entries->find(&instruction_offset, [](void* token, StackMapEntry* entry) -> bool {
         return *((uint32_t*)token) == entry->instruction_offset;
     });
@@ -208,7 +208,7 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t ins
                                                                     uint8_t location_kind,
                                                                     uint32_t location_reg_num,
                                                                     int32_t location_offset,
-                                                                    uint32_t constant,
+                                                                    uint64_t constant,
                                                                     uint8_t basic_type) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
@@ -238,7 +238,7 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(u
                                                                                uint8_t location_kind,
                                                                                uint32_t location_reg_num,
                                                                                int32_t location_offset,
-                                                                               uint32_t constant,
+                                                                               uint64_t constant,
                                                                                uint8_t basic_type) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
@@ -268,7 +268,7 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
                                                                        uint8_t location_kind,
                                                                        uint32_t location_reg_num,
                                                                        int32_t location_offset,
-                                                                       uint32_t constant,
+                                                                       uint64_t constant,
                                                                        uint8_t basic_type) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
@@ -325,7 +325,8 @@ static ScopeValue* createScopeValue(StackMapLocation* loc, Location::Type loc_ty
         // Register location
         VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
         scopeValue = new LocationValue(Location::new_reg_loc(loc_type, reg));
-    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant) ||
+                loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::ConstantIndex)) {
         // Constant value (likely null or primitive constant)
         if (basic_type == T_LONG) {
             scopeValue = new ConstantLongValue(loc->constant);
@@ -529,7 +530,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                             ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
                             assert(scopeValue, "scope value should be created, check LocationKind");
                             // construct first slot
-                            assert(bundle->locals->at(j++)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            assert(bundle->locals->at(++j)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
                             Location invalid_location;
 
                             locals->append(new LocationValue(invalid_location));
@@ -544,7 +545,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                             ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
                             assert(scopeValue, "scope value should be created, check LocationKind");
                             // construct first slot
-                            assert(bundle->locals->at(j++)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
+                            assert(bundle->locals->at(++j)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
                                    "should be T_DOUBLE2 type");
                             Location invalid_location;
 
@@ -600,7 +601,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                             ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
                             assert(scopeValue, "scope value should be created, check LocationKind");
                             // construct first slot
-                            assert(bundle->expression_stacks->at(j++)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            assert(bundle->expression_stacks->at(++j)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
                             Location invalid_location;
 
                             expressions->append(new LocationValue(invalid_location));
@@ -615,7 +616,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                             ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
                             assert(scopeValue, "scope value should be created, check LocationKind");
                             // construct first slot
-                            assert(bundle->expression_stacks->at(j++)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
+                            assert(bundle->expression_stacks->at(++j)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
                                    "should be T_DOUBLE2 type");
                             Location invalid_location;
 
@@ -664,7 +665,8 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                         // Register location for monitor owner (oop)
                         VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
                         owner_loc = Location::new_reg_loc(loc_type, reg);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) {
+                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant) ||
+                                loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::ConstantIndex)) {
                         // Constant (likely null) - skip this monitor
                         continue;
                     } else {

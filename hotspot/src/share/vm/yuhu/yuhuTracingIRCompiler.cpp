@@ -151,6 +151,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         for (auto StatepointRecord : Parser.records()) {
             uint64_t StatepointID = StatepointRecord.getID();
             uint32_t InstructionOffset = StatepointRecord.getInstructionOffset();
+
             if (YuhuTraceMachineCode) {
                 if (YuhuStackMapFile != NULL) {
                     FILE *f = fopen(YuhuStackMapFile, "a");
@@ -228,7 +229,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                 if (YuhuStackMapFile != NULL) {
                                     FILE *f = fopen(YuhuStackMapFile, "a");
                                     fileStream fs(f, true);
-                                    fs.print_cr("[StackMap]     Deopt Bundle operand at Constant: %d",
+                                    fs.print_cr("[StackMap]     Deopt Bundle operand at Constant: %llu",
                                                 location.constant);
                                     fs.flush();
                                 } else {
@@ -238,14 +239,15 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                             break;
                         case StackMapParser::LocationKind::ConstantIndex:
                             uint32_t constantIndex = LocationRecord.getConstantIndex();
+                            location.constant = Parser.getConstant(constantIndex).getValue();
                             if (YuhuTraceMachineCode) {
                                 if (YuhuStackMapFile != NULL) {
                                     FILE *f = fopen(YuhuStackMapFile, "a");
                                     fileStream fs(f, true);
-                                    fs.print_cr("[StackMap] Ignore ConstantIndex: %d", constantIndex);
+                                    fs.print_cr("[StackMap]     Deopt Bundle operand at ConstantIndex: %d , value: %llu", constantIndex, location.constant);
                                     fs.flush();
                                 } else {
-                                    errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
+                                    errs() << "[StackMap]     Deopt Bundle operand at ConstantIndex: " << constantIndex << " , value: " << location.constant << "\n";
                                 }
                             }
                             break;
@@ -437,21 +439,23 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                                                                 constant);
                     } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
                         uint32_t constantIndex = LocationRecord.getConstantIndex();
+                        uint64_t constant = Parser.getConstant(constantIndex).getValue();
                         if (YuhuTraceMachineCode) {
                             if (YuhuStackMapFile != NULL) {
                                 FILE *f = fopen(YuhuStackMapFile, "a");
                                 fileStream fs(f, true);
-                                fs.print_cr("[StackMap] Ignore ConstantIndex: %d", constantIndex);
+                                fs.print_cr("[StackMap] Ignore ConstantIndex: %d , value: %llu", constantIndex, constant);
                                 fs.flush();
                             } else {
-                                errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << "\n";
+                                errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << " , value: " << constant << "\n";
                             }
                         }
                         // record every location, otherwise call site may not find corresponding stack map
                         YuhuDebugInformationRecorder::get()->register_stack_map(InstructionOffset,
                                                                                 static_cast<uint8_t>(Kind),
                                                                                 0,
-                                                                                0);
+                                                                                0,
+                                                                                constant);
                     }
                 }
             }

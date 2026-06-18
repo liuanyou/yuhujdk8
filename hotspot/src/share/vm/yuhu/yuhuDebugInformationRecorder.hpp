@@ -38,7 +38,7 @@ struct StackMapLocation {
     uint8_t kind;
     uint32_t reg_num;
     int32_t offset;
-    uint32_t constant;
+    uint64_t constant;
     uint8_t basic_type; // BasicType from ciType.hpp (T_INT, T_OBJECT, etc.)
 };
 
@@ -266,15 +266,15 @@ public:
   }
 
   // stack map related functions
-  void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0);
+  void register_stack_map(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0);
 
   void register_deopt_bundle(uint32_t instruction_offset, uint64_t bci);
 
-  void register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_VOID);
+  void register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_VOID);
 
-  void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_VOID);
+  void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_VOID);
 
-  void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint32_t constant = 0, uint8_t basic_type = T_OBJECT);
+  void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_OBJECT);
 
   void register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
 
