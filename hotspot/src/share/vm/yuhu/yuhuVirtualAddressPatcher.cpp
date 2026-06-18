@@ -60,74 +60,69 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
             break;
         }
 
-        // handle for last java pc
-        if (is_mov_32_or_movz_32(inst)) {
-            uint32_t low16 = (inst >> 5) & 0xFFFF;
+         if (is_call_site_with_call_target_marker_pattern(instr)) {
+             // Found last_Java_pc placeholder
+             {
+                 uint32_t low16 = (inst >> 5) & 0xFFFF;
+                 uint32_t next_inst = instr[1];
+                 uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                 out_match.last_java_pc_va = ((uint64_t)mid16_31 << 16) | low16;
+                 out_match.last_java_pc_placeholder_offset = offset;
 
-            // Check next instruction for movk
-            uint32_t next_inst = instr[1];
-            if ((next_inst & MOVK_MASK) == MOVK_PATTERN_32) {
-                uint32_t next_shift = (next_inst >> 21) & 0x3;
-                if (next_shift == 1) {
-                    uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
-                    // Check virtual address for last java pc
-                    if (mid16_31 == 0xDEAD) {
-                        // Found last_Java_pc placeholder
-                        out_match.last_java_pc_va = ((uint64_t)mid16_31 << 16) | low16;
-                        out_match.last_java_pc_placeholder_offset = offset;
+                 // Verify same virtual_offset
+                 if (out_match.virtual_offset == 0) {
+                     out_match.virtual_offset = low16;
+                 } else if (out_match.virtual_offset != low16) {
+                     // Mismatched virtual_offsets - this is a critical error
+                     assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                     return false;  // Early exit in all builds
+                 }
+                 int call_site_type = extract_w20_imm16(instr);
+                 out_match.call_target_type = static_cast<CallTargetType>(call_site_type);
+                 found_ljpc = true;
+             }
+             // Found call target placeholder
+             {
+                 instr += 5; // skip 5 instructions
+                 inst = instr[0];
+                 uint32_t low16 = (inst >> 5) & 0xFFFF;
+                 uint32_t next_inst = instr[1];
+                 uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                 uint32_t next_next_inst = instr[2];
+                 uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
 
-                        // Verify same virtual_offset
-                        if (out_match.virtual_offset == 0) {
-                            out_match.virtual_offset = low16;
-                        } else if (out_match.virtual_offset != low16) {
-                            // Mismatched virtual_offsets - this is a critical error
-                            assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
-                            return false;  // Early exit in all builds
-                        }
+                 out_match.call_target_va = ((uint64_t)mid32_47 << 32) | ((uint64_t)mid16_31 << 16) | low16;
+                 out_match.call_target_placeholder_offset = offset + 5 * 4;
 
-                        if ((instr[3] & 0xFFFFFFF0) == 0xD5032010 && (instr[4] & 0xFFFFFFF0) == 0xD5032010) {
-                            int call_site_type = extract_w20_imm16(instr);
-                            out_match.call_target_type = static_cast<CallTargetType>(call_site_type);
-                        }
-                        found_ljpc = true;
-                    }
-                }
-            }
-        } else if (is_mov_64_or_movz_64(inst)) {
-            uint32_t low16 = (inst >> 5) & 0xFFFF;
+                 // Verify same virtual_offset
+                 if (out_match.virtual_offset == 0) {
+                     out_match.virtual_offset = mid16_31;
+                 } else if (out_match.virtual_offset != mid16_31) {
+                     // Mismatched virtual_offsets - this is a critical error
+                     assert(out_match.virtual_offset == mid16_31, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                     return false;  // Early exit in all builds
+                 }
+             }
+         } else if (is_call_site_without_call_target_marker_pattern(instr)) {
+             // Found last_Java_pc placeholder
+             {
+                 uint32_t low16 = (inst >> 5) & 0xFFFF;
+                 uint32_t next_inst = instr[1];
+                 uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+                 out_match.last_java_pc_va = ((uint64_t)mid16_31 << 16) | low16;
+                 out_match.last_java_pc_placeholder_offset = offset;
 
-            // Check next instruction for movk
-            uint32_t next_inst = instr[1];
-            if (low16 == 0xBEEF && (next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
-                uint32_t next_shift = (next_inst >> 21) & 0x3;
-                if (next_shift == 1) {
-                    uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
-
-                    uint32_t next_next_inst = instr[2];
-                    // Check another movk instruction
-                    if ((next_next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
-                        uint32_t next_next_shift = (next_next_inst >> 21) & 0x3;
-                        if (next_next_shift == 2) {
-                            uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
-                            if (mid32_47 == mid16_31) {
-                                // Found call target placeholder
-                                out_match.call_target_va = ((uint64_t)mid32_47 << 32) | ((uint64_t)mid16_31 << 16) | low16;
-                                out_match.call_target_placeholder_offset = offset;
-
-                                // Verify same virtual_offset
-                                if (out_match.virtual_offset == 0) {
-                                    out_match.virtual_offset = mid16_31;
-                                } else if (out_match.virtual_offset != mid16_31) {
-                                    // Mismatched virtual_offsets - this is a critical error
-                                    assert(out_match.virtual_offset == mid16_31, "Mismatched virtual_offsets - placeholders don't belong to same call site");
-                                    return false;  // Early exit in all builds
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (is_adrp_pattern(instr)) {
+                 // Verify same virtual_offset
+                 if (out_match.virtual_offset == 0) {
+                     out_match.virtual_offset = low16;
+                 } else if (out_match.virtual_offset != low16) {
+                     // Mismatched virtual_offsets - this is a critical error
+                     assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
+                     return false;  // Early exit in all builds
+                 }
+                 found_ljpc = true;
+             }
+         } else if (is_adrp_pattern(instr)) {
             // Locate target page
             int64_t page_offset = extract_page_offset(instr);
             uint64_t pc_page = ((uint64_t)instr) & ~0xFFFULL;

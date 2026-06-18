@@ -518,7 +518,9 @@ void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
     char asm_buf[256];
     snprintf(asm_buf, sizeof(asm_buf),
              "mov w19, #%d\n" // Virtual offset (embedded for correlation)
-             "movk w19, #0xDEAD, lsl #16\n",           // Marker magic
+             "movk w19, #0xDEAD, lsl #16\n"           // Marker magic
+             "nop\n" // insert 2 nop instructions, but without mov w20, #%d
+             "nop\n", // make some differences with CreateCallSitePlaceholderWithCallTarget
              virtual_offset);
 
     std::string asm_string(asm_buf);
@@ -528,9 +530,9 @@ void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
     llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "~{x19},~{memory}",  // Constraint string
+            "~{w19},~{memory}",  // Constraint string
             true, // hasSideEffects
-            true  // isAlignStack
+            false  // isAlignStack
     );
 
     // Create the inline asm call

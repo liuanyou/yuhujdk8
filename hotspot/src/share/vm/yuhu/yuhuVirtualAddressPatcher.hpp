@@ -132,6 +132,39 @@ class YuhuVirtualAddressScanner : public AllStatic {
       return false;
   }
 
+  static bool is_placeholder_call_target_pattern(uint32_t* instr) {
+      if (instr == NULL) {
+          return false;
+      }
+
+      uint32_t inst = instr[0];
+      if (is_mov_64_or_movz_64(inst)) {
+          uint32_t low16 = (inst >> 5) & 0xFFFF;
+
+          // Check next instruction for movk
+          uint32_t next_inst = instr[1];
+          if (low16 == 0xBEEF && (next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+              uint32_t next_shift = (next_inst >> 21) & 0x3;
+              if (next_shift == 1) {
+                  uint32_t mid16_31 = (next_inst >> 5) & 0xFFFF;
+
+                  uint32_t next_next_inst = instr[2];
+                  // Check another movk instruction
+                  if ((next_next_inst & MOVK_MASK) == MOVK_PATTERN_64) {
+                      uint32_t next_next_shift = (next_next_inst >> 21) & 0x3;
+                      if (next_next_shift == 2) {
+                          uint32_t mid32_47 = (next_next_inst >> 5) & 0xFFFF;
+                          if (mid32_47 == mid16_31) {
+                              return true;
+                          }
+                      }
+                  }
+              }
+          }
+      }
+      return false;
+  }
+
   /**
    * extract target address from b instruction
    *
@@ -255,7 +288,13 @@ class YuhuVirtualAddressScanner : public AllStatic {
     };
 
     static bool is_call_site_with_call_target_marker_pattern(uint32_t* instr) {
-        return is_placeholder_pc_pattern(instr) && (instr[3] & 0xFFFFFFF0) == 0xD5032010 && (instr[4] & 0xFFFFFFF0) == 0xD5032010;
+        return is_placeholder_pc_pattern(instr) &&
+                (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&
+                (instr[4] & 0xFFFFFFF0) == 0xD5032010 && is_placeholder_call_target_pattern(instr + 5);
+    }
+
+    static bool is_call_site_without_call_target_marker_pattern(uint32_t* instr) {
+        return is_placeholder_pc_pattern(instr) && (instr[2] & 0xFFFFFFF0) == 0xD5032010 && (instr[3] & 0xFFFFFFF0) == 0xD5032010;
     }
 
     // Helper function to check if 3 instructions form a mov/movk sequence
