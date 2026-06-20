@@ -77,9 +77,6 @@ class YuhuDecacher : public YuhuCacherDecacher {
  private:
   int                           _pc_offset;
   OopMap*                       _oopmap;
-  GrowableArray<ScopeValue*>*   _exparray;
-  GrowableArray<MonitorValue*>* _monarray;
-  GrowableArray<ScopeValue*>*   _locarray;
 
  private:
   int pc_offset() const {
@@ -87,15 +84,6 @@ class YuhuDecacher : public YuhuCacherDecacher {
   }
   OopMap* oopmap() const {
     return _oopmap;
-  }
-  GrowableArray<ScopeValue*>* exparray() const {
-    return _exparray;
-  }
-  GrowableArray<MonitorValue*>* monarray() const {
-    return _monarray;
-  }
-  GrowableArray<ScopeValue*>* locarray() const {
-    return _locarray;
   }
 
   // Callbacks
@@ -175,7 +163,6 @@ class YuhuDecacher : public YuhuCacherDecacher {
  protected:
   virtual bool stack_slot_needs_write(int index, YuhuValue* value) = 0;
   virtual bool stack_slot_needs_oopmap(int index, YuhuValue* value) = 0;
-  virtual bool stack_slot_needs_debuginfo(int index, YuhuValue* value) = 0;
 
   static Location::Type stack_location_type(int index, YuhuValue** addr) {
     return location_type(addr, *addr == NULL);
@@ -185,7 +172,6 @@ class YuhuDecacher : public YuhuCacherDecacher {
  protected:
   virtual bool local_slot_needs_write(int index, YuhuValue* value) = 0;
   virtual bool local_slot_needs_oopmap(int index, YuhuValue* value) = 0;
-  virtual bool local_slot_needs_debuginfo(int index, YuhuValue* value) = 0;
 
   static Location::Type local_location_type(int index, YuhuValue** addr) {
     return location_type(addr, index > 0);
@@ -219,9 +205,6 @@ class YuhuJavaCallDecacher : public YuhuDecacher {
   bool stack_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject() && index >= callee()->arg_size();
   }
-  bool stack_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return index >= callee()->arg_size();
-  }
 
   // Local slot helpers
  protected:
@@ -230,9 +213,6 @@ class YuhuJavaCallDecacher : public YuhuDecacher {
   }
   bool local_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
-  }
-  bool local_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return true;
   }
 };
 
@@ -249,9 +229,6 @@ class YuhuVMCallDecacher : public YuhuDecacher {
   bool stack_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
   }
-  bool stack_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return true;
-  }
 
   // Local slot helpers
  protected:
@@ -260,9 +237,6 @@ class YuhuVMCallDecacher : public YuhuDecacher {
   }
   bool local_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
-  }
-  bool local_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return true;
   }
 };
 
@@ -279,9 +253,6 @@ class YuhuTrapDecacher : public YuhuDecacher {
   bool stack_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
   }
-  bool stack_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return true;
-  }
 
   // Local slot helpers
  protected:
@@ -290,9 +261,6 @@ class YuhuTrapDecacher : public YuhuDecacher {
   }
   bool local_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
-  }
-  bool local_slot_needs_debuginfo(int index, YuhuValue* value) {
-    return true;
   }
 };
 

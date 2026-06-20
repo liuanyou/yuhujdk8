@@ -44,8 +44,7 @@ void YuhuDecacher::start_frame() {
 }
 
 void YuhuDecacher::start_stack(int stack_depth) {
-  // Create the array we'll record our stack slots in
-  _exparray = new GrowableArray<ScopeValue*>(stack_depth);
+  // Stack decaching - debug info collected via DeoptBundle from StackMap metadata
 }
 
 void YuhuDecacher::process_stack_slot(int          index,
@@ -60,22 +59,15 @@ void YuhuDecacher::process_stack_slot(int          index,
       value->generic_value(),
       adjusted_offset(value, offset));
   }
-
-  // Record the value in the debuginfo if necessary
-  if (stack_slot_needs_debuginfo(index, value)) {
-    exparray()->append(slot2lv(offset, stack_location_type(index, addr)));
-  }
 }
 
 void YuhuDecacher::start_monitors(int num_monitors) {
-  // Create the array we'll record our monitors in
-  _monarray = new GrowableArray<MonitorValue*>(num_monitors);
+  // Monitor decaching - debug info collected via DeoptBundle from StackMap metadata
 }
 
 void YuhuDecacher::process_monitor(int index, int box_offset, int obj_offset) {
-    monarray()->append(new MonitorValue(
-    slot2lv (obj_offset, Location::oop),
-    slot2loc(box_offset, Location::normal)));
+  // Monitor decaching handled by acquire_lock/release_lock
+  // Debug info collected via DeoptBundle from StackMap metadata
 }
 
 void YuhuDecacher::process_oop_tmp_slot(Value** value, int offset) {
@@ -105,8 +97,8 @@ void YuhuDecacher::process_pc_slot(int offset) {
 }
 
 void YuhuDecacher::start_locals() {
-  // Create the array we'll record our local variables in
-  _locarray = new GrowableArray<ScopeValue*>(max_locals());}
+  // Local decaching - debug info collected via DeoptBundle from StackMap metadata
+}
 
 void YuhuDecacher::process_local_slot(int          index,
                                        YuhuValue** addr,
@@ -119,11 +111,6 @@ void YuhuDecacher::process_local_slot(int          index,
       YuhuType::to_stackType(value->basic_type()),
       value->generic_value(),
       adjusted_offset(value, offset));
-  }
-
-  // Record the value in the debuginfo if necessary
-  if (local_slot_needs_debuginfo(index, value)) {
-    locarray()->append(slot2lv(offset, local_location_type(index, addr)));
   }
 }
 
