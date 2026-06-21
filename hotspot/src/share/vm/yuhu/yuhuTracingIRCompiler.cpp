@@ -273,69 +273,41 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                 assert(num_of_monitors_loc.kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant), "num of monitors should be constant");
                 uint32_t num_of_monitors = num_of_monitors_loc.constant;
 
-                assert(locations.length() >= (int)(4 + num_of_locals * 2 + num_of_expression_stacks * 2 + num_of_monitors * 2), 
-                       "locations should have enough locals, expression stacks, and monitors (each with type metadata)");
+                assert(locations.length() >= (int)(4 + num_of_locals + num_of_expression_stacks),
+                       "locations should have basic type of locals and expression stacks");
 
                 YuhuDebugInformationRecorder::get()->register_deopt_bundle(InstructionOffset, bci);
                 
-                // Each value is now preceded by its type metadata
-                // Layout: [type0, val0, type1, val1, ...]
-                // Total entries per section = count * 2
-                int locals_total = num_of_locals * 2;
-                int stacks_total = num_of_expression_stacks * 2;
-                int monitors_total = num_of_monitors * 2;
+                // Each section only has its type metadata
+                // Layout: [type0, type1, ...]
+                // Total entries per section = count * 1
+                int locals_total = num_of_locals;
+                int stacks_total = num_of_expression_stacks;
                 
                 int metadata_end = locations.length() - 4;
-                int monitors_start = metadata_end - monitors_total;
-                int stacks_start = monitors_start - stacks_total;
+                int stacks_start = metadata_end - stacks_total;
                 int locals_start = stacks_start - locals_total;
                 
                 // register locals (every other entry starting from locals_start)
-                for (int i = locals_start; i < stacks_start; i += 2) {
-                    // i is type, i+1 is value
+                for (int i = locals_start; i < stacks_start; i++) {
+                    // i is type
                     StackMapLocation* type_loc = &locations.at(i);
-                    StackMapLocation* val_loc = &locations.at(i + 1);
+                    assert(type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant), "basic_type must be constant");
                     
-                    uint8_t basic_type = (type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) 
-                                         ? (uint8_t)type_loc->constant : T_VOID;
+                    uint8_t basic_type = (uint8_t)type_loc->constant;
                     
-                    YuhuDebugInformationRecorder::get()->register_deopt_bundle_local_data(InstructionOffset,
-                                                                                          val_loc->kind,
-                                                                                          val_loc->reg_num,
-                                                                                          val_loc->offset,
-                                                                                          val_loc->constant,
-                                                                                          basic_type);
+                    YuhuDebugInformationRecorder::get()->register_deopt_bundle_local_data(InstructionOffset, basic_type);
                 }
                 // register expression stacks (every other entry starting from stacks_start)
-                for (int i = stacks_start; i < monitors_start; i += 2) {
+                for (int i = stacks_start; i < metadata_end; i++) {
                     StackMapLocation* type_loc = &locations.at(i);
-                    StackMapLocation* val_loc = &locations.at(i + 1);
+                    assert(type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant), "basic_type must be constant");
+
+                    uint8_t basic_type = (uint8_t)type_loc->constant;
                     
-                    uint8_t basic_type = (type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) 
-                                         ? (uint8_t)type_loc->constant : T_VOID;
-                    
-                    YuhuDebugInformationRecorder::get()->register_deopt_bundle_expression_stack_data(InstructionOffset,
-                                                                                                     val_loc->kind,
-                                                                                                     val_loc->reg_num,
-                                                                                                     val_loc->offset,
-                                                                                                     val_loc->constant,
-                                                                                                     basic_type);
+                    YuhuDebugInformationRecorder::get()->register_deopt_bundle_expression_stack_data(InstructionOffset, basic_type);
                 }
-                // register monitors (every other entry starting from monitors_start)
-                for (int i = monitors_start; i < metadata_end; i += 2) {
-                    StackMapLocation* type_loc = &locations.at(i);
-                    StackMapLocation* val_loc = &locations.at(i + 1);
-                    
-                    uint8_t basic_type = (type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant)) 
-                                         ? (uint8_t)type_loc->constant : T_OBJECT; // Monitors should be T_OBJECT
-                    
-                    YuhuDebugInformationRecorder::get()->register_deopt_bundle_monitor_data(InstructionOffset,
-                                                                                            val_loc->kind,
-                                                                                            val_loc->reg_num,
-                                                                                            val_loc->offset,
-                                                                                            val_loc->constant,
-                                                                                            basic_type);
-                }
+                YuhuDebugInformationRecorder::get()->register_deopt_bundle_monitor_data(InstructionOffset, num_of_monitors);
             } else if (EXTENDED_SP_ALLOCA_STATEPOINT_ID == StatepointID) {
                 bool found_offset = false;
                 for (auto LocationRecord : StatepointRecord.locations()) {

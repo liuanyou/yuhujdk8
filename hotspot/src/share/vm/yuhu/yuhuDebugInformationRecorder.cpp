@@ -197,19 +197,13 @@ void YuhuDebugInformationRecorder::register_deopt_bundle(uint32_t instruction_of
         auto deopt_bundle = new DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = bci;
-        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->locals = new GrowableArray<uint8_t>();
+        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
         _deopt_bundles->append(deopt_bundle);
     }
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t instruction_offset,
-                                                                    uint8_t location_kind,
-                                                                    uint32_t location_reg_num,
-                                                                    int32_t location_offset,
-                                                                    uint64_t constant,
-                                                                    uint8_t basic_type) {
+void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t basic_type) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
@@ -217,29 +211,17 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t ins
         auto deopt_bundle = new DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->locals = new GrowableArray<uint8_t>();
+        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
 
     DeoptBundle* bundle = _deopt_bundles->at(index);
-    auto location = new StackMapLocation();
-    location->kind = location_kind;
-    location->reg_num = location_reg_num;
-    location->offset = location_offset;
-    location->constant = constant;
-    location->basic_type = basic_type;
-    bundle->locals->append(location);
+    bundle->locals->append(basic_type);
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(uint32_t instruction_offset,
-                                                                               uint8_t location_kind,
-                                                                               uint32_t location_reg_num,
-                                                                               int32_t location_offset,
-                                                                               uint64_t constant,
-                                                                               uint8_t basic_type) {
+void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t basic_type) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
@@ -247,29 +229,17 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(u
         auto deopt_bundle = new DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->locals = new GrowableArray<uint8_t>();
+        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
 
     DeoptBundle* bundle = _deopt_bundles->at(index);
-    auto location = new StackMapLocation();
-    location->kind = location_kind;
-    location->reg_num = location_reg_num;
-    location->offset = location_offset;
-    location->constant = constant;
-    location->basic_type = basic_type;
-    bundle->expression_stacks->append(location);
+    bundle->expression_stacks->append(basic_type);
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t instruction_offset,
-                                                                       uint8_t location_kind,
-                                                                       uint32_t location_reg_num,
-                                                                       int32_t location_offset,
-                                                                       uint64_t constant,
-                                                                       uint8_t basic_type) {
+void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint32_t num_monitors) {
     int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
@@ -277,21 +247,14 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
         auto deopt_bundle = new DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->expression_stacks = new GrowableArray<StackMapLocation*>();
-        deopt_bundle->monitors = new GrowableArray<StackMapLocation*>();
+        deopt_bundle->locals = new GrowableArray<uint8_t>();
+        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
 
     DeoptBundle* bundle = _deopt_bundles->at(index);
-    auto location = new StackMapLocation();
-    location->kind = location_kind;
-    location->reg_num = location_reg_num;
-    location->offset = location_offset;
-    location->constant = constant;
-    location->basic_type = basic_type;
-    bundle->monitors->append(location);
+    bundle->num_monitors = num_monitors;
 }
 
 void YuhuDebugInformationRecorder::register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words) {
@@ -313,33 +276,6 @@ void YuhuDebugInformationRecorder::register_frame_layout_info_with_stack_map_fie
     _frame_layout_info->extended_frame_offset = extended_frame_offset;
 }
 
-static ScopeValue* createScopeValue(StackMapLocation* loc, Location::Type loc_type, uint8_t basic_type) {
-    using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
-    ScopeValue* scopeValue = NULL;
-
-    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
-        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-        // Stack location
-        scopeValue = new LocationValue(Location::new_stk_loc(loc_type, loc->offset));
-    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-        // Register location
-        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
-        scopeValue = new LocationValue(Location::new_reg_loc(loc_type, reg));
-    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant) ||
-                loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::ConstantIndex)) {
-        // Constant value (likely null or primitive constant)
-        if (basic_type == T_LONG) {
-            scopeValue = new ConstantLongValue(loc->constant);
-        } else if (basic_type == T_DOUBLE) {
-            scopeValue = new ConstantDoubleValue(loc->constant);
-        } else {
-            scopeValue = new ConstantIntValue(loc->constant);
-        }
-    }
-    // Skip unsupported location kinds
-    return scopeValue;
-}
-
 void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
                                       ciMethod* method,
                                       int plus_offset,
@@ -353,6 +289,60 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         if ((*a)->return_pc_offset > (*b)->return_pc_offset) return  1;
         return 0;
     });;
+
+    // RS4GC doesn't include monitor objects in stack map, need to handle it manually
+    // a normal frame layout should be like:
+    /*
+        0x16f7ea3f0: 0x0000000000000003 0x00000000d8001c5a - spill area
+        0x16f7ea400: 0x00000006c000e280 0x0000000100000001 - spill area
+        0x16f7ea410: 0x0000000102b50b40 0x000000012680c800 - spill area
+        0x16f7ea420: 0x000000076ad73c30 0x000000076ad73c20 - spill area
+        0x16f7ea430: 0x000000076ad744d8 0x000000076ad73c40 - spill area
+        0x16f7ea440: 0x00000006c000e280 0x000000076ad73c30 - spill area
+        0x16f7ea450: 0x000000076ad73c20 0x0000000000000001 - spill area
+        0x16f7ea460: 0x00000006c000e308 0x0000000000000031 - expression stack (extra for method handle) / expression stack [0] (top)
+        0x16f7ea470: 0x00000001bd5b7dde 0x000000076ad744d8 - expression stack [1] / expression stack [2] (physically 1 has T_LONG and 2 has T_LONG2, virtually it is opposite)
+        0x16f7ea480: 0x00000006c000f660 0x00000006c000e2d0 - expression stack [3] / expression stack [4] (bottom)
+        0x16f7ea490: 0x0000000000000005 0x000000076ad73c30 - monitor [1] header / monitor [1] object (newest at lower address with large index)
+        0x16f7ea4a0: 0x0000000000000005 0x000000076ad73c20 - monitor [0] header / monitor [0] object
+        0x16f7ea4b0: 0x0000000000000000 0x0000000102b50b40 - oop tmp / method slot
+        0x16f7ea4c0: 0x000000016f7ea3f0 0x00000000dead00c0 - final sp / return slot
+        0x16f7ea4d0: 0x00000000deadbeef 0x000000016f7ea5a0 - frame marker / fp
+        0x16f7ea4e0: 0x0000000000000000 0x00000000dead00c0 - local [18] / local [17]
+        0x16f7ea4f0: 0x000000016f7ea5c0 0x000000076ad744d8 - local [16] / local [15]
+        0x16f7ea500: 0x0000000000016006 0x000000076ad73c30 - local [14] / local [13]
+        0x16f7ea510: 0x00000001bd5b7dde 0x0000000130804f6c - local [12] / local [11]
+        0x16f7ea520: 0x000000060000012c 0x000000076ad73c20 - local [10] / local [9]
+        0x16f7ea530: 0x000000076ad73c40 0x00000006c000e280 - local [8] / local [7]
+        0x16f7ea540: 0x00000000deadbeef 0x0000000000000000 - local [6] / local [5] (physically 6 has T_LONG and 5 has T_LONG2, virtually it is opposite)
+        0x16f7ea550: 0x00000001000000c8 0x0000000100000064 - local [4] / local [3]
+        0x16f7ea560: 0x000000076ad73c30 0x000000076ad73c20 - local [2] / local [1]
+        0x16f7ea570: 0x0000000100000001 0x000000076ad73c30 - local [0] / padding
+        0x16f7ea580: 0x0000000000000000 0x000000010c345060 - prologue x22 / x21
+        0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - prologue x20 / x19
+        0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
+     */
+    assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
+           _frame_layout_info->num_of_prologue_registers != -1 &&
+           _frame_layout_info->header_words != -1 &&
+           _frame_layout_info->monitor_words != -1 &&
+           _frame_layout_info->stack_words != -1 &&
+           _frame_layout_info->locals_words != -1 &&
+           _frame_layout_info->extended_frame_words != -1 &&
+           _frame_layout_info->extended_frame_reg_num != -1 &&
+           _frame_layout_info->extended_frame_kind != -1 &&
+           _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
+    // Usually it should be fp register, sometimes it uses sp register,
+    // but don't know when, assume it is always fp register
+    assert(_frame_layout_info->extended_frame_reg_num == 29 &&
+           _frame_layout_info->extended_frame_offset < 0 &&
+           _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+
+    // 2 words is for x29,x30 in prologue
+    int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
+                      - (-_frame_layout_info->extended_frame_offset / wordSize);
+
+    int max_monitors = _frame_layout_info->monitor_words / 2;
 
     for (int i = 0; i < _call_site_entries->length(); ++i) {
         CallSiteEntry* call_site_entry = _call_site_entries->at(i);
@@ -428,44 +418,6 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             }
 
             if (call_site_entry->num_monitors > 0) {
-                // RS4GC doesn't include monitor objects in stack map, need to handle it manually
-                // a normal frame layout should be like:
-                /*  0x000000016da16410:   000000016da16410 00000001045ef938 - spill area
-                    0x000000016da16420:   0000000144809800 0000000104545558 - spill area
-                    0x000000016da16430:   000000076af84580 000000076af845a0 - spill area
-                    0x000000016da16440:   0000000000000000 000000076acfffa8 - expression stack [2] (bottom) / expression stack [1]
-                    0x000000016da16450:   000000076af84580 0000000000000031 - expression stack [0] (top) / monitor [0] (newest at higher address) header
-                    0x000000016da16460:   000000076ad181d8 000000000000000b - monitor [0] (newest at higher address) object / oop tmp
-                    0x000000016da16470:   00000001045ef938 000000016da16410 - method slot / final sp
-                    0x000000016da16480:   000000076acfffa8 00000000deadbeef - return slot / frame marker
-                    0x000000016da16490:   000000016da164e0 000000010451e4ed - fp / local [3]
-                    0x000000016da164a0:   000000076af84580 000000076af845a0 - local [2] / local [1]
-                    0x000000016da164b0:   000000076af84580 000000010451e508 - local [0] / padding
-                    0x000000016da164c0:   000000010451e4f0 000000010e10d060 - prologue x22 / x21
-                    0x000000016da164d0:   0000000000000003 00000000dead0324 - prologue x20 / x19
-                    0x000000016da164e0:   000000016da16500 000000010f8e24ac - prologue x29 / x30
-                 */
-                assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
-                       _frame_layout_info->num_of_prologue_registers != -1 &&
-                       _frame_layout_info->header_words != -1 &&
-                       _frame_layout_info->monitor_words != -1 &&
-                       _frame_layout_info->stack_words != -1 &&
-                       _frame_layout_info->locals_words != -1 &&
-                       _frame_layout_info->extended_frame_words != -1 &&
-                       _frame_layout_info->extended_frame_reg_num != -1 &&
-                       _frame_layout_info->extended_frame_kind != -1 &&
-                       _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
-                // Usually it should be fp register, sometimes it uses sp register,
-                // but don't know when, assume it is always fp register
-                assert(_frame_layout_info->extended_frame_reg_num == 29 &&
-                       _frame_layout_info->extended_frame_offset < 0 &&
-                       _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
-
-                // 2 words is for x29,x30 in prologue
-                int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
-                                    - (-_frame_layout_info->extended_frame_offset / wordSize);
-
-                int max_monitors = _frame_layout_info->monitor_words / 2;
                 // from oldest to newest
                 for (int j = 0; j < call_site_entry->num_monitors; ++j) {
                     int monitor_object_offset_in_bytes =
@@ -509,28 +461,26 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             if (bundle->locals && bundle->locals->length() > 0) {
                 locals = new GrowableArray<ScopeValue*>();
                 for (int j = 0; j < bundle->locals->length(); j++) {
-                    StackMapLocation* loc = bundle->locals->at(j);
+                    uint8_t basic_type = bundle->locals->at(j);
+                    int local_offset_in_bytes = (spill_words + _frame_layout_info->stack_words + _frame_layout_info->monitor_words +
+                            _frame_layout_info->header_words + _frame_layout_info->locals_words - 1 - j) * wordSize;
                     
                     // Determine Location::Type based on BasicType
-                    Location::Type loc_type;
-                    switch (loc->basic_type) {
+                    switch (basic_type) {
                         case T_OBJECT:
                         case T_ARRAY: {
-                            loc_type = Location::oop;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue && scopeValue->is_location(), "scope value should be created as location value, check LocationKind");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::oop, local_offset_in_bytes));
                             locals->append(scopeValue);
                         }
                             break;
                         case T_LONG: {
                             // in deopt bundle, first slot is T_LONG with actual value, second slot is T_LONG2 with padding
-                            // but in order to reconstruct T_LONG for interpreter, first slot should be padding, second slot should be actual value
+                            // but in physical stack frame, first slot has padding, second slot has actual value, and this is
+                            // the desired layout for interpreter
                             // construct second slot
-                            loc_type = Location::lng;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::lng, local_offset_in_bytes - wordSize));
                             // construct first slot
-                            assert(bundle->locals->at(++j)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            assert(bundle->locals->at(++j) == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
                             Location invalid_location;
 
                             locals->append(new LocationValue(invalid_location));
@@ -539,24 +489,15 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                             break;
                         case T_DOUBLE: {
                             // in deopt bundle, first slot is T_DOUBLE with actual value, second slot is T_LONG2 with padding
-                            // but in order to reconstruct T_DOUBLE for interpreter, first slot should be padding, second slot should be actual value
+                            // but in physical stack frame, first slot has padding, second slot has actual value, and this is
+                            // the desired layout for interpreter
                             // construct second slot
-                            loc_type = Location::dbl;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::dbl, local_offset_in_bytes - wordSize));
                             // construct first slot
-                            assert(bundle->locals->at(++j)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
-                                   "should be T_DOUBLE2 type");
+                            assert(bundle->locals->at(++j) == ciTypeFlow::StateVector::T_DOUBLE2, "should be T_DOUBLE2 type");
                             Location invalid_location;
 
                             locals->append(new LocationValue(invalid_location));
-                            locals->append(scopeValue);
-                        }
-                            break;
-                        case T_FLOAT: {
-                            loc_type = Location::float_in_dbl;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
                             locals->append(scopeValue);
                         }
                             break;
@@ -566,9 +507,8 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                         }
                             break;
                         default: {
-                            loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // T_INT, T_FLOAT, T_BYTE, T_SHORT, T_CHAR, T_BOOLEAN
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::normal, local_offset_in_bytes));
                             locals->append(scopeValue);
                         }
                             break;
@@ -580,54 +520,42 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             if (bundle->expression_stacks && bundle->expression_stacks->length() > 0) {
                 expressions = new GrowableArray<ScopeValue*>();
                 for (int j = 0; j < bundle->expression_stacks->length(); j++) {
-                    StackMapLocation* loc = bundle->expression_stacks->at(j);
+                    uint8_t basic_type = bundle->expression_stacks->at(j);
+                    int express_stack_offset_in_bytes = (spill_words + _frame_layout_info->stack_words - bundle->expression_stacks->length() + j) * wordSize;
 
                     // Determine Location::Type based on BasicType
-                    Location::Type loc_type;
-                    switch (loc->basic_type) {
+                    switch (basic_type) {
                         case T_OBJECT:
                         case T_ARRAY: {
-                            loc_type = Location::oop;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue && scopeValue->is_location(), "scope value should be created as location value, check LocationKind");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::oop, express_stack_offset_in_bytes));
                             expressions->append(scopeValue);
                         }
                             break;
-                        case T_LONG: {
-                            // in deopt bundle, first slot is T_LONG with actual value, second slot is T_LONG2 with padding
-                            // but in order to reconstruct T_LONG for interpreter, first slot should be padding, second slot should be actual value
-                            // construct second slot
-                            loc_type = Location::lng;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                        case ciTypeFlow::StateVector::T_LONG2: {
+                            // in deopt bundle, first slot is T_LONG2 with padding, second slot is T_LONG with actual value
+                            // but in physical stack frame, first slot has actual value, second slot has padding, and this is
+                            // not the desired layout for interpreter
                             // construct first slot
-                            assert(bundle->expression_stacks->at(++j)->basic_type == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
                             Location invalid_location;
+                            // construct second slot
+                            assert(bundle->expression_stacks->at(++j) == T_LONG, "should be T_LONG type");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::lng, express_stack_offset_in_bytes - wordSize));
 
                             expressions->append(new LocationValue(invalid_location));
                             expressions->append(scopeValue);
                         }
                             break;
-                        case T_DOUBLE: {
-                            // in deopt bundle, first slot is T_DOUBLE with actual value, second slot is T_LONG2 with padding
-                            // but in order to reconstruct T_DOUBLE for interpreter, first slot should be padding, second slot should be actual value
-                            // construct second slot
-                            loc_type = Location::dbl;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                        case ciTypeFlow::StateVector::T_DOUBLE2: {
+                            // in deopt bundle, first slot is T_DOUBLE2 with padding, second slot is T_DOUBLE with actual value
+                            // but in physical stack frame, first slot has actual value, second slot has padding, and this is
+                            // not the desired layout for interpreter
                             // construct first slot
-                            assert(bundle->expression_stacks->at(++j)->basic_type == ciTypeFlow::StateVector::T_DOUBLE2,
-                                   "should be T_DOUBLE2 type");
                             Location invalid_location;
+                            // construct first slot
+                            assert(bundle->expression_stacks->at(++j) == T_DOUBLE, "should be T_DOUBLE type");
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::dbl, express_stack_offset_in_bytes - wordSize));
 
                             expressions->append(new LocationValue(invalid_location));
-                            expressions->append(scopeValue);
-                        }
-                            break;
-                        case T_FLOAT: {
-                            loc_type = Location::float_in_dbl;
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
                             expressions->append(scopeValue);
                         }
                             break;
@@ -637,9 +565,8 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                         }
                             break;
                         default: {
-                            loc_type = Location::normal; // T_INT, T_BOOLEAN, T_CHAR, T_BYTE, T_SHORT
-                            ScopeValue *scopeValue = createScopeValue(loc, loc_type, loc->basic_type);
-                            assert(scopeValue, "scope value should be created, check LocationKind");
+                            // T_INT, T_FLOAT, T_BYTE, T_SHORT, T_CHAR, T_BOOLEAN
+                            ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::normal, express_stack_offset_in_bytes));
                             expressions->append(scopeValue);
                         }
                             break;
@@ -648,37 +575,17 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             }
 
             // Convert monitors
-            if (bundle->monitors && bundle->monitors->length() > 0) {
+            if (bundle->num_monitors > 0) {
                 monitors = new GrowableArray<MonitorValue*>();
-                for (int j = 0; j < bundle->monitors->length(); j++) {
-                    StackMapLocation* loc = bundle->monitors->at(j);
-                    Location owner_loc;
-                    
-                    // Monitors are always T_OBJECT
-                    Location::Type loc_type = Location::oop;
-                    
-                    if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct) ||
-                        loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Indirect)) {
-                        // Stack location for monitor owner (oop)
-                        owner_loc = Location::new_stk_loc(loc_type, loc->offset);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Register)) {
-                        // Register location for monitor owner (oop)
-                        VMReg reg = VMRegImpl::as_VMReg(loc->reg_num << 1);
-                        owner_loc = Location::new_reg_loc(loc_type, reg);
-                    } else if (loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant) ||
-                                loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::ConstantIndex)) {
-                        // Constant (likely null) - skip this monitor
-                        continue;
-                    } else {
-                        continue; // Skip unsupported location kinds
-                    }
-                    
-                    // For the basic_lock location, we use a stack location
-                    // The actual BasicLock is in the interpreter frame
-                    Location basic_lock_loc = Location::new_stk_loc(Location::normal, loc->offset + wordSize);
-                    
-                    ScopeValue* owner = new LocationValue(owner_loc);
-                    monitors->append(new MonitorValue(owner, basic_lock_loc));
+                // from oldest to newest
+                for (uint32_t j = 0; j < bundle->num_monitors; ++j) {
+                    int monitor_object_offset_in_bytes =
+                            (spill_words + _frame_layout_info->stack_words + (max_monitors - j - 1) * 2 + 1) * wordSize;
+
+                    ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::oop, monitor_object_offset_in_bytes));
+                    Location basicLockLoc = Location::new_stk_loc(Location::normal, monitor_object_offset_in_bytes - wordSize);
+
+                    monitors->append(new MonitorValue(scopeValue, basicLockLoc));
                 }
             }
 

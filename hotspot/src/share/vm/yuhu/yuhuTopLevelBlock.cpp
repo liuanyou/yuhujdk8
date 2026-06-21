@@ -680,41 +680,10 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   
   // 1. Local variables (in order 0..max_locals-1)
   for (int i = 0; i < max_locals(); i++) {
-    YuhuValue* local = state->local(i);
     ciType* type = state->local_type_at(i);
     BasicType slot_type = type->basic_type();
-    
-    // Skip padding slots (second half of long/double)
-    if (slot_type == ciTypeFlow::StateVector::T_LONG2 ||
-        slot_type == ciTypeFlow::StateVector::T_DOUBLE2) {
-      // Include padding slots with type marker
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), slot_type));
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
-      continue;
-    }
-    
-    // Push type metadata first
-    BasicType basic_type;
-    llvm::Value* llvm_val = NULL;
-    
-    if (local == NULL) {
-      // Empty/uninitialized slot
-      basic_type = static_cast<BasicType>(ciTypeFlow::StateVector::T_BOTTOM);
-      llvm_val = llvm::ConstantInt::get(builder()->getInt64Ty(), 0);
-    } else {
-      basic_type = local->basic_type();
-      llvm_val = local->generic_value();
-      
-      // Cast to i64 for uniform representation
-      if (llvm_val->getType()->isPointerTy()) {
-        llvm_val = builder()->CreatePtrToInt(llvm_val, builder()->getInt64Ty());
-      } else if (llvm_val->getType()->getIntegerBitWidth() != 64) {
-        llvm_val = builder()->CreateIntCast(llvm_val, builder()->getInt64Ty(), false);
-      }
-    }
-    
-    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
-    deopt_operands.push_back(llvm_val);
+
+    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), slot_type));
   }
   
   // 2. Expression stack (in order top..bottom)
@@ -723,51 +692,20 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     
     // Include padding slots (second half of long/double)
     if (stack_val == NULL) {
-      // Padding slot - determine type from previous slot
-      assert(i > 0, "padding can't be first slot");
-      YuhuValue* prev = state->stack(i - 1);
-      assert(prev != NULL && prev->is_two_word(), "previous must be wide value");
-      BasicType padding_type = (prev->basic_type() == T_LONG) 
+      // Padding slot - determine type from next slot
+      assert(i + 1 < state->stack_depth(), "padding slot should be on top of T_LONG/T_DOUBLE");
+      YuhuValue* next = state->stack(i + 1);
+      assert(next && next->is_two_word(), "next must be wide value");
+      BasicType padding_type = (next->basic_type() == T_LONG)
         ? (BasicType)ciTypeFlow::StateVector::T_LONG2 
         : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
       deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), 0));
       continue;
     }
     
     // Push type metadata first
     BasicType basic_type = stack_val->basic_type();
     deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
-    
-    llvm::Value* llvm_val = stack_val->generic_value();
-    
-    // Cast to i64
-    if (llvm_val->getType()->isPointerTy()) {
-      llvm_val = builder()->CreatePtrToInt(llvm_val, builder()->getInt64Ty());
-    } else if (llvm_val->getType()->getIntegerBitWidth() != 64) {
-      llvm_val = builder()->CreateIntCast(llvm_val, builder()->getInt64Ty(), false);
-    }
-    
-    deopt_operands.push_back(llvm_val);
-  }
-
-  // 3. Monitors (locked objects) - in order 0..num_monitors-1
-  int monitor_count = num_monitors();
-  for (int i = 0; i < monitor_count; i++) {
-    // Push type metadata (monitors are always T_OBJECT)
-    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), T_OBJECT));
-    
-    // Load the locked object from the monitor slot in the stack frame
-    llvm::Value* monitor_object_addr = stack()->monitor_object_addr(i);
-    llvm::Value* locked_obj = builder()->CreateLoad(
-      YuhuType::oop_addrspace1_type(), 
-      monitor_object_addr, 
-      "monitor_object"
-    );
-    
-    // Cast to i64 for uniform representation
-    llvm::Value* llvm_val = builder()->CreatePtrToInt(locked_obj, builder()->getInt64Ty());
-    deopt_operands.push_back(llvm_val);
   }
 
   // 4. bci
@@ -786,11 +724,12 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     deopt_operands.push_back(stacks_num_val);
 
     // 7. num of monitors
+    int monitor_count = num_monitors();
     llvm::Value* monitor_count_val = llvm::ConstantInt::get(builder()->getInt64Ty(), monitor_count);
     deopt_operands.push_back(monitor_count_val);
     
-    // Note: Each value in locals/stacks/monitors is preceded by its type metadata
-    // Total operands = (locals * 2) + (stacks * 2) + (monitors * 2) + 4 metadata
+    // Note: only need its type metadata
+    // Total operands = locals + stacks + 4 metadata
   
   // Create deopt operand bundle
   llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);

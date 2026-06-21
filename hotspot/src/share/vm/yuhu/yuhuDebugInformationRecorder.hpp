@@ -39,7 +39,6 @@ struct StackMapLocation {
     uint32_t reg_num;
     int32_t offset;
     uint64_t constant;
-    uint8_t basic_type; // BasicType from ciType.hpp (T_INT, T_OBJECT, etc.)
 };
 
 struct StackMapEntry {
@@ -50,9 +49,9 @@ struct StackMapEntry {
 struct DeoptBundle {
     uint32_t instruction_offset;
     uint64_t bci;
-    GrowableArray<StackMapLocation*>* locals;
-    GrowableArray<StackMapLocation*>* expression_stacks;
-    GrowableArray<StackMapLocation*>* monitors;
+    GrowableArray<uint8_t>* locals; // list of locals with basic type only...from 0 to max_locals-1
+    GrowableArray<uint8_t>* expression_stacks; // list of expression stacks with basic type only...from 0 to stack_depth-1
+    uint32_t num_monitors = 0; // num of monitors, 0 by default
 };
 
 struct FrameLayoutInfo {
@@ -270,11 +269,11 @@ public:
 
   void register_deopt_bundle(uint32_t instruction_offset, uint64_t bci);
 
-  void register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_VOID);
+  void register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t basic_type);
 
-  void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_VOID);
+  void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t basic_type);
 
-  void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0, uint8_t basic_type = T_OBJECT);
+  void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint32_t num_monitors);
 
   void register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
 

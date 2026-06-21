@@ -85,7 +85,9 @@ static void saveIRToFile(Module &M) {
 llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm::orc::ThreadSafeModule TSM,
                                        llvm::orc::MaterializationResponsibility &MR) {
     TSM.withModuleDo([](Module &M) {
-        errs() << "=== Running GC Passes on module: " << M.getName() << " ===\n";
+        if (YuhuTraceIRCompilation) {
+            errs() << "=== Running GC Passes on module: " << M.getName() << " ===\n";
+        }
 
         declareGCSafepointPoll(M);
 
@@ -131,14 +133,18 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
 
         // 7. 验证 IR
         if (verifyModule(M, &errs())) {
-            errs() << "Module verification failed after GC passes!\n";
+            if (YuhuTraceIRCompilation) {
+                errs() << "Module verification failed after GC passes!\n";
+            }
         }
 
         if (YuhuDumpIRToFile) {
             saveIRToFile(M);
         }
 
-        errs() << "=== GC passes completed ===\n";
+        if (YuhuTraceIRCompilation) {
+            errs() << "=== GC passes completed ===\n";
+        }
     });
 
     return std::move(TSM);
