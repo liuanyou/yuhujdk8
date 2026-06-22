@@ -396,7 +396,7 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   int vtable_offset = InstanceKlass::vtable_start_offset() * wordSize + 
                       vtable_index * vtableEntry::size() * wordSize;
   masm.write_inst_ldr(YuhuMacroAssembler::x9, 
-                      YuhuAddress(YuhuMacroAssembler::x9, in_ByteSize(vtable_offset)));
+                      YuhuAddress(YuhuMacroAssembler::x9, vtable_offset));
   
   // Step 3: Move Method* to x12 for c2i adapter
   masm.write_inst_mov_reg(YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
@@ -494,10 +494,10 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
     cb.relocate(pc, rspec);
   masm.write_insts_lea(YuhuMacroAssembler::x12, YuhuAddress((address)interface_klass, relocInfo::metadata_type));
   masm.write_insts_load_klass(YuhuMacroAssembler::x11, YuhuMacroAssembler::x1);
-  masm.write_inst_ldr(YuhuMacroAssembler::x8, 
-                      YuhuAddress(YuhuMacroAssembler::x11, in_ByteSize(InstanceKlass::vtable_length_offset())));
+  masm.write_inst_ldr(YuhuMacroAssembler::w8,
+                      YuhuAddress(YuhuMacroAssembler::x11, InstanceKlass::vtable_length_offset() * wordSize));
   masm.write_insts_lea(YuhuMacroAssembler::x9, 
-                       YuhuAddress(YuhuMacroAssembler::x11, in_ByteSize(InstanceKlass::vtable_start_offset())));
+                       YuhuAddress(YuhuMacroAssembler::x11, InstanceKlass::vtable_start_offset() * wordSize));
   masm.write_insts_lea(YuhuMacroAssembler::x8, 
                        YuhuAddress(YuhuMacroAssembler::x9, YuhuMacroAssembler::x8, YuhuAddress::lsl(3)));
   
@@ -526,15 +526,16 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   
   // Step 3: load method instructions
   masm.pin_label(found_method);
-  masm.write_inst_ldr(YuhuMacroAssembler::x8, 
+  masm.write_inst_ldr(YuhuMacroAssembler::w8,
                       YuhuAddress(YuhuMacroAssembler::x8, itableOffsetEntry::offset_offset_in_bytes()));
   masm.write_insts_lea(YuhuMacroAssembler::x9, 
-                       YuhuAddress(YuhuMacroAssembler::x11, YuhuMacroAssembler::x8, YuhuAddress::uxtw(0)));
+                       YuhuAddress(YuhuMacroAssembler::x11, YuhuMacroAssembler::w8, YuhuAddress::uxtw(0)));
   masm.write_inst("add %s, %s, #%d", 
                   YuhuMacroAssembler::x9, YuhuMacroAssembler::x9, 
                   itable_index * sizeof(itableMethodEntry));
-  masm.write_inst_ldr(YuhuMacroAssembler::x12, 
+  masm.write_inst_ldr(YuhuMacroAssembler::x9,
                       YuhuAddress(YuhuMacroAssembler::x9, itableMethodEntry::method_offset_in_bytes()));
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x12, YuhuMacroAssembler::x9);
   
   // Step 4: Load _from_compiled_entry from Method*
   masm.write_inst_ldr(YuhuMacroAssembler::x9,
@@ -542,17 +543,18 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   
   // Step 5: Jump to compiled entry
   masm.write_inst_blr(YuhuMacroAssembler::x9);
-  
-  masm.pin_label(L_no_such_interface);
-  masm.write_inst_b(StubRoutines::throw_IncompatibleClassChangeError_entry());
-  
-  // Epilogue: restore x19, FP, LR (only reached if interface not found - should not return)
+
+    // Epilogue: restore x19, FP, LR (only reached if interface not found - should not return)
     masm.write_inst("ldp x29, x30, [sp, #16]");
     masm.write_inst("ldp xzr, x19, [sp]");
     masm.write_inst("add sp, sp, #32");
 
     // Return
     masm.write_inst("ret");
+  
+  masm.pin_label(L_no_such_interface);
+  masm.write_insts_far_jump(YuhuRuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
+  masm.write_insts_stop("should not reach here");
 
     address exception_handler_begin = masm.current_pc();
 
@@ -712,7 +714,11 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
     CodeBuffer cb(name, stub_size, stub_size);
     YuhuMacroAssembler masm(&cb);
 
-    masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::deopt_blob()->unpack_with_reexecution()));
+    int trap_request = Deoptimization::make_trap_request(
+            Deoptimization::Reason_unloaded,
+            Deoptimization::Action_reinterpret);
+    masm.write_insts_mov_imm32(YuhuMacroAssembler::x1, trap_request);
+    masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::uncommon_trap_blob()->entry_point()));
     masm.flush();
 
     int frame_size_in_words = 0;
