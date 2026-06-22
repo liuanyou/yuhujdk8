@@ -26,52 +26,74 @@ public class DeoptTest {
     
     // Complex method with multiple locals, expression stack operations, and monitors
     // This tests deoptimization state preservation for:
-    // - Multiple local variables (int, long, Object references)
+    // - Multiple local variables (int, long, double, Object references)
     // - Deep expression stack (multiple values on stack before throw)
     // - Monitored regions (synchronized blocks)
+    // - T_LONG/T_DOUBLE 2-word value transfer to interpreter frame
     static void complexDeoptTarget(int trigger, Object obj1, Object obj2) {
-        // Multiple locals
+        // Multiple locals - including T_LONG and T_DOUBLE for 2-word transfer test
         int localInt1 = 100;
         int localInt2 = 200;
-        long localLong = 0xDEADBEEFL;
+        long localLong1 = 0xDEADBEEFL;
+        double localDouble1 = 3.14159265358979;
         String localStr = "test-string";
         Object localObj = new Object();
         
         System.out.println("complexDeoptTarget: locals initialized");
         System.out.println("  localInt1=" + localInt1 + ", localInt2=" + localInt2);
-        System.out.println("  localLong=" + localLong);
+        System.out.println("  localLong1=" + localLong1);
+        System.out.println("  localDouble1=" + localDouble1);
         System.out.println("  localStr=" + localStr);
         
         // Synchronized block with monitor
         synchronized (obj1) {
             System.out.println("  Inside synchronized(obj1)");
             
-            // More locals inside monitor
+            // More locals inside monitor - add more T_LONG/T_DOUBLE
             int monitorLocal1 = localInt1 + localInt2;
-            long monitorLocal2 = localLong * 2;
+            long monitorLocalLong = localLong1 * 2;
+            double monitorLocalDouble = localDouble1 * 2.0;
             
             System.out.println("  monitorLocal1=" + monitorLocal1);
-            System.out.println("  monitorLocal2=" + monitorLocal2);
+            System.out.println("  monitorLocalLong=" + monitorLocalLong);
+            System.out.println("  monitorLocalDouble=" + monitorLocalDouble);
             
             // Nested synchronized
             synchronized (obj2) {
                 System.out.println("    Inside synchronized(obj2)");
                 
-                // Expression stack manipulation - push multiple values
-                int stackResult = (localInt1 + localInt2) * monitorLocal1 + (int)(monitorLocal2 % 1000);
-                String complexStr = "result=" + stackResult + " str=" + localStr;
+                // Expression stack manipulation - push T_LONG and T_DOUBLE values onto stack
+                // This tests if 2-word values on expression stack transfer correctly
+                long stackLong = localLong1 + monitorLocalLong;
+                double stackDouble = localDouble1 + monitorLocalDouble;
+                int stackResult = (localInt1 + localInt2) * monitorLocal1 + (int)(monitorLocalLong % 1000);
+                
+                // Use the values to ensure they're on the expression stack at trap point
+                String complexStr = "result=" + stackResult + 
+                                   " stackLong=" + stackLong + 
+                                   " stackDouble=" + stackDouble +
+                                   " str=" + localStr;
                 
                 System.out.println("    stackResult=" + stackResult);
+                System.out.println("    stackLong=" + stackLong);
+                System.out.println("    stackDouble=" + stackDouble);
                 System.out.println("    complexStr=" + complexStr);
                 
                 // This will trigger deopt if trigger > 0
+                // At this point, locals and expression stack contain T_LONG/T_DOUBLE values
                 if (trigger > 0) {
-                    System.out.println("    Thowing exception with deep stack state...");
+                    System.out.println("    Throwing exception with deep stack state (including T_LONG/T_DOUBLE)...");
                     throw new RuntimeException("Complex deopt trigger: " + trigger + 
                                              " stackResult=" + stackResult +
+                                             " stackLong=" + stackLong +
+                                             " stackDouble=" + stackDouble +
                                              " localInt1=" + localInt1 +
                                              " localInt2=" + localInt2 +
-                                             " monitorLocal1=" + monitorLocal1);
+                                             " localLong1=" + localLong1 +
+                                             " localDouble1=" + localDouble1 +
+                                             " monitorLocal1=" + monitorLocal1 +
+                                             " monitorLocalLong=" + monitorLocalLong +
+                                             " monitorLocalDouble=" + monitorLocalDouble);
                 }
                 
                 // More computation after potential trap point
