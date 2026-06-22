@@ -2131,8 +2131,16 @@ void YuhuTopLevelBlock::acquire_lock(Value *lockee, int exception_action) {
     "mark_addr");
 
   Value *mark = builder()->CreateLoad(YuhuType::intptr_type(), mark_addr, "mark");
+  // Unlike c1's biased_locking_enter is doing biased lock, yuhu doesn't implement
+  // the same in IR, it relies on runtime monitorenter method to do biased lock,
+  // it is losing performance, but it makes IR easier.
+  // Neutralize displaced header: clear biased lock bits, then set unlocked bit.
+  // This ensures the displaced header stored in BasicLock is always neutral,
+  // so move_to() correctly calls inflate_helper() during deoptimization.
   Value *disp = builder()->CreateOr(
-    mark, LLVMValue::intptr_constant(markOopDesc::unlocked_value), "disp");
+    builder()->CreateAnd(mark, LLVMValue::intptr_constant(~markOopDesc::biased_lock_mask_in_place)),
+    LLVMValue::intptr_constant(markOopDesc::unlocked_value),
+    "disp");
   builder()->CreateStore(disp, monitor_header_addr);
 
   Value *lock = builder()->CreatePtrToInt(
@@ -2202,6 +2210,7 @@ void YuhuTopLevelBlock::acquire_lock(Value *lockee, int exception_action) {
 
 void YuhuTopLevelBlock::release_lock(int exception_action) {
   BasicBlock *not_recursive = function()->CreateBlock("not_recursive");
+  BasicBlock *try_thin_unlock = function()->CreateBlock("try_thin_unlock");
   BasicBlock *released_fast = function()->CreateBlock("released_fast");
   BasicBlock *slow_path     = function()->CreateBlock("slow_path");
   BasicBlock *lock_released = function()->CreateBlock("lock_released");
@@ -2211,19 +2220,40 @@ void YuhuTopLevelBlock::release_lock(int exception_action) {
   Value *monitor_object_addr = stack()->monitor_object_addr(monitor);
   Value *monitor_header_addr = stack()->monitor_header_addr(monitor);
 
+  Value *lockee = builder()->CreateLoad(YuhuType::oop_addrspace1_type(), monitor_object_addr);
+
+  // Handle biased locking: if object is still biased, unlock is a no-op
+  if (UseBiasedLocking) {
+    BasicBlock *check_bias = function()->CreateBlock("check_bias");
+    builder()->CreateBr(check_bias);
+    builder()->SetInsertPoint(check_bias);
+
+    Value *mark_addr = builder()->CreateAddressOfStructEntry(
+      lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),
+      PointerType::getUnqual(YuhuType::intptr_type()),
+      "mark_addr");
+
+    Value *mark = builder()->CreateLoad(YuhuType::intptr_type(), mark_addr, "mark");
+    Value *bias_bits = builder()->CreateAnd(
+      mark, LLVMValue::intptr_constant(markOopDesc::biased_lock_mask_in_place), "bias_bits");
+    Value *is_biased = builder()->CreateICmpEQ(
+      bias_bits, LLVMValue::intptr_constant(markOopDesc::biased_lock_pattern), "is_biased");
+    builder()->CreateCondBr(is_biased, released_fast, not_recursive);
+  } else {
+    builder()->CreateBr(not_recursive);
+  }
+
   // If it is recursive then we're already done
+  builder()->SetInsertPoint(not_recursive);
   Value *disp = builder()->CreateLoad(YuhuType::intptr_type(), monitor_header_addr);
   builder()->CreateCondBr(
     builder()->CreateICmpEQ(disp, LLVMValue::intptr_constant(0)),
-    released_fast, not_recursive);
+    released_fast, try_thin_unlock);
 
   // Try a simple unlock
-  builder()->SetInsertPoint(not_recursive);
-
+  builder()->SetInsertPoint(try_thin_unlock);
   Value *lock = builder()->CreatePtrToInt(
     monitor_header_addr, YuhuType::intptr_type());
-
-  Value *lockee = builder()->CreateLoad(YuhuType::oop_addrspace1_type(), monitor_object_addr);// FIXED - locked object is allocated in heap
 
   Value *mark_addr = builder()->CreateAddressOfStructEntry(
     lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),
