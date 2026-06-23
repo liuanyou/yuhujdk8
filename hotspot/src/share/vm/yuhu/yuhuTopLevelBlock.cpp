@@ -54,27 +54,92 @@ extern "C" void gc_safepoint_poll();
 extern "C" void handle_deoptimization();
 
 void YuhuTopLevelBlock::scan_for_traps() {
-  // Adopt trap information directly from ciTypeFlow's analysis.
-  // ciTypeFlow has already scanned the bytecode and identified all traps,
-  // including the exact BCI and constant pool index for each trap.
-  // No need to re-scan bytecode - trust ciTypeFlow's results.
-  if (ciblock()->has_trap()) {
-    int trap_index = ciblock()->trap_index();
-    int trap_request;
-    
-    if (trap_index < 0) {
-      // ciTypeFlow already encoded reason/action (negative value)
-      trap_request = trap_index;
-    } else {
-      // CP index only — use Reason_unloaded with default action
-      trap_request = Deoptimization::make_trap_request(
-        Deoptimization::Reason_unloaded,
-        Deoptimization::Action_reinterpret,
-        trap_index);
+    // Adopt trap information directly from ciTypeFlow's analysis.
+    // ciTypeFlow has already scanned the bytecode and identified all traps,
+    // including the exact BCI and constant pool index for each trap.
+    if (ciblock()->has_trap()) {
+        int trap_index = ciblock()->trap_index();
+        int trap_request;
+
+        if (trap_index < 0) {
+            // ciTypeFlow already encoded reason/action (negative value)
+            trap_request = trap_index;
+        } else {
+            // CP index only — use Reason_unloaded with default action
+            trap_request = Deoptimization::make_trap_request(
+                    Deoptimization::Reason_unloaded,
+                    Deoptimization::Action_reinterpret,
+                    trap_index);
+        }
+
+        set_trap(trap_request, ciblock()->trap_bci());
+        return;
     }
-    
-    set_trap(trap_request, ciblock()->trap_bci());
-  }
+
+    // few scenarios are missed by ciTypeFlow, scan traps once
+    int limit_bci = limit();
+
+    // Scan the bytecode for traps that are always hit
+    iter()->reset_to_bci(start());
+    while (iter()->next_bci() < limit_bci) {
+        iter()->next();
+
+        switch (bc()) {
+            case Bytecodes::_invokestatic:
+            case Bytecodes::_invokespecial:
+            case Bytecodes::_invokevirtual:
+            case Bytecodes::_invokeinterface: {
+                bool will_link;
+                ciSignature *sig;
+                ciMethod *dest_method = iter()->get_method(will_link, &sig);
+                assert(will_link, "typeflow responsibility");
+                // We can't compile calls to method handle intrinsics, because we use
+                // the interpreter entry points and they expect the top frame to be an
+                // interpreter frame. We need to implement the intrinsics for Yuhu.
+                if (dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form()) {
+                    if (YuhuPerformanceWarnings) {
+                        warning("JSR292 optimization not yet implemented in Yuhu");
+                    }
+                    set_trap(
+                            Deoptimization::make_trap_request(
+                                    Deoptimization::Reason_unhandled,
+                                    Deoptimization::Action_make_not_compilable), bci());
+                    return;
+                }
+                if (!dest_method->holder()->is_linked()) {
+                    set_trap(
+                            Deoptimization::make_trap_request(
+                                    Deoptimization::Reason_uninitialized,
+                                    Deoptimization::Action_reinterpret), bci());
+                    return;
+                }
+
+                if (bc() == Bytecodes::_invokevirtual) {
+                    ciInstanceKlass *klass = ciEnv::get_instance_klass_for_declared_method_holder(
+                            iter()->get_declared_method_holder());
+                    if (!klass->is_linked()) {
+                        set_trap(
+                                Deoptimization::make_trap_request(
+                                        Deoptimization::Reason_uninitialized,
+                                        Deoptimization::Action_reinterpret), bci());
+                        return;
+                    }
+                }
+            }
+                break;
+            case Bytecodes::_invokedynamic:
+            case Bytecodes::_invokehandle: {
+                if (YuhuPerformanceWarnings) {
+                    warning("JSR292 optimization not yet implemented in Yuhu");
+                }
+                set_trap(
+                        Deoptimization::make_trap_request(
+                                Deoptimization::Reason_unhandled,
+                                Deoptimization::Action_make_not_compilable), bci());
+                return;
+            }
+        }
+    }
 }
 
 bool YuhuTopLevelBlock::static_field_ok_in_clinit(ciField* field) {
@@ -1294,7 +1359,7 @@ void YuhuTopLevelBlock::do_call() {
   //  holder_klass = Object (where toString() is actually declared - List doesn't declare it)
   //  klass = List (the type after the cast)
   ciInstanceKlass *holder_klass  = dest_method->holder();
-  assert(holder_klass->is_loaded(), "scan_for_traps responsibility");
+  assert(holder_klass->is_loaded(), "typeflow responsibility");
   assert(holder_klass->is_interface() ||
          holder_klass->super() == NULL ||
          !is_interface, "must match bc");
