@@ -333,6 +333,8 @@ public:
 
     address write_inst_blr(YuhuRegister reg);
 
+    address write_inst_bl(address target);
+
     address write_inst_b(address target);
 
     address write_inst_b(YuhuLabel& label);
@@ -440,6 +442,8 @@ public:
     address write_insts_dispatch_only_normal(TosState state);
 
     address write_insts_get_dispatch();
+
+    address write_insts_far_call(YuhuAddress entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 
     address write_insts_far_jump(YuhuAddress entry, CodeBuffer *cbuf = NULL, YuhuRegister tmp = x8);
 

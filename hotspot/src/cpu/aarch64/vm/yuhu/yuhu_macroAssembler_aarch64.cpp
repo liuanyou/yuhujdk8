@@ -849,6 +849,13 @@ address YuhuMacroAssembler::write_inst_blr(YuhuRegister reg) {
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst_bl(address target) {
+    long offset = target - current_pc();
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "bl #%d", offset);
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst_b(address target) {
     long offset = target - current_pc();
     char buffer[50];
@@ -1535,6 +1542,25 @@ address YuhuMacroAssembler::write_insts_dispatch_via(TosState state, address* ta
     // load current bytecode
     write_inst("ldrb w8, [x22, #0]");
     write_insts_dispatch_base(state, table);
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_insts_far_call(YuhuAddress entry, CodeBuffer *cbuf, YuhuRegister tmp) {
+    assert(ReservedCodeCacheSize < 4*G, "branch out of range");
+    assert(CodeCache::find_blob(entry.target()) != NULL,
+           "destination of far call not found in code cache");
+    if (far_branches()) {
+        uint64_t offset;
+        // We can use ADRP here because we know that the total size of
+        // the code cache cannot exceed 2Gb.
+        write_insts_adrp(tmp, entry.target(), offset);
+        write_inst_regs_imm64("add %s, %s, %ld", tmp, tmp, offset);
+//        if (cbuf) cbuf->set_insts_mark();
+        write_inst_blr(tmp);
+    } else {
+//        if (cbuf) cbuf->set_insts_mark();
+        write_inst_bl(entry.target());
+    }
     return current_pc();
 }
 
