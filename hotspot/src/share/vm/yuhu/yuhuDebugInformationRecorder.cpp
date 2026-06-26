@@ -603,7 +603,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
                                           method, // the method being compiled (the caller)
                                           call_site_entry->bci, // the BCI of the invoke bytecode in the caller
-                                          false, // Whether to re-execute the bytecode after deoptimization
+                                          true, // Whether to re-execute the bytecode after deoptimization
                                           false, // Whether this is a MethodHandle invoke
                                           method->signature()->return_type()->is_object(), // Whether the return value is an oop
                                           locals_token, // DebugToken* for local variables

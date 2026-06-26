@@ -1515,6 +1515,9 @@ int YuhuCompiler::measure_deopt_handler_size() {
   // nop to ensure the return address points into the code area (same reason as C1)
   masm.write_inst("nop");
 
+  // mark as not implemented, TODO
+  masm.write_insts_stop("not implemented");
+
   // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
   masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());
 
@@ -1541,6 +1544,9 @@ int YuhuCompiler::generate_deopt_handler(CodeBuffer& cb, int handler_size) {
 
   // nop to ensure the return address points into the code area (same reason as C1)
   masm.write_inst("nop");
+
+  // mark as not implemented, TODO
+  masm.write_insts_stop("not implemented");
 
   // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
   masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());
