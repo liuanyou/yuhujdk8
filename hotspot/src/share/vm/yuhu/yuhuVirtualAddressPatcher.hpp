@@ -53,7 +53,8 @@ enum class CallTargetType : uint8_t {
     safepoint_poll = 1,
     vm = 2,
     java = 3,
-    deopt = 4
+    deopt = 4,
+    unwind = 5
 };
 
 // Information about matched placeholders for a single statepoint
@@ -288,9 +289,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
     };
 
     static bool is_call_site_with_call_target_marker_pattern(uint32_t* instr) {
-        return is_placeholder_pc_pattern(instr) &&
-                (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&
-                (instr[4] & 0xFFFFFFF0) == 0xD5032010 && is_placeholder_call_target_pattern(instr + 5);
+        return is_placeholder_pc_pattern(instr) && (instr[3] & 0xFFFFFFF0) == 0xD5032010 && (instr[4] & 0xFFFFFFF0) == 0xD5032010;
     }
 
     static bool is_call_site_without_call_target_marker_pattern(uint32_t* instr) {

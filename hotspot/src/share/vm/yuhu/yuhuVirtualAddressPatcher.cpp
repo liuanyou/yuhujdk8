@@ -83,6 +83,7 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
              }
              // Found call target placeholder
              {
+                 assert(is_placeholder_call_target_pattern(instr + 5), "should be call target pattern");
                  instr += 5; // skip 5 instructions
                  inst = instr[0];
                  uint32_t low16 = (inst >> 5) & 0xFFFF;

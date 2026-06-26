@@ -111,9 +111,7 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
     call_site_entry->num_monitors = num_monitors;
-    call_site_entry->return_pc_offset = 0;
-    call_site_entry->blr_offset = 0;
-    call_site_entry->call_target_offset = 0;
+    call_site_entry->machine_code_offsets = new GrowableArray<CallSiteMachineCodeOffsets*>();
     _call_site_entries->append(call_site_entry);
 }
 
@@ -282,13 +280,21 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                                       int frame_size) {
     using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
     GrowableArray<uint32_t> processed_instruction_offsets;
+    GrowableArray<std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>> entry_offsets_flatten_list;
+    for (int i = 0; i < _call_site_entries->length(); ++i) {
+        assert(_call_site_entries->at(i)->machine_code_offsets->length() > 0, "offsets should not be empty");
+        for (int j = 0; j < _call_site_entries->at(i)->machine_code_offsets->length(); ++j) {
+            std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*> entry_offsets(_call_site_entries->at(i), _call_site_entries->at(i)->machine_code_offsets->at(j));
+            entry_offsets_flatten_list.append(entry_offsets);
+        }
+    }
 
     // sort by return_pc_offset, oopmap should be registered in ascending order
-    _call_site_entries->sort([](CallSiteEntry** a, CallSiteEntry** b) -> int {
-        if ((*a)->return_pc_offset < (*b)->return_pc_offset) return -1;
-        if ((*a)->return_pc_offset > (*b)->return_pc_offset) return  1;
+    entry_offsets_flatten_list.sort([](std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>* a, std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>* b) -> int {
+        if ((*a).second->return_pc_offset < (*b).second->return_pc_offset) return -1;
+        if ((*a).second->return_pc_offset > (*b).second->return_pc_offset) return 1;
         return 0;
-    });;
+    });
 
     // RS4GC doesn't include monitor objects in stack map, need to handle it manually
     // a normal frame layout should be like:
@@ -344,10 +350,11 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
 
     int max_monitors = _frame_layout_info->monitor_words / 2;
 
-    for (int i = 0; i < _call_site_entries->length(); ++i) {
-        CallSiteEntry* call_site_entry = _call_site_entries->at(i);
+    for (int i = 0; i < entry_offsets_flatten_list.length(); ++i) {
+        CallSiteEntry* call_site_entry = entry_offsets_flatten_list.at(i).first;
+        CallSiteMachineCodeOffsets* machine_code_offsets = entry_offsets_flatten_list.at(i).second;
 
-        uint64_t return_pc_offset = call_site_entry->return_pc_offset;
+        uint64_t return_pc_offset = machine_code_offsets->return_pc_offset;
 
         // multiple call targets may use same blr, so skip processed return pc offset
         if (processed_instruction_offsets.contains(return_pc_offset)) {
@@ -360,8 +367,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
         auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size),
                                   YuhuStack::oopmap_slot_munge(arg_count));
 
-        if (call_site_entry->call_site_type != CallSiteType::deopt_call) {
-
+        if (call_site_entry->call_site_type != CallSiteType::deopt_call && call_site_entry->call_site_type != CallSiteType::unwind_call) {
             assert(contains_stack_map_instruction_offset(return_pc_offset), "Call site should contain stack map");
 
             if (YuhuTraceOffset) {
@@ -375,7 +381,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                 if (YuhuTraceOffset) {
                     tty->print_cr("Yuhu: Call site is safepoint poll call");
                 }
-                pc_offset = call_site_entry->blr_offset + plus_offset;
+                pc_offset = machine_code_offsets->blr_offset + plus_offset;
             }
 
             GrowableArray<int32_t> processed_stack_offsets;
@@ -444,7 +450,7 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
                                           NULL, // DebugToken* for expression stack (can be NULL/empty)
                                           NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
             real_recorder->end_safepoint(pc_offset);
-        } else {
+        } else if (call_site_entry->call_site_type == CallSiteType::deopt_call) {
             // add plus_offset to get offset in code cache
             int pc_offset = return_pc_offset + plus_offset;
 

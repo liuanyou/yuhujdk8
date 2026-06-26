@@ -1384,6 +1384,20 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return true;
     };
 
+    auto patch_branch_unwind_handler = [](uint32_t* instr, uint64_t unwind_handler_address, uint32_t* blr_instr) -> bool {
+        instr[0] = 0xD503201F; // nop instruction
+        instr[1] = 0xD503201F; // nop instruction
+        instr[2] = 0xD503201F; // nop instruction
+
+        // Patch b instruction
+        uint64_t b_addr = (uint64_t)blr_instr;
+        long offset = unwind_handler_address - b_addr;
+        uint32_t b_unwind_handler = 0x14000000 | ((offset >> 2) & 0x03FFFFFF);
+
+        blr_instr[0] = b_unwind_handler;
+        return true;
+    };
+
     auto patch_new_adrp = [](uint32_t* instr, uint64_t function_address) -> bool {
         // Calculate new page offset for function_address
         uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
@@ -1449,13 +1463,13 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             // Placeholder is immediately after marker (5 instructions = 20 bytes)
             // Check if the next 3 instructions are mov/movk sequence
-            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
+            uint32_t *llvm_placeholder_instrs = llvm_instr + 5;
 
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
             // here we are manipulating actual machine code in code buffer
             uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_oop_marker_pattern(instr), "should be oop marker pattern");
-            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            uint32_t *placeholder_instrs = instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
 
             uint64_t full_placeholder = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
@@ -1491,13 +1505,13 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             assert(metadata->is_metaspace_object(), "sanity check");
 
             // Placeholder is immediately after the 5-instruction marker block.
-            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
+            uint32_t *llvm_placeholder_instrs = llvm_instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
 
             // Locate the matching placeholder in the actual CodeBuffer.
             uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_metadata_marker_pattern(instr), "should be metadata marker pattern");
-            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            uint32_t *placeholder_instrs = instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
 
             // Verify the embedded address matches the recorded Metadata*.
@@ -1522,25 +1536,27 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             metadata_marker_count++;
         } else if (YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern(llvm_instr)) {
             // Placeholder is immediately after the 5-instruction marker block.
-            uint32_t *llvm_placeholder_instrs = (uint32_t *) (llvm_code_start + (i + 5) * 4);
+            uint32_t *llvm_placeholder_instrs = llvm_instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
 
+            int type_val = YuhuVirtualAddressScanner::extract_w20_imm16((uint32_t*)(llvm_instr));
+            CallSiteType call_site_type = static_cast<CallSiteType>(type_val);
+            assert(call_site_type != CallSiteType::none, "call site type should exist");
+
             uint64_t llvm_target_address = YuhuVirtualAddressScanner::extract_from_movk_sequence(llvm_placeholder_instrs);
-            CallSiteEntry* call_site = YuhuDebugInformationRecorder::get()->get_call_site_by_helper_address_and_call_target_offset(llvm_target_address, (i + 5) * 4);
-            assert(call_site != NULL, "call site should exist");
+            uint64_t llvm_blr_offset = YuhuDebugInformationRecorder::get()->get_call_site_blr_offset_by_helper_address_and_call_target_offset(llvm_target_address, (i + 5) * 4);
+            assert(llvm_blr_offset != 0, "should be valid offset");
 
             // Locate the matching placeholder in the actual CodeBuffer.
             uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern(instr), "should be call site with call target marker pattern");
-            uint32_t *placeholder_instrs = (uint32_t *) (code_start + (i + 5) * 4 + adapter_size);
+            uint32_t *placeholder_instrs = instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
 
             uint64_t target_address = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
             assert(llvm_target_address == target_address, "should be the same");
 
-            if (call_site->call_site_type == CallSiteType::safepoint_poll) {
-                uint64_t llvm_blr_offset = call_site->blr_offset;
-                assert(llvm_blr_offset != 0, "should be valid offset");
+            if (call_site_type == CallSiteType::safepoint_poll) {
                 uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
                 // Before patch :
                 //
@@ -1571,6 +1587,33 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry2.offset = llvm_blr_offset + adapter_size;
                 reloc_entry2.reloc_type = relocInfo::relocType::poll_type;
                 reloc_entries.append(reloc_entry2);
+            } else if (call_site_type == CallSiteType::unwind_call) {
+                uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
+                // Before patch :
+                //
+                // mov x8, #imm16                  # Loads lower 0-15 bits of safepoint_poll
+                // movk x8, #imm16, lsl #16        # Loads mid 16-31 bits of safepoint_poll
+                // movk x8, #imm16, lsl #32        # Loads mid 32-47 bits of safepoint_poll
+                // ...inst...
+                // blr    x8                       # Branches to function
+
+                // After patch :
+                //
+                // nop                             # nop
+                // nop                             # nop
+                // nop                             # nop
+                // ...inst...
+                // b <unwind_handler>              # Branches to unwind handler
+
+                // Patch b instruction
+                uint64_t unwind_handler_address = (uint64_t) (code_start + adapter_size + llvm_code_size);
+                bool branch_unwind_handler_patched = patch_branch_unwind_handler(placeholder_instrs, unwind_handler_address, blr_instr);
+                assert(branch_unwind_handler_patched, "should patch successfully");
+
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = llvm_blr_offset + adapter_size;
+                reloc_entry.reloc_type = relocInfo::relocType::none;
+                reloc_entries.append(reloc_entry);
             } else {
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = (i + 5) * 4 + adapter_size;
@@ -1578,7 +1621,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entries.append(reloc_entry);
             }
 
-            processed_llvm_blr_offsets.append(call_site->blr_offset);
+            processed_llvm_blr_offsets.append(llvm_blr_offset);
             movz_movk_count++;
         } else if (YuhuVirtualAddressScanner::is_adrp_pattern(llvm_instr)) {
             // Locate target page
@@ -1668,9 +1711,9 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             RelocationHolder rspec = metadata_Relocation::spec(reloc_entry.spec_index);
             cb->relocate((address) instr, rspec);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::poll_type) {
-            cb->relocate((address)(instr), relocInfo::poll_type);
+            cb->relocate((address)(instr), reloc_entry.reloc_type);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::runtime_call_type) {
-            cb->relocate((address)(instr), relocInfo::runtime_call_type);
+            cb->relocate((address)(instr), reloc_entry.reloc_type);
         }
     }
 

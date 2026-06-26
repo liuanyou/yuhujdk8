@@ -19,7 +19,14 @@ enum class CallSiteType : uint8_t {
     safepoint_poll = 1,
     vm_call = 2,
     java_call = 3,
-    deopt_call = 4
+    deopt_call = 4,
+    unwind_call = 5
+};
+
+struct CallSiteMachineCodeOffsets {
+    uint64_t call_target_offset; // extracted by ORC plugin
+    uint64_t blr_offset; // extracted by ORC plugin
+    uint64_t return_pc_offset; // extracted by ORC plugin
 };
 
 struct CallSiteEntry {
@@ -29,9 +36,7 @@ struct CallSiteEntry {
     CallSiteType call_site_type; // generated at IR phase
     int bci; // generated at IR phase
     int num_monitors; // generated at IR phase
-    uint64_t call_target_offset; // extracted by ORC plugin
-    uint64_t blr_offset; // extracted by ORC plugin
-    uint64_t return_pc_offset; // extracted by ORC plugin
+    GrowableArray<CallSiteMachineCodeOffsets*>* machine_code_offsets; // same IR may be duplicated in machine code, it is 1:M relations.
 };
 
 struct StackMapLocation {
@@ -120,7 +125,7 @@ public:
       // remove call sites which don't appear in llvm machine code
       // this can happen because llvm passes may eliminate some blocks
       for (int i = 0; i < _call_site_entries->length(); ) {
-          if (_call_site_entries->at(i)->return_pc_offset) {
+          if (_call_site_entries->at(i)->machine_code_offsets->length()) {
               i++;
               continue;
           }
@@ -211,7 +216,11 @@ public:
       std::pair<uint64_t, uint64_t> pair(helper_address, call_target_offset);
       int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
           auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
-          return ha == entry->helper_address && cto == entry->call_target_offset;
+          // search machine code offsets
+          int cto_index = entry->machine_code_offsets->find(&cto, [](void* cto_token, CallSiteMachineCodeOffsets* cto_entry) -> bool {
+              return *((uint64_t*)cto_token) == cto_entry->call_target_offset;
+          });
+          return ha == entry->helper_address && cto_index != -1;
       });
       if (index == -1) return NULL;
       return _call_site_entries->at(index);
@@ -221,8 +230,13 @@ public:
         if (!_call_site_entries) return NULL;
         std::pair<uint64_t, uint64_t> pair(helper_address, blr_offset);
         int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
-            auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
-            return ha == entry->helper_address && cto == entry->blr_offset;
+            auto [ha, bo] = *((std::pair<uint64_t, uint64_t>*)token);
+            // search machine code offsets
+            int bo_index = entry->machine_code_offsets->find(&bo, [](void* bo_token, CallSiteMachineCodeOffsets* bo_entry) -> bool {
+                return *((uint64_t*)bo_token) == bo_entry->blr_offset;
+            });
+
+            return ha == entry->helper_address && bo_index != -1;
         });
         if (index == -1) return NULL;
         return _call_site_entries->at(index);
@@ -233,10 +247,18 @@ public:
         std::pair<uint64_t, uint64_t> pair(helper_address, call_target_offset);
         int index = _call_site_entries->find(&pair, [](void* token, CallSiteEntry* entry) -> bool {
             auto [ha, cto] = *((std::pair<uint64_t, uint64_t>*)token);
-            return ha == entry->helper_address && cto == entry->call_target_offset;
+            // search machine code offsets
+            int cto_index = entry->machine_code_offsets->find(&cto, [](void* cto_token, CallSiteMachineCodeOffsets* cto_entry) -> bool {
+                return *((uint64_t*)cto_token) == cto_entry->call_target_offset;
+            });
+            return ha == entry->helper_address && cto_index != -1;
         });
         if (index == -1) return 0;
-        return _call_site_entries->at(index)->blr_offset;
+        int cto_index = _call_site_entries->at(index)->machine_code_offsets->find(&call_target_offset, [](void* cto_token, CallSiteMachineCodeOffsets* cto_entry) -> bool {
+            return *((uint64_t*)cto_token) == cto_entry->call_target_offset;
+        });
+        assert(cto_index != -1, "should be valid index");
+        return _call_site_entries->at(index)->machine_code_offsets->at(cto_index)->blr_offset;
     }
 
     DeoptBundle* get_deopt_bundle_by_instruction_offset(uint64_t instruction_offset) const {
@@ -257,11 +279,29 @@ public:
           return *((uint64_t*)token) == entry->virtual_offset;
       });
       if (index == -1) return;
-      _call_site_entries->at(index)->return_pc_offset = return_pc_offset;
-      _call_site_entries->at(index)->blr_offset = blr_offset;
-      if (call_target_offset) {
-          _call_site_entries->at(index)->call_target_offset = call_target_offset;
+      std::pair<uint64_t, uint64_t> pair(return_pc_offset, blr_offset);
+      int mco_index = _call_site_entries->at(index)->machine_code_offsets->find(&pair, [](void* token, CallSiteMachineCodeOffsets* entry) -> bool {
+          auto [rpo, bo] = *((std::pair<uint64_t, uint64_t> *) token);
+          return rpo == entry->return_pc_offset && bo == entry->blr_offset;
+      });
+      if (mco_index != -1) {
+          uint64_t old_cto = _call_site_entries->at(index)->machine_code_offsets->at(mco_index)->call_target_offset;
+          if (call_target_offset == old_cto) {
+              // if same call_target_offset, do nothing
+              return;
+          } else if (call_target_offset && old_cto == 0) {
+              // if call_target_offset exists and old call_target_offset is 0, then update
+              _call_site_entries->at(index)->machine_code_offsets->at(mco_index)->call_target_offset = call_target_offset;
+              return;
+          }
       }
+      auto call_site_mco = new CallSiteMachineCodeOffsets();
+      call_site_mco->return_pc_offset = return_pc_offset;
+      call_site_mco->blr_offset = blr_offset;
+      if (call_target_offset) {
+          call_site_mco->call_target_offset = call_target_offset;
+      }
+      _call_site_entries->at(index)->machine_code_offsets->append(call_site_mco);
   }
 
   // stack map related functions

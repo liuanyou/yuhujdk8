@@ -251,7 +251,11 @@ extern "C" void gc_safepoint_poll() {
 }
 
 extern "C" void handle_deoptimization() {
-    assert(true, "gotcha you");
+    // just a placeholder function
+}
+
+extern "C" void go_unwind() {
+    // just a placeholder function
 }
 
 // ============================================================================

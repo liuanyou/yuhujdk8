@@ -52,6 +52,7 @@ using namespace llvm;
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
 extern "C" void handle_deoptimization();
+extern "C" void go_unwind();
 
 void YuhuTopLevelBlock::scan_for_traps() {
     // Adopt trap information directly from ciTypeFlow's analysis.
@@ -901,6 +902,31 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
     builder()->CreateStore(
       pop_result(type)->generic_value(),
       ret_slot);
+  }
+
+  if (exception) {
+      // jump to unwind handler
+      uint64_t virtual_offset = code_buffer()->create_unique_offset();
+      uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+      uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+      uint64_t helper_address = (uint64_t)&go_unwind;
+      // call_target_va is not used in the CreateCall, just create one for no use
+      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
+                                                              call_target_va,
+                                                              helper_address,
+                                                              CallSiteType::unwind_call,
+                                                              bci(),
+                                                              current_state()->num_monitors());
+
+      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::unwind_call);
+
+      llvm::Module* mod = builder()->GetInsertBlock()->getModule();
+      llvm::FunctionType* unwind_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+      llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
+
+      builder()->CreateCall(unwind_ftype, callee, {});
+      builder()->CreateUnreachable();
+      return;
   }
 
   // CRITICAL: Jump to the unified exit block instead of creating multiple rets

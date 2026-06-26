@@ -1093,11 +1093,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, num_of_prologue_registers);
 
   // Step 3: Calculate final frame_size using actual prologue size
-//  int frame_size = frame_words + locals_words + actual_prologue_words;
   int frame_size = actual_prologue_words;
-  // CRITICAL: Align frame_size to 2 words (16 bytes) to match yuhuStack.cpp
-  // yuhuStack.cpp uses align_size_up(frame_size_bytes, 16), so we must align here too
-//  frame_size = align_size_up(frame_size, 2);
 
   // Install the method into the VM
   CodeOffsets offsets;
@@ -1145,31 +1141,22 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
       combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
-      generate_unwind_handler(combined_cb, frame_size * wordSize);
-
-      // CRITICAL: Fix up epilogue markers (0xcafebabe -> sub sp, x29, #imm)
-      // This is needed to restore SP from x29 before returning from the function.
-      // See doc/yuhu/activities/039_epilogue_sp_restoration.md for details.
-//      builder.fixup_prologue_epilogue_markers(combined_base, combined_size);
       
       // Scan for oop markers and generate relocation records
       // This must be done AFTER fixup_prologue_epilogue_markers because both operations
       // scan the machine code and modify it. The oop marker scanning generates HotSpot
       // relocation records that will be processed during register_method.
       combined_cb.initialize_oop_recorder(env->oop_recorder());
-//      builder.scan_for_oop_markers_and_generate_relocation(&combined_cb, combined_base, combined_size);
+
       builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
+      // must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
+      generate_unwind_handler(combined_cb, frame_size * wordSize);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
 
-      // Generate exception handler stub only if there might be landing pads
-      // TODO: Check LLVM IR for landing pads instead of always generating
-      if (exc_handler_size >= 0) {
-          generate_exception_handler(combined_cb, exc_handler_size);
-          // TODO: Properly handle exception handlers for each landing pad
-          // For now, DO NOT register any exception handlers to avoid infinite loop
-      }
+    // Generate exception handler stub
+    generate_exception_handler(combined_cb, exc_handler_size);
 
     // Generate deopt handler (always needed)
     generate_deopt_handler(combined_cb, deopt_handler_size);
@@ -1405,8 +1392,7 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
 int YuhuCompiler::measure_exception_handler_size() {
   // Use a temporary buffer on the stack to measure
   const int kTempBufSize = 64;
-  char temp_buf[kTempBufSize];
-  CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+  CodeBuffer temp_cb("measure_exception_handler", kTempBufSize, 1);
   YuhuMacroAssembler masm(&temp_cb);
   address start = masm.current_pc();
 
@@ -1417,8 +1403,7 @@ int YuhuCompiler::measure_exception_handler_size() {
   // Runtime1::handle_exception_from_callee_id expects:
   //   r0 = exception oop, r3 = throwing pc
   address runtime_entry = Runtime1::entry_for(Runtime1::handle_exception_from_callee_id);
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
-  masm.write_inst_blr(YuhuMacroAssembler::x16);
+  masm.write_insts_far_call(YuhuRuntimeAddress(runtime_entry));
 
   address end = masm.current_pc();
   return (int)(end - start);
@@ -1444,8 +1429,7 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
   // Runtime1::handle_exception_from_callee_id expects:
   //   r0 = exception oop, r3 = throwing pc
   address runtime_entry = Runtime1::entry_for(Runtime1::handle_exception_from_callee_id);
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
-  masm.write_inst_blr(YuhuMacroAssembler::x16);
+  masm.write_insts_far_call(YuhuRuntimeAddress(runtime_entry));
 
   masm.end_a_stub();
 
@@ -1456,25 +1440,10 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
 // Generate unwind handler for propagating exceptions to callers
 // This is required by JVM for all compiled methods, even those without try-catch
 int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
-    // Use a temporary buffer on the stack to measure.
-    // frame_offset_bytes is NOT known at measure time (it depends on the LLVM prologue of
-    // the specific method being compiled).  We use the worst-case SUB instruction here to
-    // ensure we reserve enough stub space; the actual value is patched at
-    // generate_unwind_handler() time.
-    //
-    // Synchronized methods: monitor exit requires C1-style MonitorExitStub infrastructure
-    // that yuhu does not yet implement.  Synchronized methods are therefore not supported
-    // through this path; they will fall back to the interpreter or trigger an assert at
-    // compile time before reaching this code.
     const int kTempBufSize = 64;
-    char temp_buf[kTempBufSize];
-    CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+    CodeBuffer temp_cb("measure_unwind_handler", kTempBufSize, 1);
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
-
-    // 1. Preserve exception oop in x19 across the frame teardown.
-    //    (x19 is a callee-saved register; the caller already saved it, so we can use it here.)
-    masm.write_inst("mov x19, x0");
 
     // 2. Load exception oop from JavaThread and clear TLS fields.
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
@@ -1489,8 +1458,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
     // 4. Jump to Runtime1::unwind_exception_id.
     //    At that point: r0 = exception oop, lr = caller's return address.
     address runtime_entry = Runtime1::entry_for(Runtime1::unwind_exception_id);
-    masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
-    masm.write_inst_br(YuhuMacroAssembler::x16);
+    masm.write_insts_far_jump(YuhuRuntimeAddress(runtime_entry));
 
     address end = masm.current_pc();
     return (int)(end - start);
@@ -1515,21 +1483,10 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
 
     address start = masm.current_pc();
 
-    // 1. Preserve exception oop in x19 across the frame teardown.
-    //    x19 is callee-saved so it is safe to clobber here — the caller-saved copy
-    //    lives on the stack (the LLVM prologue spilled it), but we are about to drop the
-    //    frame anyway, so there is nothing left to restore.
-    masm.write_inst("mov x19, x0");
-
     // 2. Load exception oop from JavaThread and clear TLS fields.
     //    Runtime1::generate_unwind_exception asserts these are empty on entry.
-    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
-    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
-    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
-
-    // Synchronized methods: monitor exit (unlock_object) is not yet implemented in yuhu.
-    // Synchronized methods must not reach this handler; they are rejected by
-    // YuhuCompiler::can_compile_method() or will hit an assertion earlier.
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
 
     // 3. Remove frame: mirror the LLVM epilogue sequence.
     masm.write_insts_remove_frame(frame_size_in_bytes);
@@ -1539,8 +1496,7 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
     //    which walks the caller's frame to locate its exception handler.
     //    On return it does: br <handler_addr>  with  x0=exception_oop, x3=throwing_pc.
     address runtime_entry = Runtime1::entry_for(Runtime1::unwind_exception_id);
-    masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)runtime_entry);
-    masm.write_inst_br(YuhuMacroAssembler::x16);
+    masm.write_insts_far_jump(YuhuRuntimeAddress(runtime_entry));
 
     address end = masm.current_pc();
 
@@ -1552,8 +1508,7 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
 int YuhuCompiler::measure_deopt_handler_size() {
   // Use a temporary buffer on the stack to measure
   const int kTempBufSize = 64;
-  char temp_buf[kTempBufSize];
-  CodeBuffer temp_cb((address)temp_buf, (CodeBuffer::csize_t)kTempBufSize);
+  CodeBuffer temp_cb("measure_deopt_handler", kTempBufSize, 1);
   YuhuMacroAssembler masm(&temp_cb);
   address start = masm.current_pc();
 
@@ -1565,8 +1520,7 @@ int YuhuCompiler::measure_deopt_handler_size() {
 
   // Load deopt unpack address and jump
   address deopt_unpack = SharedRuntime::deopt_blob()->unpack();
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)deopt_unpack);
-  masm.write_inst_br(YuhuMacroAssembler::x16);
+  masm.write_insts_far_jump(YuhuRuntimeAddress(deopt_unpack));
 
   address end = masm.current_pc();
   return (int)(end - start);
@@ -1593,8 +1547,7 @@ int YuhuCompiler::generate_deopt_handler(CodeBuffer& cb, int handler_size) {
 
   // Load deopt unpack address and jump
   address deopt_unpack = SharedRuntime::deopt_blob()->unpack();
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x16, (uint64_t)(uintptr_t)deopt_unpack);
-  masm.write_inst_br(YuhuMacroAssembler::x16);
+  masm.write_insts_far_jump(YuhuRuntimeAddress(deopt_unpack));
 
   masm.end_a_stub();
 

@@ -33,6 +33,7 @@ class ciMethod;
 
 extern "C" void gc_safepoint_poll();
 extern "C" void handle_deoptimization();
+extern "C" void go_unwind();
 
 class YuhuRuntime : public AllStatic {
   // VM call stubs (RuntimeStub wrappers)
