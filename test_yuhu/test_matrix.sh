@@ -68,6 +68,7 @@ echo ""
      -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \
      -XX:CompileCommand=exclude,*.* \
      -XX:CompileCommand=compileonly,com/example/Matrix.multiply \
+     -XX:YuhuComplexityThreshold=1 \
      com.example.Matrix 2>&1 | grep -E "(Register method|successfully)"
 
 echo ""
@@ -82,5 +83,6 @@ echo "  $JAVA -XX:+UseYuhuCompiler \\
                    -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \\
                    -XX:CompileCommand=exclude,\*.\* \\
                    -XX:CompileCommand=compileonly,com/example/Matrix.multiply \\
+                   -XX:YuhuComplexityThreshold=1 \\
                    com.example.Matrix"
 
