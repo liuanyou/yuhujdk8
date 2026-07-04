@@ -39,6 +39,7 @@
 
 
 class ciTypeFlow : public ResourceObj {
+    friend class YuhuCompiler;
 private:
   ciEnv*    _env;
   ciMethod* _method;

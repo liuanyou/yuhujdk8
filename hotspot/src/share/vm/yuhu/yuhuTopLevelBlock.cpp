@@ -444,7 +444,6 @@ void YuhuTopLevelBlock::compute_exceptions() {
   _exc_handlers = new GrowableArray<ciExceptionHandler*>(exc_count);
   _exceptions   = new GrowableArray<YuhuTopLevelBlock*>(exc_count);
 
-  int index = 0;
   for (; !str.is_done(); str.next()) {
     ciExceptionHandler *handler = str.handler();
     if (handler->handler_bci() == -1)
@@ -477,13 +476,9 @@ void YuhuTopLevelBlock::compute_exceptions() {
     if (block == NULL) {
       for (int i = 0; i < function()->block_count(); i++) {
         YuhuTopLevelBlock *candidate = function()->block(i);
-        if (candidate->start() == handler->handler_bci()) {
-          if (block != NULL) {
-            NOT_PRODUCT(warning("there may be trouble ahead"));
-            block = NULL;
-            break;
-          }
+        if (candidate->start() == handler->handler_bci() && !candidate->is_backedge_copy()) {
           block = candidate;
+          break;
         }
       }
     }

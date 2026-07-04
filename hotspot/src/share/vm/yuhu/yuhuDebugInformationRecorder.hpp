@@ -39,6 +39,15 @@ struct CallSiteEntry {
     GrowableArray<CallSiteMachineCodeOffsets*>* machine_code_offsets; // same IR may be duplicated in machine code, it is 1:M relations.
 };
 
+struct CallSiteEntryOffsetsPair {
+    CallSiteEntry* entry;
+    CallSiteMachineCodeOffsets* offsets;
+
+    CallSiteEntryOffsetsPair() : entry(nullptr), offsets(nullptr) {}
+
+    CallSiteEntryOffsetsPair(CallSiteEntry* ent, CallSiteMachineCodeOffsets* off) : entry(ent), offsets(off) {}
+};
+
 struct StackMapLocation {
     uint8_t kind;
     uint32_t reg_num;
@@ -72,6 +81,21 @@ struct FrameLayoutInfo {
     int extended_frame_offset = -1; // extracted from stack map
 };
 
+struct ExceptionTableInfoRecord {
+    int start_bci;
+    int limit_bci;
+    int handler_bci;
+    bool is_catch_all;
+};
+
+struct HandlerBlockInfoRecord {
+    uint32_t instruction_offset;
+    uint32_t start_bci; // start bci of handler block, should be matched as handler bci when searching handler for exception table
+    uint32_t limit_bci; // limit bci of handler block
+    uint32_t num_exceptions;
+    uint32_t num_successors;
+};
+
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll();
 
@@ -91,7 +115,13 @@ private:
   // deopt statepoint locations
   GrowableArray<DeoptBundle*>* _deopt_bundles;
 
+  // frame layout information
   FrameLayoutInfo* _frame_layout_info;
+
+  GrowableArray<ExceptionTableInfoRecord*>* _exception_table_info_records;
+
+  // handler block stack map information
+  GrowableArray<HandlerBlockInfoRecord*>* _handler_block_info_records;
 
   // Mangled function name
   std::string _mangled_func_name;
@@ -321,6 +351,10 @@ public:
 
   void register_frame_layout_info_with_stack_map_fields(int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset);
 
+  void register_exception_handler_info(int start_bci, int limit_bci, int handler_bci, bool is_catch_all);
+
+  void register_handler_block_info(uint32_t instruction_offset, uint32_t start_bci, uint32_t limit_bci, uint32_t num_exceptions, uint32_t num_successors);
+
   void set_mangled_func_name(std::string mangled_func_name) {
       _mangled_func_name = mangled_func_name;
   }
@@ -337,10 +371,12 @@ public:
       return _func_size;
   }
 
-  void convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
-                                       ciMethod* method,
-                                       int plus_offset,
-                                       int frame_size);
+  void generate_safepoint_and_describe_scope(DebugInformationRecorder* real_recorder,
+                                             ciMethod* method,
+                                             int plus_offset,
+                                             int frame_size);
+
+  void generate_exception_handler_table(ciMethod* method, ExceptionHandlerTable* exception_handler_table, int plus_offset);
 };
 
 #endif // SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP

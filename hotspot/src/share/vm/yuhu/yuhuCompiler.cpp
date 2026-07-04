@@ -925,6 +925,30 @@ int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified
   return (int)(end - start);
 }
 
+bool YuhuCompiler::contains_incomplete_state_analysis(ciTypeFlow* flow) {
+    // Walk through CI blocks
+    int limit_bci = flow->code_size();
+    ciMethodBlocks  *mblks = flow->_methodBlocks;
+    ciBlock* current = NULL;
+    for (int bci = 0; bci < limit_bci; bci++) {
+        ciBlock* blk = mblks->block_containing(bci);
+        if (blk != NULL && blk != current) {
+            current = blk;
+
+            GrowableArray<ciTypeFlow::Block*>* blocks = flow->_idx_to_blocklist[blk->index()];
+            int num_blocks = (blocks == NULL) ? 0 : blocks->length();
+
+            for (int i = 0; i < num_blocks; i++) {
+                ciTypeFlow::Block* block = blocks->at(i);
+                if (block->stack_size() < 0 || block->monitor_count() < 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 void YuhuCompiler::compile_method(ciEnv*    env,
                                    ciMethod* target,
                                    int       entry_bci) {
@@ -1001,6 +1025,23 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       env->record_failure("flow analysis has encountered an error");
       return;
   }
+  // Bail out if any block has incomplete state analysis, eg. java.io.PrintStream::newLine, bci 56 - 66
+  /*
+    --------------------------------------------------------
+    ciBlock [56 - 66) control : 63:goto
+      ====================================================
+      [56 - 66) Stored locals: { }
+
+      State : locals 3, stack -1, monitors -1
+      No successor information
+      No exception information
+      ====================================================
+    --------------------------------------------------------
+   */
+  if (contains_incomplete_state_analysis(flow)) {
+      env->record_failure("block has incomplete state analysis");
+      return;
+  }
   // Bail out if any block has a trap (unloaded class at compile time).
   // Yuhu does not support deoptimization, so such methods cannot be compiled.
 //  for (int i = 0; i < flow->block_count(); i++) {
@@ -1039,6 +1080,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   YuhuCodeBuffer cb(masm);
   YuhuBuilder builder(&cb, NULL);  // function will be set later by YuhuFunction
 
+  // remove all functions from current context
     _p_impl->eraseFunctions();
 
   // Emit the entry point
@@ -1136,20 +1178,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Only copy effective code (excluding trailing udf #0 padding)
     memcpy(combined_base + adapter_size, entry->code_start(), effective_code_size);
 
+      combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
+      
+      // Scan for oop markers and generate relocation records
+      combined_cb.initialize_oop_recorder(env->oop_recorder());
+
+      builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
       // Generate unwind handler (always needed - JVM requires it for exception propagation)
       // This is different from exception handler - unwind handler propagates exceptions upward.
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
-      combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
-      
-      // Scan for oop markers and generate relocation records
-      // This must be done AFTER fixup_prologue_epilogue_markers because both operations
-      // scan the machine code and modify it. The oop marker scanning generates HotSpot
-      // relocation records that will be processed during register_method.
-      combined_cb.initialize_oop_recorder(env->oop_recorder());
-
-      builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
-      // must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
+      // Must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
       generate_unwind_handler(combined_cb, frame_size * wordSize);
 
     // Extend instruction section to cover adapter + LLVM code.
@@ -1177,7 +1216,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
 
     // Register oop map
-    YuhuDebugInformationRecorder::get()->convert_and_add_to_real_recorder(env->debug_info(), target, adapter_size, frame_size);
+    YuhuDebugInformationRecorder::get()->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
+    // Generate exception handler table
+    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
     
     env->register_method(target,
                          entry_bci,
@@ -1446,7 +1487,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
     address start = masm.current_pc();
 
     // 2. Load exception oop from JavaThread and clear TLS fields.
-    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
 
@@ -1486,7 +1527,8 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
     // 2. Load exception oop from JavaThread and clear TLS fields.
     //    Runtime1::generate_unwind_exception asserts these are empty on entry.
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
-    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
 
     // 3. Remove frame: mirror the LLVM epilogue sequence.
     masm.write_insts_remove_frame(frame_size_in_bytes);

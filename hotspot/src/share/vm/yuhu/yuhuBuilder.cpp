@@ -758,29 +758,6 @@ void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {
   CreateCall(asm_type, asm_func, args);
 }
 
-
-void YuhuBuilder::CreateEpiloguePlaceholder() {
-  // Insert a marker instruction (0xcafebabe) before LLVM epilogue
-  // After compilation, we'll parse the prologue and replace this marker
-  // with the correct "add sp, x29, #-imm" instruction.
-
-//  YuhuContext& ctx = YuhuContext::current();
-//
-//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-//    llvm::Type::getVoidTy(ctx),
-//    false);
-//
-//  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
-//    asm_type,
-//    ".inst 0xcafebabe",
-//    "",
-//    true,
-//    false,
-//    llvm::InlineAsm::AD_ATT);
-//
-//  CreateCall(asm_type, asm_func, std::vector<Value*>());
-}
-
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
   // Generic register reader using @llvm.read_register intrinsic
   // Used for reading x12 (rmethod), x28 (rthread), x20 (esp), etc.
@@ -1256,6 +1233,13 @@ BasicBlock* YuhuBuilder::GetBlockInsertionPoint() const {
     return &*iter; // Dereference iterator to get BasicBlock*
 }
 
+void YuhuBuilder::InsertStackMapAtBlockStart(llvm::BasicBlock* block, uint64_t id, llvm::ArrayRef<llvm::Value*> live_values) {
+    BasicBlock::iterator firstNonPHIIt = block->getFirstNonPHIIt();
+    SetInsertPoint(block, firstNonPHIIt);
+
+    CreateStackMap(id, 0, live_values);
+}
+
 BasicBlock* YuhuBuilder::CreateBlock(BasicBlock* ip, const char* name) const {
   return BasicBlock::Create(
     YuhuContext::current(), name, GetInsertBlock()->getParent(), ip);
@@ -1277,62 +1261,6 @@ StoreInst* YuhuBuilder::CreateAtomicStore(Value* val, Value* ptr, unsigned align
   // LLVM 20 uses opaque pointers
   // StoreInst constructor: StoreInst(Value *Val, Value *Ptr, bool isVolatile, Align Align, AtomicOrdering Order, SyncScope::ID SSID, ...)
   return Insert(new StoreInst(val, ptr, isVolatile, llvm::Align(align), ordering, llvm::SyncScope::System), name);
-}
-
-int YuhuBuilder::get_current_code_offset() const {
-  // Get the current code offset from the macro assembler
-  return code_buffer()->current_offset();
-}
-
-void YuhuBuilder::fixup_prologue_epilogue_markers(address code_start, size_t code_size) {
-  if (code_start == NULL || code_size == 0) {
-    return;
-  }
-
-  // Step 2: Use YuhuPrologueAnalyzer to extract the frame offset from "add x29, sp, #imm"
-  int frame_offset_bytes = YuhuPrologueAnalyzer::extract_add_x29_sp_imm(code_start);
-
-  // Step 2: Generate the correct SP restore instruction
-  // We need to restore SP from x29 by subtracting the frame offset
-  // If prologue was: add x29, sp, #32 (frame pointer = sp + 32)
-  // Then epilogue should be: sub sp, x29, #32 (sp = frame pointer - 32)
-  uint32_t restore_sp_instruction;
-  if (frame_offset_bytes == 0) {
-    // No offset needed, use "add sp, x29, #0"
-    // Encoding: [31]=1(SF), [30:29]=00(op), [28:24]=10000(ADD), [23:22]=00, [21:10]=0, [9:5]=29(x29), [4:0]=31(sp)
-    restore_sp_instruction = 0x91003D9F;
-  } else {
-    // Use SUB instruction to subtract the frame offset (64-bit version)
-    // AArch64 SUB immediate (64-bit) encoding:
-    //   [31]=1(SF for 64-bit), [30:29]=00, [28:24]=10010(SUB), [23:22]=00(shift), [21:10]=imm12, [9:5]=xn, [4:0]=xd
-    //   sub sp, x29, #imm -> 0xD1... (bit 31=1 for 64-bit registers)
-    //
-    // Note: ADD/SUB immediate is NOT scaled (unlike LDR/STR), so use frame_offset_bytes directly
-    // The immediate must fit in 12 bits (0-4095)
-
-    // Encode: sub sp, x29, #frame_offset_bytes (64-bit version)
-    // [31]=1, [30:24]=0b1010010, [23:22]=00, [21:10]=frame_offset_bytes, [9:5]=29(x29), [4:0]=31(sp)
-    restore_sp_instruction = (0xD1 << 24) | ((frame_offset_bytes & 0xFFF) << 10) | (29 << 5) | 31;
-  }
-
-  // Step 3: Find and replace the marker
-  // Scan only 4-byte aligned addresses to avoid alignment issues
-  const uint32_t marker_value = 0xcafebabe;
-
-  int replaced_count = 0;
-  unsigned char* code_ptr = (unsigned char*)code_start;
-  unsigned char* code_end = code_ptr + code_size;
-
-  // Only scan 4-byte aligned addresses (pc += 4, not pc += 1)
-  for (unsigned char* pc = code_ptr; pc < code_end - 4; pc += 4) {
-    uint32_t inst = *(uint32_t*)pc;
-
-    if (inst == marker_value) {
-      // Found the marker! Replace it with SP restore instruction
-      *(uint32_t*)pc = restore_sp_instruction;
-      replaced_count++;
-    }
-  }
 }
 
 void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, size_t llvm_code_size, CodeBuffer* cb, address code_start, size_t adapter_size) {
@@ -1804,39 +1732,4 @@ Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
     // If compressed oops are not used, just return the pointer value cast to appropriate type
     return CreatePtrToInt(oop, YuhuType::intptr_type());
   }
-}
-
-// Callee-saved register preservation across Java method calls
-// Save area is at [sp, #80] (right after LLVM spill slots, 10 words = 80 bytes)
-// We save: x19, x20, x23, x25, x27 (5 registers = 40 bytes) + 8 bytes padding
-// Total: 6 words = 48 bytes, maintaining 16-byte SP alignment
-
-void YuhuBuilder::CreateSaveCalleeSavedRegisters() {
-//  llvm::LLVMContext& ctx = getContext();
-//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-//    llvm::Type::getVoidTy(ctx), {}, false);
-//
-//  llvm::InlineAsm* save_asm = llvm::InlineAsm::get(
-//    asm_type,
-//    "stp x19, x20, [sp, #80]\n\t"
-//    "stp x23, x25, [sp, #96]\n\t"
-//    "str x27, [sp, #112]",
-//    "~{memory}", true, true, llvm::InlineAsm::AD_ATT);
-//
-//  CreateCall(asm_type, save_asm, {});
-}
-
-void YuhuBuilder::CreateRestoreCalleeSavedRegisters() {
-//  llvm::LLVMContext& ctx = getContext();
-//  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-//    llvm::Type::getVoidTy(ctx), {}, false);
-//
-//  llvm::InlineAsm* restore_asm = llvm::InlineAsm::get(
-//    asm_type,
-//    "ldr x27, [sp, #112]\n\t"
-//    "ldp x23, x25, [sp, #96]\n\t"
-//    "ldp x19, x20, [sp, #80]",
-//    "~{x19},~{x20},~{x23},~{x25},~{x27},~{memory}", true, false, llvm::InlineAsm::AD_ATT);
-//
-//  CreateCall(asm_type, restore_asm, {});
 }

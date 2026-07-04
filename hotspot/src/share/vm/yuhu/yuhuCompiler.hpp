@@ -74,6 +74,8 @@ class YuhuCompiler : public AbstractCompiler {
   // Initialization
   void initialize();
 
+  static bool contains_incomplete_state_analysis(ciTypeFlow* flow);
+
   // Compile a normal (bytecode) method and install it in the VM
   void compile_method(ciEnv* env, ciMethod* target, int entry_bci);
 

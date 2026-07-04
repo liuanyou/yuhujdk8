@@ -62,6 +62,7 @@ class YuhuFunction : public YuhuTargetInvariants {
 
  private:
   void initialize(const char* name);
+  void collect_handler_blocks_and_insert_stackmap();
 
  private:
   llvm::Function*                   _function;
@@ -71,7 +72,7 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::Value*                     _arg_base;
   llvm::Value*                     _arg_count;
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
-  llvm::Value*                     _return_slot;         // Return slot (pc_slot in frame header)s
+  llvm::Value*                     _return_slot;         // Return slot (pc_slot in frame header)
 
  public:
   llvm::Function* function() const {

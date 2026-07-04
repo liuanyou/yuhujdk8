@@ -224,7 +224,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadX22Register();  // Read x22 register (holds saved p7 parameter)
   llvm::CallInst* CreateReadRegister(const char* reg_name); // Generic register reader
   void CreateWriteStackPointer(llvm::Value* new_sp); // Write SP register (x31) on AArch64 using inline assembly
-  void CreateEpiloguePlaceholder(); // Placeholder for SP restore (replaced after compilation)
   llvm::CallInst* CreateMemset(llvm::Value* dst,
                                llvm::Value* value,
                                llvm::Value* len,
@@ -279,12 +278,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
                                 llvm::Type* type,
                                 const char*       name = "");
 
-  int get_current_code_offset() const;
-
-  // Prologue/Epilogue marker fixup support
- public:
-  static void fixup_prologue_epilogue_markers(address code_start, size_t code_size);
-
   // hotspot stores relocation points in unsigned short.
   // Layout:
   // Bits [15:12] = relocType (4 bits)
@@ -294,16 +287,12 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Handle all relocations in one method, including oop_relocation, poll_relocation and so on.
   void scan_and_generate_all_relocations(address llvm_code_start, size_t llvm_code_size, CodeBuffer* cb, address code_start, size_t adapter_size);
 
-  // Callee-saved register preservation across Java method calls
-  public:
-  void CreateSaveCalleeSavedRegisters();  // Save x19, x20, x23, x25, x27 to [sp, #80]
-  void CreateRestoreCalleeSavedRegisters();  // Restore from [sp, #80]
-
   // Helpers for creating basic blocks.
   // NB don't use unless YuhuFunction::CreateBlock is unavailable.
   // XXX these are hacky and should be removed.
  public:
   llvm::BasicBlock* GetBlockInsertionPoint() const;
+  void InsertStackMapAtBlockStart(llvm::BasicBlock* block, uint64_t id, llvm::ArrayRef<llvm::Value*> live_values);
   llvm::BasicBlock* CreateBlock(llvm::BasicBlock* ip,
                                 const char*       name="") const;
 };

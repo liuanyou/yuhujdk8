@@ -50,6 +50,10 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   _deopt_bundles = new GrowableArray<DeoptBundle*>();
 
   _frame_layout_info = new FrameLayoutInfo();
+
+  _exception_table_info_records = new GrowableArray<ExceptionTableInfoRecord*>();
+
+  _handler_block_info_records = new GrowableArray<HandlerBlockInfoRecord*>();
 }
 
 // Destructor
@@ -274,25 +278,70 @@ void YuhuDebugInformationRecorder::register_frame_layout_info_with_stack_map_fie
     _frame_layout_info->extended_frame_offset = extended_frame_offset;
 }
 
-void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInformationRecorder* real_recorder,
-                                      ciMethod* method,
-                                      int plus_offset,
-                                      int frame_size) {
+void YuhuDebugInformationRecorder::register_exception_handler_info(int start_bci, int limit_bci, int handler_bci, bool is_catch_all) {
+    int index = -1;
+    for (int i = 0; i < _exception_table_info_records->length(); ++i) {
+        ExceptionTableInfoRecord* rec = _exception_table_info_records->at(i);
+        if (rec->start_bci == start_bci) {
+            continue;
+        }
+        if (rec->limit_bci != limit_bci) {
+            continue;
+        }
+        if (rec->handler_bci != handler_bci) {
+            continue;
+        }
+        if (rec->is_catch_all != is_catch_all) {
+            continue;
+        }
+        index = i;
+        break;
+    }
+    if (index != -1) {
+        return;
+    }
+    auto exception_table_info_record = new ExceptionTableInfoRecord();
+    exception_table_info_record->start_bci = start_bci;
+    exception_table_info_record->limit_bci = limit_bci;
+    exception_table_info_record->handler_bci = handler_bci;
+    exception_table_info_record->is_catch_all = is_catch_all;
+    _exception_table_info_records->append(exception_table_info_record);
+}
+
+void YuhuDebugInformationRecorder::register_handler_block_info(uint32_t instruction_offset, uint32_t start_bci, uint32_t limit_bci, uint32_t num_exceptions, uint32_t num_successors) {
+    int index = _handler_block_info_records->find(&instruction_offset, [](void* token, HandlerBlockInfoRecord* entry) -> bool {
+        return *((uint32_t*)token) == entry->instruction_offset;
+    });
+    if (index != -1) {
+        return;
+    }
+    auto handler_block_info_record = new HandlerBlockInfoRecord();
+    handler_block_info_record->instruction_offset = instruction_offset;
+    handler_block_info_record->start_bci = start_bci;
+    handler_block_info_record->limit_bci = limit_bci;
+    handler_block_info_record->num_exceptions = num_exceptions;
+    handler_block_info_record->num_successors = num_successors;
+    _handler_block_info_records->append(handler_block_info_record);
+}
+
+void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugInformationRecorder* real_recorder,
+                                                                         ciMethod* method,
+                                                                         int plus_offset,
+                                                                         int frame_size) {
     using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
     GrowableArray<uint32_t> processed_instruction_offsets;
-    GrowableArray<std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>> entry_offsets_flatten_list;
+    GrowableArray<CallSiteEntryOffsetsPair> entry_offsets_flatten_list;
     for (int i = 0; i < _call_site_entries->length(); ++i) {
         assert(_call_site_entries->at(i)->machine_code_offsets->length() > 0, "offsets should not be empty");
         for (int j = 0; j < _call_site_entries->at(i)->machine_code_offsets->length(); ++j) {
-            std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*> entry_offsets(_call_site_entries->at(i), _call_site_entries->at(i)->machine_code_offsets->at(j));
-            entry_offsets_flatten_list.append(entry_offsets);
+            entry_offsets_flatten_list.append(CallSiteEntryOffsetsPair(_call_site_entries->at(i), _call_site_entries->at(i)->machine_code_offsets->at(j)));
         }
     }
 
     // sort by return_pc_offset, oopmap should be registered in ascending order
-    entry_offsets_flatten_list.sort([](std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>* a, std::pair<CallSiteEntry*, CallSiteMachineCodeOffsets*>* b) -> int {
-        if ((*a).second->return_pc_offset < (*b).second->return_pc_offset) return -1;
-        if ((*a).second->return_pc_offset > (*b).second->return_pc_offset) return 1;
+    entry_offsets_flatten_list.sort([](CallSiteEntryOffsetsPair* a, CallSiteEntryOffsetsPair* b) -> int {
+        if ((*a).offsets->return_pc_offset < (*b).offsets->return_pc_offset) return -1;
+        if ((*a).offsets->return_pc_offset > (*b).offsets->return_pc_offset) return 1;
         return 0;
     });
 
@@ -351,8 +400,8 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
     int max_monitors = _frame_layout_info->monitor_words / 2;
 
     for (int i = 0; i < entry_offsets_flatten_list.length(); ++i) {
-        CallSiteEntry* call_site_entry = entry_offsets_flatten_list.at(i).first;
-        CallSiteMachineCodeOffsets* machine_code_offsets = entry_offsets_flatten_list.at(i).second;
+        CallSiteEntry* call_site_entry = entry_offsets_flatten_list.at(i).entry;
+        CallSiteMachineCodeOffsets* machine_code_offsets = entry_offsets_flatten_list.at(i).offsets;
 
         uint64_t return_pc_offset = machine_code_offsets->return_pc_offset;
 
@@ -628,6 +677,124 @@ void YuhuDebugInformationRecorder::convert_and_add_to_real_recorder(DebugInforma
             assert(kind != static_cast<uint8_t>(StackMapParser::LocationKind::Direct)
                    && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Register)
                    && kind != static_cast<uint8_t>(StackMapParser::LocationKind::Indirect), "Should contain no live oops");
+        }
+    }
+}
+
+void YuhuDebugInformationRecorder::generate_exception_handler_table(ciMethod* method, ExceptionHandlerTable* exception_handler_table, int plus_offset) {
+    if (!_exception_table_info_records->length())
+        return;
+
+    GrowableArray<std::pair<ExceptionTableInfoRecord*, HandlerBlockInfoRecord*>> exception_handler_pair_list;
+
+    for (int i = 0; i < _exception_table_info_records->length(); ++i) {
+        ExceptionTableInfoRecord* handler = _exception_table_info_records->at(i);
+        assert(_handler_block_info_records->length() > 0, "should contain handler block info records");
+
+        HandlerBlockInfoRecord* found_info_record = NULL;
+        for (int j = 0; j < _handler_block_info_records->length(); ++j) {
+            if (_handler_block_info_records->at(j)->start_bci == (uint32_t)handler->handler_bci) {
+                assert(found_info_record == NULL, "should be only one matched info record");
+                found_info_record = _handler_block_info_records->at(j);
+            }
+        }
+        assert(found_info_record != NULL, "there should be matched info record");
+
+        std::pair<ExceptionTableInfoRecord*, HandlerBlockInfoRecord*> exception_handler_pair(handler, found_info_record);
+        exception_handler_pair_list.append(exception_handler_pair);
+    }
+
+    // ideally only java call and vm call throws exceptions
+    // observe some vm call is to throw NullPointerException, bci may be within handler's from/to range or not.
+    // for those not within, they are filtered by start/limit check, for those within, they are kept and have
+    // exception table entry, which may be redundant but there is no harm.
+    GrowableArray<CallSiteEntryOffsetsPair> entry_offsets_flatten_list;
+    for (int i = 0; i < _call_site_entries->length(); ++i) {
+        assert(_call_site_entries->at(i)->machine_code_offsets->length() > 0, "offsets should not be empty");
+        if (_call_site_entries->at(i)->call_site_type != CallSiteType::vm_call &&
+            _call_site_entries->at(i)->call_site_type != CallSiteType::java_call &&
+            _call_site_entries->at(i)->bci != -1) { // filter entry with bci equals -1
+            continue;
+        }
+
+        for (int j = 0; j < _call_site_entries->at(i)->machine_code_offsets->length(); ++j) {
+            entry_offsets_flatten_list.append(CallSiteEntryOffsetsPair(_call_site_entries->at(i), _call_site_entries->at(i)->machine_code_offsets->at(j)));
+        }
+    }
+
+    // sort by return_pc_offset and bci, return_pc_offset is also catch_pco
+    entry_offsets_flatten_list.sort([](CallSiteEntryOffsetsPair* a, CallSiteEntryOffsetsPair* b) -> int {
+        if ((*a).offsets->return_pc_offset < (*b).offsets->return_pc_offset) return -1;
+        if ((*a).offsets->return_pc_offset > (*b).offsets->return_pc_offset) return 1;
+        if ((*a).entry->bci < (*b).entry->bci) return -1;
+        if ((*a).entry->bci > (*b).entry->bci) return 1;
+        return 0;
+    });
+    // group entry_offsets_flatten_list group by return_pc_offset
+    GrowableArray<std::pair<uint64_t, GrowableArray<CallSiteEntryOffsetsPair>>> entry_offsets_group_list;
+
+    uint64_t last_return_pc_offset = 0; // return_pc_offset must never be 0
+    for (int i = 0; i < entry_offsets_flatten_list.length(); ++i) {
+        CallSiteEntryOffsetsPair pair = entry_offsets_flatten_list.at(i);
+
+        if (last_return_pc_offset == pair.offsets->return_pc_offset) {
+            entry_offsets_group_list.at(entry_offsets_group_list.length() - 1).second.append(pair);
+        } else {
+            GrowableArray<CallSiteEntryOffsetsPair> grouped_pairs;
+            grouped_pairs.append(pair);
+            std::pair<uint64_t, GrowableArray<CallSiteEntryOffsetsPair>> group(pair.offsets->return_pc_offset, grouped_pairs);
+            entry_offsets_group_list.append(group);
+            last_return_pc_offset = pair.offsets->return_pc_offset;
+        }
+    }
+
+    // allocate some arrays for use by the collection code.
+    const int num_handlers = 5;
+    GrowableArray<intptr_t>* bcis = new GrowableArray<intptr_t>(num_handlers);
+    GrowableArray<intptr_t>* scope_depths = NULL; // Yuhu doesn't support inline method
+    GrowableArray<intptr_t>* pcos = new GrowableArray<intptr_t>(num_handlers);
+    GrowableArray<bool>* is_catch_alls = new GrowableArray<bool>(num_handlers);
+
+    for (int i = 0; i < entry_offsets_group_list.length(); ++i) {
+        uint64_t catch_pco = entry_offsets_group_list.at(i).first + plus_offset;
+
+        // empty the arrays
+        bcis->trunc_to(0);
+        pcos->trunc_to(0);
+        is_catch_alls->trunc_to(0);
+
+        GrowableArray<CallSiteEntryOffsetsPair> grouped_pairs = entry_offsets_group_list.at(i).second;
+
+        for (int k = 0; k < grouped_pairs.length(); ++k) {
+            int catch_bci = grouped_pairs.at(k).entry->bci;
+
+            for (int j = 0; j < exception_handler_pair_list.length(); ++j) {
+                int start_bci = exception_handler_pair_list.at(j).first->start_bci;
+                int limit_bci = exception_handler_pair_list.at(j).first->limit_bci;
+                int handler_bci = exception_handler_pair_list.at(j).first->handler_bci;
+                uint64_t handler_pco = exception_handler_pair_list.at(j).second->instruction_offset + plus_offset;
+                if (catch_bci >= start_bci && catch_bci <= limit_bci && !bcis->contains(handler_bci)) {
+                    bcis->append(handler_bci);
+                    assert(!pcos->contains(handler_pco), "same handler_bci should be always matched to same handler_pco");
+                    pcos->append(handler_pco);
+                    is_catch_alls->append(exception_handler_pair_list.at(j).first->is_catch_all);
+                }
+            }
+        }
+
+        if (bcis->length()) {
+            // One bci may throw multiple different exceptions, so multiple handlers may be matched.
+            // And there may be multiple catch_all handlers, but we need to make sure these catch_all handlers
+            // are at last
+            for (int k = 0; k < is_catch_alls->length(); ++k) {
+                if (is_catch_alls->at(k)) {
+                    for (int j = k; j < is_catch_alls->length(); ++j) {
+                        assert(is_catch_alls->at(j), "catch all must be last handler");
+                    }
+                    break;
+                }
+            }
+            exception_handler_table->add_subtable(catch_pco, bcis, scope_depths, pcos);
         }
     }
 }

@@ -100,12 +100,6 @@ void YuhuFunction::initialize(const char *name) {
   // Initialize member variables
   _arg_base = NULL;
   _arg_count = NULL;
-
-  // Create the function and add it to the Module immediately
-  // This ensures the Function has a parent Module, which is required
-  // for IRBuilder to access DataLayout (especially in LLVM 20+)
-  _arg_base = NULL;
-  _arg_count = NULL;
   
   _function = Function::Create(
     entry_point_type(),
@@ -447,6 +441,58 @@ void YuhuFunction::initialize(const char *name) {
     block(i)->emit_IR();
   }
   do_deferred_zero_checks();
+  collect_handler_blocks_and_insert_stackmap();
+}
+
+void YuhuFunction::collect_handler_blocks_and_insert_stackmap() {
+    GrowableArray<YuhuTopLevelBlock*> handler_blocks;
+    GrowableArray<ciExceptionHandler*> exception_handlers;
+
+    for (int i = 0; i < block_count(); i++) {
+        YuhuTopLevelBlock* individual_block = block(i);
+        for (int j = 0; j < individual_block->num_exceptions(); j++) {
+            YuhuTopLevelBlock* handler_block = individual_block->exception(j);
+            if (handler_block && !handler_blocks.contains(handler_block)) {
+                handler_blocks.append(handler_block);
+            }
+        }
+        for (int j =0; j < individual_block->num_exceptions(); j++) {
+            ciExceptionHandler* exception_handler = individual_block->exc_handler(j);
+            if (exception_handler && !exception_handlers.contains(exception_handler)) {
+                exception_handlers.append(exception_handler);
+            }
+        }
+    }
+
+    // process handler blocks
+    handler_blocks.sort([](YuhuTopLevelBlock** a, YuhuTopLevelBlock** b) -> int {
+        if ((*a)->start() < (*b)->start()) return -1;
+        if ((*a)->start() > (*b)->start()) return  1;
+        return 0;
+    });;
+    if (handler_blocks.length()) {
+        for (int i = 0; i < handler_blocks.length(); ++i) {
+            std::vector<llvm::Value*> live_values;
+            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->start()));
+            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->limit()));
+            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->num_exceptions()));
+            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->num_successors()));
+            builder()->InsertStackMapAtBlockStart(handler_blocks.at(i)->entry_block(), i, live_values);
+        }
+    }
+
+    // process exception handlers
+    exception_handlers.sort([](ciExceptionHandler** a, ciExceptionHandler** b) -> int {
+        if ((*a)->start() < (*b)->start()) return -1;
+        if ((*a)->start() > (*b)->start()) return  1;
+        return 0;
+    });;
+    if (exception_handlers.length()) {
+        for (int i = 0; i < exception_handlers.length(); ++i) {
+            ciExceptionHandler* h = exception_handlers.at(i);
+            YuhuDebugInformationRecorder::get()->register_exception_handler_info(h->start(), h->limit(), h->handler_bci(), h->is_catch_all());
+        }
+    }
 }
 
 class DeferredZeroCheck : public YuhuTargetInvariants {
