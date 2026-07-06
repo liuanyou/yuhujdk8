@@ -334,6 +334,8 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                     }
                 }
                 assert(found_offset, "extended sp alloca should have offset");
+            } else if (UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID == StatepointID) {
+                YuhuDebugInformationRecorder::get()->set_unified_exit_block_start_pco(InstructionOffset);
             } else if (StatepointDirectives::DefaultStatepointID == StatepointID) {
                 // 5. 解析 locations（栈上的 GC 根）
                 for (auto LocationRecord : StatepointRecord.locations()) {

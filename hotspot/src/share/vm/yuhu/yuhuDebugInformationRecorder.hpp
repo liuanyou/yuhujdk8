@@ -133,6 +133,8 @@ private:
   // Thread-local storage index
   static int _tls_index;
 
+  uint64_t _unified_exit_block_start_pco;
+
 public:
   YuhuDebugInformationRecorder();
   ~YuhuDebugInformationRecorder();
@@ -369,6 +371,14 @@ public:
 
   size_t get_func_size() const {
       return _func_size;
+  }
+
+  void set_unified_exit_block_start_pco(uint64_t unified_exit_block_start_pco) {
+      _unified_exit_block_start_pco = unified_exit_block_start_pco;
+  }
+
+  uint64_t get_unified_exit_block_start_pco() const {
+      return _unified_exit_block_start_pco;
   }
 
   void generate_safepoint_and_describe_scope(DebugInformationRecorder* real_recorder,

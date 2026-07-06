@@ -1519,9 +1519,9 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
                 // Before patch :
                 //
-                // mov x8, #imm16                  # Loads lower 0-15 bits of safepoint_poll
-                // movk x8, #imm16, lsl #16        # Loads mid 16-31 bits of safepoint_poll
-                // movk x8, #imm16, lsl #32        # Loads mid 32-47 bits of safepoint_poll
+                // mov x8, #imm16                  # Loads lower 0-15 bits of unwind_handler
+                // movk x8, #imm16, lsl #16        # Loads mid 16-31 bits of unwind_handler
+                // movk x8, #imm16, lsl #32        # Loads mid 32-47 bits of unwind_handler
                 // ...inst...
                 // blr    x8                       # Branches to function
 

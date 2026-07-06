@@ -336,15 +336,10 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
     masm.write_inst("ldp x29, x30, [sp, #16]");
     masm.write_inst("ldp xzr, x19, [sp]");
     masm.write_inst("add sp, sp, #32");
-    // get caller's exception handler
-    masm.write_inst("stp x0, x30, [sp, #-16]!");
-    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
-                                                         SharedRuntime::exception_handler_for_return_address),
-                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
-    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
-    masm.write_inst_br(YuhuMacroAssembler::x1);
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+    // Return to caller
+    masm.write_inst("ret");
 
   masm.flush();
   
@@ -432,15 +427,10 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
     masm.write_inst("ldp x29, x30, [sp, #16]");
     masm.write_inst("ldp xzr, x19, [sp]");
     masm.write_inst("add sp, sp, #32");
-    // get caller's exception handler
-    masm.write_inst("stp x0, x30, [sp, #-16]!");
-    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
-                                                         SharedRuntime::exception_handler_for_return_address),
-                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
-    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
-    masm.write_inst_br(YuhuMacroAssembler::x1);
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+    // Return to caller
+    masm.write_inst("ret");
 
     masm.flush();
   
@@ -572,15 +562,10 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
     masm.write_inst("ldp x29, x30, [sp, #16]");
     masm.write_inst("ldp xzr, x19, [sp]");
     masm.write_inst("add sp, sp, #32");
-    // get caller's exception handler
-    masm.write_inst("stp x0, x30, [sp, #-16]!");
-    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address,
-                                                         SharedRuntime::exception_handler_for_return_address),
-                                        YuhuMacroAssembler::x28, YuhuMacroAssembler::x30);
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
-    masm.write_inst_ldp(YuhuMacroAssembler::x0, YuhuMacroAssembler::x30, YuhuPost(YuhuMacroAssembler::sp, 16));
-    masm.write_inst_mov_reg(YuhuMacroAssembler::x3, YuhuMacroAssembler::x30);
-    masm.write_inst_br(YuhuMacroAssembler::x1);
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+    // Return to caller
+    masm.write_inst("ret");
 
     masm.flush();
   
@@ -743,7 +728,7 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
 
 // Check if an address belongs to a Yuhu RuntimeStub
 // All Yuhu RuntimeStubs have names starting with "yuhu_"
-bool YuhuRuntime::is_yuhu_call_stub(address addr) {
+JRT_LEAF(bool, YuhuRuntime::is_yuhu_call_stub(address addr))
   CodeBlob* blob = CodeCache::find_blob(addr);
   if (blob == NULL || !blob->is_runtime_stub()) {
     return false;
@@ -758,7 +743,7 @@ bool YuhuRuntime::is_yuhu_call_stub(address addr) {
   return strcmp(name, "yuhu_static_call_stub") == 0 ||
             strcmp(name, "yuhu_virtual_call_stub") == 0 ||
             strcmp(name, "yuhu_interface_call_stub") == 0;
-}
+JRT_END
 
 address YuhuRuntime::exception_begin(address addr) {
     CodeBlob* blob = CodeCache::find_blob(addr);

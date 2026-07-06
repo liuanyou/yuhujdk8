@@ -441,7 +441,9 @@ void YuhuFunction::initialize(const char *name) {
     block(i)->emit_IR();
   }
   do_deferred_zero_checks();
-  collect_handler_blocks_and_insert_stackmap();
+//  collect_handler_blocks_and_insert_stackmap();
+  std::vector<llvm::Value*> live_values;
+  builder()->InsertStackMapAtBlockStart(_unified_exit_block, UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID, live_values);
 }
 
 void YuhuFunction::collect_handler_blocks_and_insert_stackmap() {

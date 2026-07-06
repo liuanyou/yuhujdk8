@@ -1189,7 +1189,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
       // Must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
-      generate_unwind_handler(combined_cb, frame_size * wordSize);
+      generate_unwind_handler(combined_cb, combined_base, frame_size * wordSize, adapter_size,
+                              YuhuDebugInformationRecorder::get()->get_unified_exit_block_start_pco());
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
@@ -1218,7 +1219,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Register oop map
     YuhuDebugInformationRecorder::get()->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
     // Generate exception handler table
-    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
+//    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
     
     env->register_method(target,
                          entry_bci,
@@ -1440,6 +1441,9 @@ int YuhuCompiler::measure_exception_handler_size() {
   // nop to ensure the return address points into the code area (same reason as C1)
   masm.write_inst("nop");
 
+    // mark as not implemented, TODO
+    masm.write_insts_stop("not implemented");
+
   // Load the runtime entry address into a scratch register and call it.
   // Runtime1::handle_exception_from_callee_id expects:
   //   r0 = exception oop, r3 = throwing pc
@@ -1466,6 +1470,9 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
   // nop to ensure the return address points into the code area (same reason as C1)
   masm.write_inst("nop");
 
+    // mark as not implemented, TODO
+    masm.write_insts_stop("not implemented");
+
   // Load the runtime entry address into a scratch register and call it.
   // Runtime1::handle_exception_from_callee_id expects:
   //   r0 = exception oop, r3 = throwing pc
@@ -1486,18 +1493,30 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
 
-    // 2. Load exception oop from JavaThread and clear TLS fields.
+    YuhuLabel caller_is_not_yuhu;
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes - wordSize));
+    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_call_stub), YuhuMacroAssembler::x0);
+    masm.write_inst_cbz(YuhuMacroAssembler::x0, caller_is_not_yuhu);
+
+    // 1. caller is yuhu, then go to unified_exit_block - callee returns, caller checks pending exception and handle it
+    size_t adapter_size = 0;
+    uint64_t unified_exit_block_start_pco = 0;
+    address unified_exit_block_start = (address) (temp_cb.insts_begin() + adapter_size + unified_exit_block_start_pco);
+    masm.write_inst_b(unified_exit_block_start);
+
+    // 2. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
+    masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
 
-    // 3. Remove frame: restore SP
-    //    then pop x29/x30 (ldp, 4 bytes).
-    //    Actual imm is filled in by generate_unwind_handler().
+    // 3. Remove frame: mirror the LLVM epilogue sequence.
     masm.write_insts_remove_frame(frame_size_in_bytes);
 
     // 4. Jump to Runtime1::unwind_exception_id.
-    //    At that point: r0 = exception oop, lr = caller's return address.
+    //    That stub uses lr to call SharedRuntime::exception_handler_for_return_address,
+    //    which walks the caller's frame to locate its exception handler.
+    //    On return it does: br <handler_addr>  with  x0=exception_oop, x3=throwing_pc.
     address runtime_entry = Runtime1::entry_for(Runtime1::unwind_exception_id);
     masm.write_insts_far_jump(YuhuRuntimeAddress(runtime_entry));
 
@@ -1505,17 +1524,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes) {
     return (int)(end - start);
 }
 
-// Generate unwind handler for propagating exceptions to callers.
-// This is required by the JVM for all compiled methods, even those without try-catch.
-//
-// frame_size_in_bytes: the complete yuhu frame size in bytes (frame_size * wordSize).
-//
-// Register protocol on entry (set by exception_handler_for_pc or trap dispatch):
-//   x28 (rthread) = JavaThread* with exception_oop / exception_pc filled in
-//
-// Register protocol on exit to Runtime1::unwind_exception_id:
-//   x0 = exception oop, lr = caller's return address (used to find the caller's handler)
-int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes) {
+int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, address code_start, int frame_size_in_bytes, size_t adapter_size, uint64_t unified_exit_block_start_pco) {
     if (YuhuTraceInstalls) {
         tty->print_cr("Yuhu: Generating unwind handler (frame_size_in_bytes=%d)", frame_size_in_bytes);
     }
@@ -1524,8 +1533,17 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
 
     address start = masm.current_pc();
 
-    // 2. Load exception oop from JavaThread and clear TLS fields.
-    //    Runtime1::generate_unwind_exception asserts these are empty on entry.
+    YuhuLabel caller_is_not_yuhu;
+    masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes - wordSize));
+    masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_call_stub), YuhuMacroAssembler::x0);
+    masm.write_inst_cbz(YuhuMacroAssembler::x0, caller_is_not_yuhu);
+
+    // 1. caller is yuhu, then go to unified_exit_block - callee returns, caller checks pending exception and handle it
+    address unified_exit_block_start = (address) (code_start + adapter_size + unified_exit_block_start_pco);
+    masm.write_inst_b(unified_exit_block_start);
+
+    // 2. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
+    masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
