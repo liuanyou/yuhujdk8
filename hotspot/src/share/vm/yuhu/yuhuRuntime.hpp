@@ -48,6 +48,10 @@ class YuhuRuntime : public AllStatic {
   static address _find_exception_handler_stub;
   static address _is_subtype_of_stub;
   static address _current_time_millis_stub;
+  static address _throw_ArithmeticException_stub;
+  static address _throw_ArrayIndexOutOfBoundsException_stub;
+  static address _throw_ClassCastException_stub;
+  static address _throw_NullPointerException_stub;
 
   static address _handle_deoptimization_stub;
 
@@ -76,6 +80,10 @@ class YuhuRuntime : public AllStatic {
   static address find_exception_handler_stub() { return _find_exception_handler_stub; }
   static address is_subtype_of_stub() { return _is_subtype_of_stub; }
   static address current_time_millis_stub() { return _current_time_millis_stub; }
+  static address throw_ArithmeticException_stub() { return _throw_ArithmeticException_stub; }
+  static address throw_ArrayIndexOutOfBoundsException_stub() { return _throw_ArrayIndexOutOfBoundsException_stub; }
+  static address throw_ClassCastException_stub() { return _throw_ClassCastException_stub; }
+  static address throw_NullPointerException_stub() { return _throw_NullPointerException_stub; }
 
   static address handle_deoptimization_stub() { return _handle_deoptimization_stub; }
   
@@ -99,19 +107,6 @@ class YuhuRuntime : public AllStatic {
   static address generate_interface_call_stub(ciMethod* target_method, 
                                               ciMethod* current_method);
 
-  // NOTE (Option A refactor): VM call entry points no longer derive the
-  // current Method* / cp index by walking the caller frame, because the
-  // RuntimeStub wrapper makes the youngest frame a non-nmethod CodeBlob.
-  // The JIT now passes the resolved Method* / Klass* / oop directly.
-  static int find_exception_handler(JavaThread* thread,
-                                    Method*     method,
-                                    oop         exception,
-                                    int*        indexes,
-                                    int         num_indexes);
-
-  static void monitorenter(JavaThread* thread, BasicObjectLock* lock);
-  static void monitorexit(JavaThread* thread, BasicObjectLock* lock);
-
   static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);
   static void anewarray(JavaThread* thread, Klass* element_klass, int size);
@@ -120,7 +115,24 @@ class YuhuRuntime : public AllStatic {
                              int         ndims,
                              int*        dims);
 
-  static void register_finalizer(JavaThread* thread, oop object);
+    static void monitorenter(JavaThread* thread, BasicObjectLock* lock);
+    static void monitorexit(JavaThread* thread, BasicObjectLock* lock);
+
+    static void register_finalizer(JavaThread* thread, oop object);
+
+    // NOTE (Option A refactor): VM call entry points no longer derive the
+    // current Method* / cp index by walking the caller frame, because the
+    // RuntimeStub wrapper makes the youngest frame a non-nmethod CodeBlob.
+    // The JIT now passes the resolved Method* / Klass* / oop directly.
+    static int find_exception_handler(JavaThread* thread,
+                                      Method*     method,
+                                      oop         exception,
+                                      int*        indexes,
+                                      int         num_indexes);
+
+    static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
+
+    // current_time_millis - os::javaTimeMillis
 
   static void throw_ArithmeticException(JavaThread* thread,
                                         const char* file,
@@ -147,7 +159,6 @@ class YuhuRuntime : public AllStatic {
   // Non-VM calls
  public:
   static void dump(const char *name, intptr_t value);
-  static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
   
   // Debug helper for stack overflow check
   static void debug_stack_overflow_check(JavaThread* thread,

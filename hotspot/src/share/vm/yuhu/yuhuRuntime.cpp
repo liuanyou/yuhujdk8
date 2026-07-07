@@ -48,57 +48,6 @@
 
 using namespace llvm;
 
-JRT_ENTRY(int, YuhuRuntime::find_exception_handler(JavaThread* thread,
-                                                    Method*     caller_method,
-                                                    oop         exception,
-                                                    int*        indexes,
-                                                    int         num_indexes))
-  // Option A: caller passes Method* and the exception oop explicitly.
-  // The constant pool comes from the caller Method* (the JIT-compiled
-  // Yuhu method that threw / re-dispatched the exception).
-  constantPoolHandle pool(thread, caller_method->constants());
-  KlassHandle exc_klass(thread, exception->klass());
-
-  for (int i = 0; i < num_indexes; i++) {
-    Klass* tmp = pool->klass_at(indexes[i], CHECK_0);
-    KlassHandle chk_klass(thread, tmp);
-
-    if (exc_klass() == chk_klass())
-      return i;
-
-    if (exc_klass()->is_subtype_of(chk_klass()))
-      return i;
-  }
-
-  return -1;
-JRT_END
-
-JRT_ENTRY(void, YuhuRuntime::monitorenter(JavaThread*      thread,
-                                           BasicObjectLock* lock))
-  if (PrintBiasedLockingStatistics)
-    Atomic::inc(BiasedLocking::slow_path_entry_count_addr());
-
-  Handle object(thread, lock->obj());
-  assert(Universe::heap()->is_in_reserved_or_null(object()), "should be");
-  if (UseBiasedLocking) {
-    // Retry fast entry if bias is revoked to avoid unnecessary inflation
-    ObjectSynchronizer::fast_enter(object, lock->lock(), true, CHECK);
-  } else {
-    ObjectSynchronizer::slow_enter(object, lock->lock(), CHECK);
-  }
-  assert(Universe::heap()->is_in_reserved_or_null(lock->obj()), "should be");
-JRT_END
-
-JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
-                                          BasicObjectLock* lock))
-  Handle object(thread, lock->obj());
-  assert(Universe::heap()->is_in_reserved_or_null(object()), "should be");
-  if (lock == NULL || object()->is_unlocked()) {
-    THROW(vmSymbols::java_lang_IllegalMonitorStateException());
-  }
-  ObjectSynchronizer::slow_exit(object(), lock->lock(), thread);
-JRT_END
-
 JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, Klass* k_oop))
   // Option A: JIT passes resolved Klass* directly (embedded as a
   // metadata-relocated constant in the nmethod). No frame walk needed.
@@ -152,12 +101,67 @@ JRT_ENTRY(void, YuhuRuntime::multianewarray(JavaThread* thread,
   thread->set_vm_result(obj);
 JRT_END
 
+JRT_ENTRY(void, YuhuRuntime::monitorenter(JavaThread*      thread,
+                                          BasicObjectLock* lock))
+    if (PrintBiasedLockingStatistics)
+        Atomic::inc(BiasedLocking::slow_path_entry_count_addr());
+
+    Handle object(thread, lock->obj());
+    assert(Universe::heap()->is_in_reserved_or_null(object()), "should be");
+    if (UseBiasedLocking) {
+        // Retry fast entry if bias is revoked to avoid unnecessary inflation
+        ObjectSynchronizer::fast_enter(object, lock->lock(), true, CHECK);
+    } else {
+        ObjectSynchronizer::slow_enter(object, lock->lock(), CHECK);
+    }
+    assert(Universe::heap()->is_in_reserved_or_null(lock->obj()), "should be");
+JRT_END
+
+JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
+                                         BasicObjectLock* lock))
+    Handle object(thread, lock->obj());
+    assert(Universe::heap()->is_in_reserved_or_null(object()), "should be");
+    if (lock == NULL || object()->is_unlocked()) {
+        THROW(vmSymbols::java_lang_IllegalMonitorStateException());
+    }
+    ObjectSynchronizer::slow_exit(object(), lock->lock(), thread);
+JRT_END
+
 JRT_ENTRY(void, YuhuRuntime::register_finalizer(JavaThread* thread,
                                                  oop         object))
   assert(object->is_oop(), "should be");
   assert(object->klass()->has_finalizer(), "should have");
   InstanceKlass::register_finalizer(instanceOop(object), CHECK);
 JRT_END
+
+JRT_ENTRY(int, YuhuRuntime::find_exception_handler(JavaThread* thread,
+                                                   Method*     caller_method,
+                                                   oop         exception,
+        int*        indexes,
+        int         num_indexes))
+    // Option A: caller passes Method* and the exception oop explicitly.
+    // The constant pool comes from the caller Method* (the JIT-compiled
+    // Yuhu method that threw / re-dispatched the exception).
+    constantPoolHandle pool(thread, caller_method->constants());
+    KlassHandle exc_klass(thread, exception->klass());
+
+    for (int i = 0; i < num_indexes; i++) {
+        Klass* tmp = pool->klass_at(indexes[i], CHECK_0);
+        KlassHandle chk_klass(thread, tmp);
+
+        if (exc_klass() == chk_klass())
+            return i;
+
+        if (exc_klass()->is_subtype_of(chk_klass()))
+            return i;
+    }
+
+    return -1;
+JRT_END
+
+// ------
+// current_time_millis - os::javaTimeMillis
+// ------
 
 JRT_ENTRY(void, YuhuRuntime::throw_ArithmeticException(JavaThread* thread,
                                                         const char* file,
@@ -614,6 +618,11 @@ address YuhuRuntime::_register_finalizer_stub = NULL;
 address YuhuRuntime::_find_exception_handler_stub = NULL;
 address YuhuRuntime::_is_subtype_of_stub = NULL;
 address YuhuRuntime::_current_time_millis_stub = NULL;
+address YuhuRuntime::_throw_ArithmeticException_stub = NULL;
+address YuhuRuntime::_throw_ArrayIndexOutOfBoundsException_stub = NULL;
+address YuhuRuntime::_throw_ClassCastException_stub = NULL;
+address YuhuRuntime::_throw_NullPointerException_stub = NULL;
+
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
 volatile int YuhuRuntime::_static_call_stub_exception_handler_offset = 0;
@@ -632,6 +641,10 @@ void YuhuRuntime::initialize_vm_stubs() {
   _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
   _is_subtype_of_stub = generate_vm_stub("yuhu_is_subtype_of_stub", (address) YuhuRuntime::is_subtype_of);
   _current_time_millis_stub = generate_vm_stub("yuhu_current_time_millis_stub", (address) os::javaTimeMillis);
+  _throw_ArithmeticException_stub = generate_vm_stub("yuhu_throw_ArithmeticException_stub", (address) YuhuRuntime::throw_ArithmeticException);
+  _throw_ArrayIndexOutOfBoundsException_stub = generate_vm_stub("yuhu_throw_ArrayIndexOutOfBoundsException_stub", (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException);
+  _throw_ClassCastException_stub = generate_vm_stub("yuhu_throw_ClassCastException_stub", (address) YuhuRuntime::throw_ClassCastException);
+  _throw_NullPointerException_stub = generate_vm_stub("yuhu_throw_NullPointerException_stub", (address) YuhuRuntime::throw_NullPointerException);;
 
   _handle_deoptimization_stub = generate_handle_deoptimization_stub();
   

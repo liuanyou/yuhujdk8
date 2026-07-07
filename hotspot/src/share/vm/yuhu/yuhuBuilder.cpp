@@ -407,22 +407,22 @@ Value* YuhuBuilder::safepoint() {
 
 Value* YuhuBuilder::throw_ArithmeticException() {
   return make_function(
-    (address) YuhuRuntime::throw_ArithmeticException, "TCi", "v");
+    (address) YuhuRuntime::throw_ArithmeticException_stub(), "TCi", "v");
 }
 
 Value* YuhuBuilder::throw_ArrayIndexOutOfBoundsException() {
   return make_function(
-    (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException, "TCii", "v");
+    (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException_stub(), "TCii", "v");
 }
 
 Value* YuhuBuilder::throw_ClassCastException() {
   return make_function(
-    (address) YuhuRuntime::throw_ClassCastException, "TCi", "v");
+    (address) YuhuRuntime::throw_ClassCastException_stub(), "TCi", "v");
 }
 
 Value* YuhuBuilder::throw_NullPointerException() {
   return make_function(
-    (address) YuhuRuntime::throw_NullPointerException, "TCi", "v");
+    (address) YuhuRuntime::throw_NullPointerException_stub(), "TCi", "v");
 }
 
 // High-level non-VM calls
