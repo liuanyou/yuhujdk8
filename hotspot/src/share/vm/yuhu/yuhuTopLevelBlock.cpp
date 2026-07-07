@@ -920,8 +920,9 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
       llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
 
       builder()->CreateCall(unwind_ftype, callee, {});
-      builder()->CreateUnreachable();
-      return;
+      // make sure unified_exit_block is always generated, otherwise, unwind handler is failed to be generated
+//      builder()->CreateUnreachable();
+//      return;
   }
 
   // CRITICAL: Jump to the unified exit block instead of creating multiple rets

@@ -83,7 +83,7 @@ class YuhuCompiler : public AbstractCompiler {
   static int measure_normal_adapter_size(int frame_size_in_bytes);
   static int measure_exception_handler_size();
   static int measure_deopt_handler_size();
-  static int measure_unwind_handler_size(int frame_size_in_bytes);
+  static int measure_unwind_handler_size(int frame_size_in_bytes, address llvm_code_start, uint64_t unified_exit_block_start_pco);
 
   int generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes);
   // Exception and deoptimization handler generation

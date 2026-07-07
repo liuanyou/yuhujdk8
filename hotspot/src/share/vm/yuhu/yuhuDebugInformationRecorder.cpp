@@ -54,6 +54,9 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   _exception_table_info_records = new GrowableArray<ExceptionTableInfoRecord*>();
 
   _handler_block_info_records = new GrowableArray<HandlerBlockInfoRecord*>();
+
+  _func_size = 0;
+  _unified_exit_block_start_pco = 0;
 }
 
 // Destructor
