@@ -55,7 +55,7 @@
 using namespace llvm;
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 
 YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
@@ -1485,7 +1485,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             assert(llvm_target_address == target_address, "should be the same");
 
             if (call_site_type == CallSiteType::safepoint_poll) {
-                uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
                 // Before patch :
                 //
                 // mov x8, #imm16                  # Loads lower 0-15 bits of safepoint_poll
@@ -1496,25 +1495,21 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
                 // After patch :
                 //
-                // adrp   x8, <polling_page>       # Points to polling page
-                // nop                             # nop
-                // nop                             # nop
+                // mov x8, #imm16                  # Loads lower 0-15 bits of safepoint_poll_stub
+                // movk x8, #imm16, lsl #16        # Loads mid 16-31 bits of safepoint_poll_stub
+                // movk x8, #imm16, lsl #32        # Loads mid 32-47 bits of safepoint_poll_stub
                 // ...inst...
-                // ldr    wzr, [x8]                # Loads polling page
+                // blr    x8                       # Branches to function
 
-                // Patch adrp instruction
-                bool new_adrp_polling_page_patched = patch_new_adrp_polling_page(placeholder_instrs, (uint64)os::get_polling_page(), blr_instr);
-                assert(new_adrp_polling_page_patched, "should patch successfully");
+                // If safepoint poll call shared the same blr instruction with other java/vm call, then it is not a good idea
+                // to patch blr instruction to ldr instruction, because it may break code flow after patching, so still have to
+                // use runtime function to do safepoint poll call, can't use polling page to do safepoint poll here
+                YuhuVirtualAddressScanner::patch_call_target_instructions((uint8_t*)code_start, (i + 5) * 4 + adapter_size, (uint64_t)YuhuRuntime::safepoint_poll_stub());
 
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = (i + 5) * 4 + adapter_size;
-                reloc_entry.reloc_type = relocInfo::relocType::poll_type;
+                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
-
-                RelocEntry reloc_entry2{};
-                reloc_entry2.offset = llvm_blr_offset + adapter_size;
-                reloc_entry2.reloc_type = relocInfo::relocType::poll_type;
-                reloc_entries.append(reloc_entry2);
             } else if (call_site_type == CallSiteType::unwind_call) {
                 uint32_t* blr_instr = (uint32_t*)(code_start + llvm_blr_offset + adapter_size);
                 // Before patch :
@@ -1582,8 +1577,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
             } else {
-                // this case doesn't exist for now, because right now we only use adrp for safepoint poll call and deoptimization call
-                // just add it for code completeness
+                // this case doesn't exist for now, because right now we only use adrp for deoptimization call,
+                // so just add it for code completeness
                 // Before patch :
                 //
                 // adrp   x8, <GOT_page>           # Points to GOT

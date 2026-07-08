@@ -58,7 +58,8 @@ enum class CallTargetType : uint8_t {
 };
 
 // Information about matched placeholders for a single statepoint
-struct VirtualAddressMatch {
+class VirtualAddressMatch : public ResourceObj {
+public:
   uint64_t virtual_offset;              // The shared virtual offset (e.g., 0x1000)
   
   uint64_t last_java_pc_va;             // Last Java PC placeholder (e.g., 0xDEAD1000)

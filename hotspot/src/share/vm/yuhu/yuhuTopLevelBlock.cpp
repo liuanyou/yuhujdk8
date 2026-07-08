@@ -50,7 +50,7 @@
 using namespace llvm;
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 extern "C" void go_unwind();
 
@@ -665,10 +665,10 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::safepoint_poll);
 
     llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+    llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), { YuhuType::thread_type() }, false);
     llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
 
-    builder()->CreateCall(poll_ftype, callee, {});
+    builder()->CreateCall(poll_ftype, callee, { thread() });
 
   current_state()->set_has_safepointed(true);
 }
@@ -920,9 +920,9 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
       llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
 
       builder()->CreateCall(unwind_ftype, callee, {});
-      // make sure unified_exit_block is always generated, otherwise, unwind handler is failed to be generated
-//      builder()->CreateUnreachable();
-//      return;
+      // because Unreachable, unified_exit_block may be eliminated by llvm
+      builder()->CreateUnreachable();
+      return;
   }
 
   // CRITICAL: Jump to the unified exit block instead of creating multiple rets

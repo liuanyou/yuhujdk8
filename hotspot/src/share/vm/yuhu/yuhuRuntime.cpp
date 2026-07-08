@@ -250,8 +250,10 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
   tty->print_cr("======================================");
 }
 
-extern "C" void gc_safepoint_poll() {
-    // just a placeholder function
+extern "C" void gc_safepoint_poll(JavaThread* thread) {
+    if (SafepointSynchronize::do_call_back()) {
+        SafepointSynchronize::block(thread);
+    }
 }
 
 extern "C" void handle_deoptimization() {
@@ -622,6 +624,7 @@ address YuhuRuntime::_throw_ArithmeticException_stub = NULL;
 address YuhuRuntime::_throw_ArrayIndexOutOfBoundsException_stub = NULL;
 address YuhuRuntime::_throw_ClassCastException_stub = NULL;
 address YuhuRuntime::_throw_NullPointerException_stub = NULL;
+address YuhuRuntime::_safepoint_poll_stub = NULL;
 
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
@@ -644,23 +647,30 @@ void YuhuRuntime::initialize_vm_stubs() {
   _throw_ArithmeticException_stub = generate_vm_stub("yuhu_throw_ArithmeticException_stub", (address) YuhuRuntime::throw_ArithmeticException);
   _throw_ArrayIndexOutOfBoundsException_stub = generate_vm_stub("yuhu_throw_ArrayIndexOutOfBoundsException_stub", (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException);
   _throw_ClassCastException_stub = generate_vm_stub("yuhu_throw_ClassCastException_stub", (address) YuhuRuntime::throw_ClassCastException);
-  _throw_NullPointerException_stub = generate_vm_stub("yuhu_throw_NullPointerException_stub", (address) YuhuRuntime::throw_NullPointerException);;
+  _throw_NullPointerException_stub = generate_vm_stub("yuhu_throw_NullPointerException_stub", (address) YuhuRuntime::throw_NullPointerException);
+
+  _safepoint_poll_stub = generate_vm_stub("yuhu_safepoint_poll_stub", (address) gc_safepoint_poll);
 
   _handle_deoptimization_stub = generate_handle_deoptimization_stub();
   
   if (YuhuTraceInstalls) {
     tty->print_cr("Yuhu: VM call stubs initialized");
-    tty->print_cr("  new_instance_stub:           " PTR_FORMAT, p2i(_new_instance_stub));
-    tty->print_cr("  newarray_stub:               " PTR_FORMAT, p2i(_newarray_stub));
-    tty->print_cr("  anewarray_stub:              " PTR_FORMAT, p2i(_anewarray_stub));
-    tty->print_cr("  multianewarray_stub:         " PTR_FORMAT, p2i(_multianewarray_stub));
-    tty->print_cr("  monitorenter_stub:           " PTR_FORMAT, p2i(_monitorenter_stub));
-    tty->print_cr("  monitorexit_stub:            " PTR_FORMAT, p2i(_monitorexit_stub));
-    tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT, p2i(_register_finalizer_stub));
-    tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT, p2i(_find_exception_handler_stub));
-    tty->print_cr("  is_subtype_of_stub:          " PTR_FORMAT, p2i(_is_subtype_of_stub));
-    tty->print_cr("  current_time_millis_stub:    " PTR_FORMAT, p2i(_current_time_millis_stub));
-    tty->print_cr("  handle_deoptimization_stub:  " PTR_FORMAT, p2i(_handle_deoptimization_stub));
+    tty->print_cr("  new_instance_stub:           " PTR_FORMAT,                  p2i(_new_instance_stub));
+    tty->print_cr("  newarray_stub:               " PTR_FORMAT,                  p2i(_newarray_stub));
+    tty->print_cr("  anewarray_stub:              " PTR_FORMAT,                  p2i(_anewarray_stub));
+    tty->print_cr("  multianewarray_stub:         " PTR_FORMAT,                  p2i(_multianewarray_stub));
+    tty->print_cr("  monitorenter_stub:           " PTR_FORMAT,                  p2i(_monitorenter_stub));
+    tty->print_cr("  monitorexit_stub:            " PTR_FORMAT,                  p2i(_monitorexit_stub));
+    tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT,                  p2i(_register_finalizer_stub));
+    tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT,                  p2i(_find_exception_handler_stub));
+    tty->print_cr("  is_subtype_of_stub:          " PTR_FORMAT,                  p2i(_is_subtype_of_stub));
+    tty->print_cr("  current_time_millis_stub:    " PTR_FORMAT,                  p2i(_current_time_millis_stub));
+    tty->print_cr("  throw_ArithmeticException_stub:    " PTR_FORMAT,            p2i(_throw_ArithmeticException_stub));
+    tty->print_cr("  throw_ArrayIndexOutOfBoundsException_stub:    " PTR_FORMAT, p2i(_throw_ArrayIndexOutOfBoundsException_stub));
+    tty->print_cr("  throw_ClassCastException_stub:    " PTR_FORMAT,             p2i(_throw_ClassCastException_stub));
+    tty->print_cr("  throw_NullPointerException_stub:    " PTR_FORMAT,           p2i(_throw_NullPointerException_stub));
+    tty->print_cr("  safepoint_poll_stub:  " PTR_FORMAT,                         p2i(_safepoint_poll_stub));
+    tty->print_cr("  handle_deoptimization_stub:  " PTR_FORMAT,                  p2i(_handle_deoptimization_stub));
   }
 }
 

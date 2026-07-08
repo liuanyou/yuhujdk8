@@ -23,13 +23,15 @@ enum class CallSiteType : uint8_t {
     unwind_call = 5
 };
 
-struct CallSiteMachineCodeOffsets {
+class CallSiteMachineCodeOffsets : public ResourceObj {
+public:
     uint64_t call_target_offset; // extracted by ORC plugin
     uint64_t blr_offset; // extracted by ORC plugin
     uint64_t return_pc_offset; // extracted by ORC plugin
 };
 
-struct CallSiteEntry {
+class CallSiteEntry : public ResourceObj {
+public:
     uint64_t virtual_offset; // generated at IR phase
     uint64_t virtual_address; // generated at IR phase
     uint64_t helper_address; // generated at IR phase
@@ -39,7 +41,8 @@ struct CallSiteEntry {
     GrowableArray<CallSiteMachineCodeOffsets*>* machine_code_offsets; // same IR may be duplicated in machine code, it is 1:M relations.
 };
 
-struct CallSiteEntryOffsetsPair {
+class CallSiteEntryOffsetsPair : public ResourceObj {
+public:
     CallSiteEntry* entry;
     CallSiteMachineCodeOffsets* offsets;
 
@@ -48,19 +51,22 @@ struct CallSiteEntryOffsetsPair {
     CallSiteEntryOffsetsPair(CallSiteEntry* ent, CallSiteMachineCodeOffsets* off) : entry(ent), offsets(off) {}
 };
 
-struct StackMapLocation {
+class StackMapLocation : public ResourceObj {
+public:
     uint8_t kind;
     uint32_t reg_num;
     int32_t offset;
     uint64_t constant;
 };
 
-struct StackMapEntry {
+class StackMapEntry : public ResourceObj {
+public:
     uint32_t instruction_offset;
     GrowableArray<StackMapLocation*>* locations;
 };
 
-struct DeoptBundle {
+class DeoptBundle : public ResourceObj {
+public:
     uint32_t instruction_offset;
     uint64_t bci;
     GrowableArray<uint8_t>* locals; // list of locals with basic type only...from 0 to max_locals-1
@@ -68,7 +74,8 @@ struct DeoptBundle {
     uint32_t num_monitors = 0; // num of monitors, 0 by default
 };
 
-struct FrameLayoutInfo {
+class FrameLayoutInfo : public ResourceObj {
+public:
     int total_frame_size_in_bytes = -1; // extracted from machine code's prologue
     int num_of_prologue_registers = -1; // extracted from machine code's prologue
     int header_words = -1; // initialized in YuhuStack::initialize method
@@ -81,14 +88,16 @@ struct FrameLayoutInfo {
     int extended_frame_offset = -1; // extracted from stack map
 };
 
-struct ExceptionTableInfoRecord {
+class ExceptionTableInfoRecord : public ResourceObj {
+public:
     int start_bci;
     int limit_bci;
     int handler_bci;
     bool is_catch_all;
 };
 
-struct HandlerBlockInfoRecord {
+class HandlerBlockInfoRecord : public ResourceObj {
+public:
     uint32_t instruction_offset;
     uint32_t start_bci; // start bci of handler block, should be matched as handler bci when searching handler for exception table
     uint32_t limit_bci; // limit bci of handler block
@@ -97,7 +106,7 @@ struct HandlerBlockInfoRecord {
 };
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 
 // YuhuDebugInformationRecorder: Thread-local recorder for collecting debug information
 // and call site metadata during LLVM IR generation

@@ -433,7 +433,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                 if (YuhuTraceOffset) {
                     tty->print_cr("Yuhu: Call site is safepoint poll call");
                 }
-                pc_offset = machine_code_offsets->blr_offset + plus_offset;
+                // safepoint poll makes no differences here, coz it is also a runtime call
+//                pc_offset = machine_code_offsets->blr_offset + plus_offset;
             }
 
             GrowableArray<int32_t> processed_stack_offsets;

@@ -27,7 +27,7 @@
 
 using namespace llvm;
 
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 
 // MachineCodePrinterPlugin implementation

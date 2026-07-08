@@ -26,7 +26,7 @@
 #include "utilities/debug.hpp"
 #include "yuhu/yuhu_globals.hpp"
 
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 
 bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(

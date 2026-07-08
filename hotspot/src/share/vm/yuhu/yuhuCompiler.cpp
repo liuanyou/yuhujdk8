@@ -49,7 +49,7 @@
 #include "utilities/debug.hpp"
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "code/codeCache.hpp"
@@ -398,6 +398,12 @@ public:
                 fatal(err_msg("Failed to add native IR module: %s", ErrMsg.c_str()));
             }
         }
+    }
+
+    ~Impl() {
+        delete _execution_engine_lock;
+        delete _normal_context;
+        delete _native_context;
     }
 
     YuhuContext* context() const {
@@ -1099,6 +1105,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   if (env->failing()) {
     tty->print_cr("Yuhu: compile failing during IR build for %s (func_name=%s) entry_bci=%d comp_level=%d",
                   base_name, func_name, entry_bci, env->comp_level());
+    YuhuDebugInformationRecorder::release();
     return;
   }
 

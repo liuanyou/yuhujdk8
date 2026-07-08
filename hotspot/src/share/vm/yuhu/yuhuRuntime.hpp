@@ -31,7 +31,7 @@
 
 class ciMethod;
 
-extern "C" void gc_safepoint_poll();
+extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 extern "C" void go_unwind();
 
@@ -52,6 +52,8 @@ class YuhuRuntime : public AllStatic {
   static address _throw_ArrayIndexOutOfBoundsException_stub;
   static address _throw_ClassCastException_stub;
   static address _throw_NullPointerException_stub;
+
+  static address _safepoint_poll_stub;
 
   static address _handle_deoptimization_stub;
 
@@ -84,6 +86,8 @@ class YuhuRuntime : public AllStatic {
   static address throw_ArrayIndexOutOfBoundsException_stub() { return _throw_ArrayIndexOutOfBoundsException_stub; }
   static address throw_ClassCastException_stub() { return _throw_ClassCastException_stub; }
   static address throw_NullPointerException_stub() { return _throw_NullPointerException_stub; }
+
+  static address safepoint_poll_stub() { return _safepoint_poll_stub; }
 
   static address handle_deoptimization_stub() { return _handle_deoptimization_stub; }
   
