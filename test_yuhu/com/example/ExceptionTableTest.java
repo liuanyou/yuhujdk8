@@ -128,28 +128,34 @@ public class ExceptionTableTest {
 //         }
 
         // Test 4
-        for (int i = 0; i < 50000; i++) {
-            String r4 = catchAll();
-            System.out.println("catchAll: " + r4);
-        }
-//
-//         // Test 5
-//         try {
-//             rethrowTest();
-//             System.out.println("rethrowTest: FAILED (should have thrown)");
-//         } catch (IllegalStateException e) {
-//             System.out.println("rethrowTest: caught IllegalStateException (expected)");
+//         for (int i = 0; i < 50000; i++) {
+//             String r4 = catchAll();
+//             System.out.println("catchAll: " + r4);
 //         }
-//
-//         // Test 6
-//         int r6a = deoptWithCatch("hello");
-//         int r6b = deoptWithCatch(null);
-//         System.out.println("deoptWithCatch(hello): " + r6a + " (expected: 5)");
-//         System.out.println("deoptWithCatch(null): " + r6b + " (expected: -999)");
-//
-//         // Test 7
-//         int r7 = sequentialExceptions();
-//         System.out.println("sequentialExceptions: " + r7 + " (expected: 1005)");
+
+        // Test 5
+//         for (int i = 0; i < 50000; i++) {
+//             try {
+//                 rethrowTest();
+//                 System.out.println("rethrowTest: FAILED (should have thrown)");
+//             } catch (IllegalStateException e) {
+//                 System.out.println("rethrowTest: caught IllegalStateException (expected)");
+//             }
+//         }
+
+        // Test 6
+//         for (int i = 0; i < 50000; i++) {
+//             int r6a = deoptWithCatch("hello");
+//             int r6b = deoptWithCatch(null);
+//             System.out.println("deoptWithCatch(hello): " + r6a + " (expected: 5)");
+//             System.out.println("deoptWithCatch(null): " + r6b + " (expected: -999)");
+//         }
+
+        // Test 7
+        for (int i = 0; i < 50000; i++) {
+            int r7 = sequentialExceptions();
+            System.out.println("sequentialExceptions: " + r7 + " (expected: 1005)");
+        }
         
         System.out.println("=== Test Complete ===");
     }
