@@ -45,7 +45,7 @@ private:
   static bool is_stp_pre_index(uint32_t inst);
 
   // Check if instruction is an unsigned offset stp with Rn=sp (e.g., stp x22, x21, [sp, #112])
-  static bool is_stp_unsigned_offset(uint32_t inst);
+  static bool is_stp_signed_offset(uint32_t inst);
   
   // Extract the immediate offset from stp instruction (in bytes)
   static int extract_stp_immediate(uint32_t inst);

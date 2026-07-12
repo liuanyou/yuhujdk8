@@ -73,30 +73,30 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start, Growa
         PrologueStpRegistersInfo* info = new PrologueStpRegistersInfo();
         info->Rt = extract_stp_rt(inst);
         info->Rt2 = extract_stp_rt2(inst);
-        info->V = (inst >> 26) & 0x1;       // bit 26: 0=GP, 1=SIMD/FP
+        info->V = (inst >> 26) & 0b1;       // bit 26: 0=GP, 1=SIMD/FP
         /*
          * When V=0 (GP): opc=00 → 32-bit (w regs), opc=10 → 64-bit (x regs)
            When V=1 (SIMD/FP): opc=00 → 32-bit (s regs), opc=01 → 64-bit (d regs), opc=10 → 128-bit (q regs)
          */
-        info->opc = (inst >> 30) & 0x3;
+        info->opc = (inst >> 30) & 0b11;
         info->sp_offset = imm;
         prologue_registers->append(info);
       }
     }
     // Check for unsigned offset stp (e.g., stp x22, x21, [sp, #128])
-    else if (is_stp_unsigned_offset(inst)) {
+    else if (is_stp_signed_offset(inst)) {
       int imm = extract_stp_immediate(inst);
       // imm is positive (e.g., 128, 144, 160), stores within already-allocated space
       if (prologue_registers != NULL) {
         PrologueStpRegistersInfo* info = new PrologueStpRegistersInfo();
         info->Rt = extract_stp_rt(inst);
         info->Rt2 = extract_stp_rt2(inst);
-        info->V = (inst >> 26) & 0x1;       // bit 26: 0=GP, 1=SIMD/FP
+        info->V = (inst >> 26) & 0b1;       // bit 26: 0=GP, 1=SIMD/FP
           /*
            * When V=0 (GP): opc=00 → 32-bit (w regs), opc=10 → 64-bit (x regs)
              When V=1 (SIMD/FP): opc=00 → 32-bit (s regs), opc=01 → 64-bit (d regs), opc=10 → 128-bit (q regs)
            */
-        info->opc = (inst >> 30) & 0x3;
+        info->opc = (inst >> 30) & 0b11;
         info->sp_offset = imm;
         prologue_registers->append(info);
       }
@@ -144,46 +144,49 @@ int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start, Growa
   return total_prologue_bytes;
 }
 
-// AArch64 stp (pre-indexed) encoding:
-// 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
-// |opc| 1  0  1  0  0  1| V| 1  1|  imm7       |  Rt2     |  Rn      |  Rt      |
-// For 64-bit GP regs: opc = 10, V = 0
-// Pre-indexed: bit 24 = 1, bit 23 = 1 (writeback mode)
-// Rn = 31 (sp)
+// family_mask
+// 0b00111011110000000000000000000000;
+// 0x3BC00000;
+
+// family_bits
+// 0b00101001100000000000000000000000;
+// 0x29800000;
 bool YuhuPrologueAnalyzer::is_stp_pre_index(uint32_t inst) {
   // Check key fields:
-  // - Bits [31:30] = 10 (opc = 64-bit)
   // - Bits [29:25] = 10100 (stp/ldp family)
-  // - Bit 26 (V) = 0 (general-purpose registers)
   // - Bits [24:23] = 11 (pre-indexed writeback)
   // - Bit 22 = 0 (store, not load)
   // - Bits [9:5] = 11111 (Rn = sp)
-  
-  // First check: is this stp family? (bits [31:22] = 1010 0100 11)
-  uint32_t stp_family_mask = 0xFFC00000;  // Mask bits [31:22]
-  uint32_t stp_family_bits = 0xA9800000;  // stp pre-indexed pattern
-  
+  // Bit 26 (V) is masked out — matches both GP and SIMD/FP registers
+
+  // Mask bits [31:22] EXCEPT bit 26 (V)
+
+  uint32_t stp_family_mask = 0x3BC00000;  // bits [31:27,25:22]
+  uint32_t stp_family_bits = 0x29800000;  // stp pre-indexed pattern (V=0 reference)
+
   if ((inst & stp_family_mask) != stp_family_bits) {
     return false;
   }
-  
+
   // Second check: Rn must be sp (31)
   uint32_t rn = (inst >> 5) & 0x1F;
   return (rn == 31);
 }
 
-// AArch64 stp (unsigned offset) encoding:
-// 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
-// |opc| 1  0  1  0  0  1| V| 1  0|  imm7       |  Rt2     |  Rn      |  Rt      |
-// For 64-bit GP regs: opc = 10, V = 0
-// Unsigned offset: bits [24:23] = 10, bit 22 = 0 (no writeback)
-// Rn = 31 (sp)
-bool YuhuPrologueAnalyzer::is_stp_unsigned_offset(uint32_t inst) {
-  // Check: bits [31:22] = 1010 0100 10 (stp unsigned offset)
-  uint32_t stp_unsigned_mask = 0xFFC00000;  // Mask bits [31:22]
-  uint32_t stp_unsigned_bits = 0xA9000000;  // stp unsigned offset pattern
+// family_mask
+// 0b00111011110000000000000000000000;
+// 0x3BC00000;
 
-  if ((inst & stp_unsigned_mask) != stp_unsigned_bits) {
+// family_bits
+// 0b00101001000000000000000000000000;
+// 0x29000000;
+bool YuhuPrologueAnalyzer::is_stp_signed_offset(uint32_t inst) {
+  // Mask bits [31:22] EXCEPT bit 26 (V)
+
+  uint32_t stp_signed_mask = 0x3BC00000;  // bits [31:27,25:22]
+  uint32_t stp_signed_bits = 0x29000000;  // stp unsigned offset pattern (V=0 reference)
+
+  if ((inst & stp_signed_mask) != stp_signed_bits) {
     return false;
   }
 
@@ -192,18 +195,37 @@ bool YuhuPrologueAnalyzer::is_stp_unsigned_offset(uint32_t inst) {
   return (rn == 31);
 }
 
-// Extract the signed 7-bit immediate from stp instruction (scaled by 8 for 64-bit regs)
+// Extract the signed 7-bit immediate from stp instruction.
+// Scale factor depends on register type and size:
+//   V=0 (GP):    opc=00 → 32-bit (w) → scale 4
+//                opc=10 → 64-bit (x) → scale 8
+//   V=1 (SIMD/FP): opc=00 → 32-bit (s) → scale 4
+//                  opc=01 → 64-bit (d) → scale 8
+//                  opc=10 → 128-bit (q) → scale 16
 int YuhuPrologueAnalyzer::extract_stp_immediate(uint32_t inst) {
   // imm7 is bits [21:15]
   int imm7 = (inst >> 15) & 0x7F;
-  
+
   // Sign-extend from 7 bits to 32 bits
   if (imm7 & 0x40) {
     imm7 |= 0xFFFFFF80;  // Sign extend
   }
-  
-  // Scale by 8 (since we're storing 64-bit registers)
-  return imm7 * 8;
+
+  // Determine scale based on V (bit 26) and opc (bits [31:30])
+  uint32_t v   = (inst >> 26) & 0x1;
+  uint32_t opc = (inst >> 30) & 0x3;
+  int scale;
+  if (v == 0) {
+    // GP: opc=00 → 32-bit (4), opc=10 → 64-bit (8)
+    scale = (opc == 2) ? 8 : 4;
+  } else {
+    // SIMD/FP: opc=00 → 32-bit (4), opc=01 → 64-bit (8), opc=10 → 128-bit (16)
+    if (opc == 2)      scale = 16;
+    else if (opc == 1) scale = 8;
+    else               scale = 4;
+  }
+
+  return imm7 * scale;
 }
 
 // Check if instruction is sub sp, sp, #imm (indicates end of prologue, start of Yuhu frame alloc)
