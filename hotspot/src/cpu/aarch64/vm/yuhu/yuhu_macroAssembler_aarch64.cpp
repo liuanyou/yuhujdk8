@@ -572,6 +572,31 @@ address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuRegister
     return write_inst(machine_code(buffer));
 }
 
+address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg1, YuhuFloatRegister reg2, YuhuAddress addr) {
+    char buffer[50];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg1), f_reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::base_plus_offset_reg:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg1), f_reg_name(reg2), reg_name(addr.base()),
+                     reg_name(addr.index()), op_name(addr.ext().op()), MAX(addr.ext().shift(), 0));
+            break;
+        case YuhuAddress::pre:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg1), f_reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        case YuhuAddress::post:
+            snprintf(buffer, sizeof(buffer), assembly_format, f_reg_name(reg1), f_reg_name(reg2), reg_name(addr.base()), addr.offset());
+            break;
+        default:
+            ShouldNotReachHere();
+    }
+#pragma clang diagnostic pop
+    return write_inst(machine_code(buffer));
+}
+
 address YuhuMacroAssembler::write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr) {
     char buffer[50];
     #pragma clang diagnostic push
@@ -730,6 +755,22 @@ address YuhuMacroAssembler::write_inst_ldr(YuhuRegister reg, YuhuAddress addr) {
 }
 
 address YuhuMacroAssembler::write_inst_ldp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("ldp %s, %s, [%s, #%d]", reg1, reg2, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("ldp %s, %s, [%s, %s, %s #%d]", reg1, reg2, addr);
+        case YuhuAddress::pre:
+            return write_inst("ldp %s, %s, [%s, #%d]!", reg1, reg2, addr);
+        case YuhuAddress::post:
+            return write_inst("ldp %s, %s, [%s], #%d", reg1, reg2, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
+address YuhuMacroAssembler::write_inst_ldp(YuhuFloatRegister reg1, YuhuFloatRegister reg2, YuhuAddress addr) {
     switch (addr.getMode()) {
         case YuhuAddress::base_plus_offset:
             return write_inst("ldp %s, %s, [%s, #%d]", reg1, reg2, addr);
@@ -3860,6 +3901,59 @@ address YuhuMacroAssembler::write_insts_remove_frame(int framesize) {
             write_inst_regs("add %s, %s, %s", sp, sp, x8);
         }
         write_inst_ldp(fp, lr, YuhuPost(sp, 2 * wordSize));
+    }
+    return current_pc();
+}
+
+// prologued_registers should be in ascending sequence, from bottom to top
+// eg, in below case, prologued registers are x22, x21, x20, x19, x29, x30
+/*
+ *  0x16f7ea580: 0x0000000000000000 0x000000010c345060 - prologue x22 / x21
+    0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - prologue x20 / x19
+    0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
+ */
+address YuhuMacroAssembler::write_insts_remove_frame(int framesize, YuhuRegisterOrFloatRegister* prologued_registers, int num_registers) {
+    assert(framesize >= num_registers * wordSize, "frame size should be big enough for prologued registers");
+    assert(num_registers > 0 && num_registers % 2 == 0, "num registers should be valid");
+    assert(prologued_registers[num_registers - 2].is_general_register() &&
+            prologued_registers[num_registers - 2].as_general_register() == fp &&
+            prologued_registers[num_registers - 1].is_general_register() &&
+            prologued_registers[num_registers - 1].as_general_register() == lr, "last 2 registers must be fp and lr");
+    if (framesize < ((1 << 9) + num_registers * wordSize)) {
+        for (int i = 0; i < num_registers; i = i + 2) {
+            if (prologued_registers[i].is_general_register()) {
+                write_inst_ldp(prologued_registers[i].as_general_register(), prologued_registers[i + 1].as_general_register(),
+                               YuhuAddress(sp, framesize - (num_registers - i) * wordSize));
+            } else {
+                write_inst_ldp(prologued_registers[i].as_float_register(), prologued_registers[i + 1].as_float_register(),
+                               YuhuAddress(sp, framesize - (num_registers - i) * wordSize));
+            }
+        }
+        write_inst("add sp, sp, #%d", framesize);
+    } else {
+        if (framesize < ((1 << 12) + num_registers * wordSize))
+            write_inst("add sp, sp, #%d", framesize - num_registers * wordSize);
+        else {
+            write_insts_mov_imm64(x8, framesize - num_registers * wordSize);
+            write_inst_regs("add %s, %s, %s", sp, sp, x8);
+        }
+
+        for (int i = 2; i < num_registers; i = i + 2) {
+            if (prologued_registers[i].is_general_register()) {
+                write_inst_ldp(prologued_registers[i].as_general_register(), prologued_registers[i + 1].as_general_register(),
+                               YuhuAddress(sp, i * wordSize));
+            } else {
+                write_inst_ldp(prologued_registers[i].as_float_register(), prologued_registers[i + 1].as_float_register(),
+                               YuhuAddress(sp, i * wordSize));
+            }
+        }
+        if (prologued_registers[0].is_general_register()) {
+            write_inst_ldp(prologued_registers[0].as_general_register(), prologued_registers[1].as_general_register(),
+                           YuhuPost(sp, num_registers * wordSize));
+        } else {
+            write_inst_ldp(prologued_registers[0].as_float_register(), prologued_registers[1].as_float_register(),
+                           YuhuPost(sp, num_registers * wordSize));
+        }
     }
     return current_pc();
 }

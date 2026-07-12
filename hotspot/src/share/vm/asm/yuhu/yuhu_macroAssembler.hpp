@@ -124,14 +124,30 @@ public:
         YuhuRegisterOrConstant(YuhuRegister r): _r(r), _c(0) {}
         YuhuRegisterOrConstant(intptr_t c): _r(noreg), _c(c) {}
 
-        YuhuRegister as_register() const { assert(is_register(),""); return _r; }
-        intptr_t as_constant() const { assert(is_constant(),""); return _c; }
+        YuhuRegister as_register() const { assert(is_register(), ""); return _r; }
+        intptr_t as_constant() const { assert(is_constant(), ""); return _c; }
 
         YuhuRegister register_or_noreg() const { return _r; }
         intptr_t constant_or_zero() const  { return _c; }
 
         bool is_register() const { return _r != noreg; }
         bool is_constant() const { return _r == noreg; }
+    };
+    class YuhuRegisterOrFloatRegister VALUE_OBJ_CLASS_SPEC {
+    private:
+        YuhuRegister _r;
+        YuhuFloatRegister _f;
+
+    public:
+        YuhuRegisterOrFloatRegister(): _r(noreg), _f(fnoreg) {}
+        YuhuRegisterOrFloatRegister(YuhuRegister r): _r(r), _f(fnoreg) {}
+        YuhuRegisterOrFloatRegister(YuhuFloatRegister f): _r(noreg), _f(f) {}
+
+        YuhuRegister as_general_register() const { assert(is_general_register(), ""); return _r; }
+        YuhuFloatRegister as_float_register() const { assert(is_float_register(), ""); return _f; }
+
+        bool is_general_register() const { return _r != noreg; }
+        bool is_float_register() const { return _r == noreg; }
     };
 private:
     // Validate assembly format string to prevent format string bugs
@@ -142,7 +158,7 @@ private:
     void validate_assembly_format_long(const char* assembly_format);       // 2 params: %s and %ld/lx/lu/lo
     void validate_assembly_format_2_regs_imm64(const char* assembly_format);  // 3 params: %s, %s, and %ld/lx/lu/lo
     
-    const char* reg_name(YuhuRegister reg) {
+    const char* reg_name(YuhuRegister reg) const {
         static const char* register_names[] = {
             // w0-w30
             "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7",
@@ -168,7 +184,7 @@ private:
         return register_names[(int)reg];
     }
 
-    const char* cond_name(YuhuCond cond) {
+    const char* cond_name(YuhuCond cond) const {
         static const char* cond_names[] = {
                 "gt", "ne", "al", "ls", "hi", "le", "eq", "hs", "lo", "lt", "ge", "pl"
         };
@@ -179,7 +195,7 @@ private:
         return cond_names[(int)cond];
     }
 
-    const char* f_reg_name(YuhuFloatRegister reg) {
+    const char* f_reg_name(YuhuFloatRegister reg) const {
         static const char* register_names[] = {
                 // s0-s31
                 "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
@@ -199,7 +215,7 @@ private:
         return register_names[(int)reg];
     }
 
-    const char* op_name(YuhuOperation op) {
+    const char* op_name(YuhuOperation op) const {
         static const char* op_names[] = {
                 "lsl", "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
         };
@@ -210,7 +226,7 @@ private:
         return op_names[(int)op];
     }
 public:
-    YuhuRegister w_reg(YuhuRegister reg) {
+    YuhuRegister w_reg(YuhuRegister reg) const {
         assert(reg >= x0 && reg <= xzr, "Unknown register");
         return (YuhuRegister) (reg - (xzr - wzr));
     }
@@ -221,6 +237,26 @@ public:
     static int encoding(YuhuRegister reg) {
         assert(reg >= x0 && reg <= x30, "Unknown register");
         return (int) (reg - x0);
+    }
+    static YuhuRegisterOrFloatRegister as_register(uint8_t Rt, uint8_t V, uint8_t opc) {
+        /*
+         * When V=0 (GP): opc=00 → 32-bit (w regs), opc=10 → 64-bit (x regs)
+           When V=1 (SIMD/FP): opc=00 → 32-bit (s regs), opc=01 → 64-bit (d regs), opc=10 → 128-bit (q regs)
+         */
+        if (V == 0 && opc == 0b00) {
+            return YuhuRegisterOrFloatRegister((YuhuRegister) Rt);
+        } else if (V == 0 && opc == 0b10) {
+            return YuhuRegisterOrFloatRegister((YuhuRegister) (Rt + x0 - w0));
+        } else if (V == 1 && opc == 0b00) {
+            return YuhuRegisterOrFloatRegister((YuhuFloatRegister) Rt);
+        } else if (V == 1 && opc == 0b01) {
+            return YuhuRegisterOrFloatRegister((YuhuFloatRegister) (Rt + d0 - s0));
+        } else if (V == 1 && opc == 0b10) {
+            // doesn't support 128-bit register for now
+        }
+        ShouldNotReachHere();
+        YuhuRegisterOrFloatRegister reg;
+        return reg;
     }
 public:
     YuhuMacroAssembler(CodeBuffer* code);
@@ -289,6 +325,8 @@ public:
 
     address write_inst(const char* assembly_format, YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr);
 
+    address write_inst(const char* assembly_format, YuhuFloatRegister reg1, YuhuFloatRegister reg2, YuhuAddress addr);
+
     address write_inst(const char* assembly_format, YuhuFloatRegister reg, YuhuAddress addr);
 
     address write_inst_regs(const char* assembly_format, YuhuRegister reg1);
@@ -314,6 +352,8 @@ public:
     address write_inst_ldr(YuhuRegister reg, YuhuAddress addr);
 
     address write_inst_ldp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr);
+
+    address write_inst_ldp(YuhuFloatRegister reg1, YuhuFloatRegister reg2, YuhuAddress addr);
 
     address write_inst_ldr(YuhuFloatRegister reg, YuhuAddress addr);
 
@@ -724,6 +764,8 @@ public:
     address write_insts_generate_stack_overflow_check( int frame_size_in_bytes );
 
     address write_insts_remove_frame(int framesize);
+
+    address write_insts_remove_frame(int framesize, YuhuRegisterOrFloatRegister* prologued_registers, int num_registers);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {

@@ -6,56 +6,140 @@
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+
+/*
+ * Pattern 1:
+ *
+ * sub	sp, sp, #0xb0
+   stp	x22, x21, [sp, #128]
+   stp	x20, x19, [sp, #144]
+   stp	x29, x30, [sp, #160]
+   add	x29, sp, #0xa0
+ */
+
+/*
+ * Pattern 2:
+ *
+ * stp  x22, x21, [sp, #-48]!
+   stp  x20, x19, [sp, #16]
+   stp  x29, x30, [sp, #32]
+   add  x29, sp, #0x20
+   sub  sp, sp, #0x200
+ */
 // Analyze AArch64 prologue to determine stack space used by callee-saved register spills.
 // NOTE: This includes both callee-saved register saves AND spill space allocated by LLVM.
 // LLVM allocates spill space (sub sp, sp, #N) AFTER setting up the frame pointer,
 // and we need to count it as part of the prologue for correct frame_size calculation.
-int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start, int *num_of_prologue_registers) {
+int YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(address code_start, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers) {
   if (code_start == NULL) {
     return 0;
   }
 
+  // Two prologue patterns from LLVM AArch64FrameLowering:
+  //
+  // Pattern 1 (unsigned offset, sub sp first):
+  //   sub    sp, sp, #0xb0
+  //   stp    x22, x21, [sp, #128]
+  //   stp    x20, x19, [sp, #144]
+  //   stp    x29, x30, [sp, #160]
+  //   add    x29, sp, #0xa0
+  //   Total = 176 (from sub sp only; stp stores within that space)
+  //
+  // Pattern 2 (pre-indexed first, sub sp last):
+  //   stp    x22, x21, [sp, #-48]!
+  //   stp    x20, x19, [sp, #16]
+  //   stp    x29, x30, [sp, #32]
+  //   add    x29, sp, #0x20
+  //   sub    sp, sp, #0x200
+  //   Total = 48 (from stp pre-index) + 512 (from sub sp) = 560
+
   int total_prologue_bytes = 0;
   unsigned char* pc = (unsigned char*)code_start;
   bool found_frame_setup = false;
+  bool found_sp_alloca = false; // extended_sp alloca is always requested, so sp alloca should always be generated in prologue
+  bool is_pattern2 = false;
 
-  int sub_sp_sp_index = 0;
-  int add_x29_sp_index = 0;
-
-  // Scan the first 10 instructions (prologue is typically 6-10 instructions)
+  // Scan the first 10 instructions (prologue is typically 5-6 instructions)
   for (int i = 0; i < 10; i++) {
     uint32_t inst = *(uint32_t*)pc;
 
-    // Check for pre-indexed stp (e.g., stp x29, x30, [sp, #-16]!)
+    // Check for pre-indexed stp (e.g., stp x22, x21, [sp, #-48]!)
     if (is_stp_pre_index(inst)) {
+        is_pattern2 = true;
       int imm = extract_stp_immediate(inst);
-      // imm is negative (e.g., -16, -32)
+      // imm is negative (e.g., -48), negation gives positive allocation
       total_prologue_bytes += (-imm);
+      if (prologue_registers != NULL) {
+        PrologueStpRegistersInfo* info = new PrologueStpRegistersInfo();
+        info->Rt = extract_stp_rt(inst);
+        info->Rt2 = extract_stp_rt2(inst);
+        info->V = (inst >> 26) & 0x1;       // bit 26: 0=GP, 1=SIMD/FP
+        /*
+         * When V=0 (GP): opc=00 → 32-bit (w regs), opc=10 → 64-bit (x regs)
+           When V=1 (SIMD/FP): opc=00 → 32-bit (s regs), opc=01 → 64-bit (d regs), opc=10 → 128-bit (q regs)
+         */
+        info->opc = (inst >> 30) & 0x3;
+        info->sp_offset = imm;
+        prologue_registers->append(info);
+      }
     }
-    // Check for add x29, sp, #imm (frame pointer setup)
+    // Check for unsigned offset stp (e.g., stp x22, x21, [sp, #128])
+    else if (is_stp_unsigned_offset(inst)) {
+      int imm = extract_stp_immediate(inst);
+      // imm is positive (e.g., 128, 144, 160), stores within already-allocated space
+      if (prologue_registers != NULL) {
+        PrologueStpRegistersInfo* info = new PrologueStpRegistersInfo();
+        info->Rt = extract_stp_rt(inst);
+        info->Rt2 = extract_stp_rt2(inst);
+        info->V = (inst >> 26) & 0x1;       // bit 26: 0=GP, 1=SIMD/FP
+          /*
+           * When V=0 (GP): opc=00 → 32-bit (w regs), opc=10 → 64-bit (x regs)
+             When V=1 (SIMD/FP): opc=00 → 32-bit (s regs), opc=01 → 64-bit (d regs), opc=10 → 128-bit (q regs)
+           */
+        info->opc = (inst >> 30) & 0x3;
+        info->sp_offset = imm;
+        prologue_registers->append(info);
+      }
+    }
+    // Check for add x29, sp, #imm (frame pointer setup) — does not allocate
     else if (is_add_x29_sp_imm(inst)) {
-        add_x29_sp_index = i;
+      // no-op for stack accounting
       found_frame_setup = true;
     }
-    // Check for sub sp, sp, #imm (LLVM spill space allocation)
-    // IMPORTANT: We MUST count this! LLVM generates this after setting FP
-    // to allocate space for spilled registers. This IS part of the prologue.
+    // Check for sub sp, sp, #imm (stack space allocation)
+    // Pattern 1: sub comes FIRST (allocates entire frame)
+    // Pattern 2: sub comes LAST (allocates spill space after callee-saved regs)
     else if (is_sub_sp_imm(inst)) {
-        sub_sp_sp_index = i;
       int imm = extract_sub_sp_immediate(inst);
-      // imm is positive (e.g., 64 for sub sp, sp, #0x40)
-      total_prologue_bytes += imm;  // 先累加！
-      // After FP is set up and spill space is allocated, prologue is done
-      if (found_frame_setup) {
-        break;  // 累加完再 break
-      }
+      // imm is positive (e.g., 176 for Pattern 1, 512 for Pattern 2)
+      total_prologue_bytes += imm;
+      found_sp_alloca = true;
+    }
+
+    if (found_frame_setup && found_sp_alloca) {
+        break;
     }
 
     pc += 4;  // AArch64 instructions are 4 bytes
   }
 
-  // Ideally, stp instruction is used in prologue
-  *num_of_prologue_registers = (add_x29_sp_index - sub_sp_sp_index - 1) * 2;
+  if (!found_frame_setup || !found_sp_alloca) {
+      return 0;
+  }
+
+  if (is_pattern2) {
+      // if it is pattern 2 of prologue, then adjust sp_offset field
+      if (prologue_registers && prologue_registers->length() > 0) {
+          // the first must be pre indexed stp instruction
+          PrologueStpRegistersInfo* pre_indexed_registers = prologue_registers->at(0);
+          int pre_indexed = pre_indexed_registers->sp_offset;
+          pre_indexed_registers->sp_offset = total_prologue_bytes - (-pre_indexed) + 0;
+          for (int i = 1; i < prologue_registers->length(); ++i) {
+              PrologueStpRegistersInfo* registers = prologue_registers->at(i);
+              registers->sp_offset = total_prologue_bytes - (-pre_indexed) + registers->sp_offset;
+          }
+      }
+  }
 
   return total_prologue_bytes;
 }
@@ -84,6 +168,26 @@ bool YuhuPrologueAnalyzer::is_stp_pre_index(uint32_t inst) {
   }
   
   // Second check: Rn must be sp (31)
+  uint32_t rn = (inst >> 5) & 0x1F;
+  return (rn == 31);
+}
+
+// AArch64 stp (unsigned offset) encoding:
+// 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
+// |opc| 1  0  1  0  0  1| V| 1  0|  imm7       |  Rt2     |  Rn      |  Rt      |
+// For 64-bit GP regs: opc = 10, V = 0
+// Unsigned offset: bits [24:23] = 10, bit 22 = 0 (no writeback)
+// Rn = 31 (sp)
+bool YuhuPrologueAnalyzer::is_stp_unsigned_offset(uint32_t inst) {
+  // Check: bits [31:22] = 1010 0100 10 (stp unsigned offset)
+  uint32_t stp_unsigned_mask = 0xFFC00000;  // Mask bits [31:22]
+  uint32_t stp_unsigned_bits = 0xA9000000;  // stp unsigned offset pattern
+
+  if ((inst & stp_unsigned_mask) != stp_unsigned_bits) {
+    return false;
+  }
+
+  // Rn must be sp (31)
   uint32_t rn = (inst >> 5) & 0x1F;
   return (rn == 31);
 }

@@ -400,6 +400,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
     int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
                       - (-_frame_layout_info->extended_frame_offset / wordSize);
 
+    assert(spill_words >= 0, "spill_words has invalid value");
+
     int max_monitors = _frame_layout_info->monitor_words / 2;
 
     for (int i = 0; i < entry_offsets_flatten_list.length(); ++i) {

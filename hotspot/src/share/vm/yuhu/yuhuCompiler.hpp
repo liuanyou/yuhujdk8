@@ -46,6 +46,7 @@ class YuhuContext;
 class YuhuEntry;
 class YuhuFunction;
 class YuhuRuntime;
+class PrologueStpRegistersInfo;
 
 class YuhuCompiler : public AbstractCompiler {
  public:
@@ -83,13 +84,13 @@ class YuhuCompiler : public AbstractCompiler {
   static int measure_normal_adapter_size(int frame_size_in_bytes);
   static int measure_exception_handler_size();
   static int measure_deopt_handler_size();
-  static int measure_unwind_handler_size(int frame_size_in_bytes, address llvm_code_start, uint64_t unified_exit_block_start_pco);
+  static int measure_unwind_handler_size(int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers);
 
   int generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes);
   // Exception and deoptimization handler generation
   int generate_exception_handler(CodeBuffer& cb, int handler_size);
   int generate_deopt_handler(CodeBuffer& cb, int handler_size);
-  int generate_unwind_handler(CodeBuffer& cb, address code_start, int frame_size_in_bytes, size_t adapter_size, uint64_t unified_exit_block_start_pco);
+  int generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers);
 
   // Generate a wrapper for a native (JNI) method
   nmethod* generate_native_wrapper(MacroAssembler* masm,

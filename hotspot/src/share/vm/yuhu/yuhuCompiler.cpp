@@ -1137,10 +1137,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   
   // Step 1: Analyze LLVM prologue to get actual stack space used
   address llvm_code_start = entry->code_start();
-  int num_of_prologue_registers = 0;
-  int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start, &num_of_prologue_registers);
+  GrowableArray<PrologueStpRegistersInfo*> prologue_registers;
+  int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start, &prologue_registers);
+  assert(actual_prologue_bytes > 0, "prologue bytes should be greater than 0");
   int actual_prologue_words = actual_prologue_bytes / wordSize;
-  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, num_of_prologue_registers);
+  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, prologue_registers.length() * 2);
 
   // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = actual_prologue_words;
@@ -1160,8 +1161,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     assert(adapter_size > 0 && adapter_size < 512, "adapter size sanity");
 
       // Measure exception handler and deopt handler sizes first
-    int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, entry->code_start(),
-                                                          YuhuDebugInformationRecorder::get()->get_unified_exit_block_start_pco());
+    int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, &prologue_registers);
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
 
@@ -1198,8 +1198,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
       // before jumping to unwind_exception_id.
       // Must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
-      generate_unwind_handler(combined_cb, combined_base, frame_size * wordSize, adapter_size,
-                              YuhuDebugInformationRecorder::get()->get_unified_exit_block_start_pco());
+      generate_unwind_handler(combined_cb, frame_size * wordSize, &prologue_registers);
 
     // Extend instruction section to cover adapter + LLVM code.
     combined_cb.insts()->set_end(combined_base + combined_size);
@@ -1496,7 +1495,7 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
 
 // Generate unwind handler for propagating exceptions to callers
 // This is required by JVM for all compiled methods, even those without try-catch
-int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, address llvm_code_start, uint64_t unified_exit_block_start_pco) {
+int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers) {
     const int kTempBufSize = 64;
     CodeBuffer temp_cb("measure_unwind_handler", kTempBufSize, 1);
     YuhuMacroAssembler masm(&temp_cb);
@@ -1507,18 +1506,27 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, address l
     masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_call_stub), YuhuMacroAssembler::x0);
     masm.write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x0);
 
-    // 1. caller is yuhu, then go to unified_exit_block - callee returns and caller checks pending exception and handle it
-    assert(unified_exit_block_start_pco != 0, "unified exit block start pco should exist");
-    uint32_t* instr = (uint32_t*)(llvm_code_start + unified_exit_block_start_pco);
-    // 2. duplicate epilogue instructions, stop at ret instruction
-    for ( ; (instr[0] & 0xFFFFFBE0) != 0xD65F03C0; instr++) {
-        masm.write_inst(instr[0]);
+    // 1. do epilogue regardless of caller's type
+    prologue_registers->sort([](PrologueStpRegistersInfo** a, PrologueStpRegistersInfo** b) -> int {
+        if ((*a)->sp_offset < (*b)->sp_offset) return -1;
+        if ((*a)->sp_offset > (*b)->sp_offset) return 1;
+        return 0;
+    });
+
+    YuhuMacroAssembler::YuhuRegisterOrFloatRegister* saved_registers = NEW_RESOURCE_ARRAY(YuhuMacroAssembler::YuhuRegisterOrFloatRegister,
+                                                                                           prologue_registers->length() * 2);
+    for (int i = 0; i < prologue_registers->length(); ++i) {
+        PrologueStpRegistersInfo* ri = prologue_registers->at(i);
+        saved_registers[i*2] = YuhuMacroAssembler::as_register(ri->Rt, ri->V, ri->opc);
+        saved_registers[i*2+1] = YuhuMacroAssembler::as_register(ri->Rt2, ri->V, ri->opc);
     }
+    masm.write_insts_remove_frame(frame_size_in_bytes, saved_registers, prologue_registers->length() * 2);
 
     masm.write_inst_cbz(YuhuMacroAssembler::x8, caller_is_not_yuhu);
+    // 2. caller is yuhu, then just return - callee returns and caller checks pending exception and handle it
     masm.write_inst("ret");
 
-    // 2. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
+    // 3. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
     masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
@@ -1537,7 +1545,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, address l
     return (int)(end - start);
 }
 
-int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, address code_start, int frame_size_in_bytes, size_t adapter_size, uint64_t unified_exit_block_start_pco) {
+int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers) {
     if (YuhuTraceInstalls) {
         tty->print_cr("Yuhu: Generating unwind handler (frame_size_in_bytes=%d)", frame_size_in_bytes);
     }
@@ -1551,18 +1559,27 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, address code_start, in
     masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_call_stub), YuhuMacroAssembler::x0);
     masm.write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x0);
 
-    // 1. caller is yuhu, then go to unified_exit_block - callee returns and caller checks pending exception and handle it
-    assert(unified_exit_block_start_pco != 0, "unified exit block start pco should exist");
-    uint32_t* instr = (uint32_t*)(code_start + adapter_size + unified_exit_block_start_pco);
-    // 2. duplicate epilogue instructions, stop at ret instruction
-    for ( ; (instr[0] & 0xFFFFFBE0) != 0xD65F03C0; instr++) {
-        masm.write_inst(instr[0]);
+    // 1. do epilogue regardless of caller's type
+    prologue_registers->sort([](PrologueStpRegistersInfo** a, PrologueStpRegistersInfo** b) -> int {
+        if ((*a)->sp_offset < (*b)->sp_offset) return -1;
+        if ((*a)->sp_offset > (*b)->sp_offset) return 1;
+        return 0;
+    });
+
+    YuhuMacroAssembler::YuhuRegisterOrFloatRegister* saved_registers = NEW_RESOURCE_ARRAY(YuhuMacroAssembler::YuhuRegisterOrFloatRegister,
+                                                                                          prologue_registers->length() * 2);
+    for (int i = 0; i < prologue_registers->length(); ++i) {
+        PrologueStpRegistersInfo* ri = prologue_registers->at(i);
+        saved_registers[i*2] = YuhuMacroAssembler::as_register(ri->Rt, ri->V, ri->opc);
+        saved_registers[i*2+1] = YuhuMacroAssembler::as_register(ri->Rt2, ri->V, ri->opc);
     }
+    masm.write_insts_remove_frame(frame_size_in_bytes, saved_registers, prologue_registers->length() * 2);
 
     masm.write_inst_cbz(YuhuMacroAssembler::x8, caller_is_not_yuhu);
+    // 2. caller is yuhu, then just return - callee returns and caller checks pending exception and handle it
     masm.write_inst("ret");
 
-    // 2. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
+    // 3. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
     masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));

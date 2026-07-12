@@ -8,12 +8,21 @@
 
 #include "memory/allocation.hpp"
 
+class PrologueStpRegistersInfo : public ResourceObj {
+public:
+    uint8_t Rt;
+    uint8_t Rt2;
+    uint8_t V;     // Bit  [26]     V      → register type (0 = GP, 1 = SIMD/FP)
+    uint8_t opc;   // Bits [31:30]  opc    → data size (32-bit / 64-bit / 128-bit)
+    int sp_offset; // offset relative to sp bottom
+};
+
 // Analyze AArch64 prologue to determine actual stack space used by callee-saved register spills.
 class YuhuPrologueAnalyzer : public AllStatic {
 public:
   // Analyze the prologue of an AArch64 function starting at code_start.
   // Returns the total stack bytes allocated by the prologue (from stp instructions).
-  static int analyze_prologue_stack_bytes(address code_start, int *num_of_prologue_registers);
+  static int analyze_prologue_stack_bytes(address code_start, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers);
 
   // Find the offset of x28's saved value relative to x29 (frame pointer)
   // Returns the offset as a positive number for use in: ldr x8, [x29, #offset]
@@ -34,6 +43,9 @@ public:
 private:
   // Check if instruction is a pre-indexed stp (e.g., stp x29, x30, [sp, #-16]!)
   static bool is_stp_pre_index(uint32_t inst);
+
+  // Check if instruction is an unsigned offset stp with Rn=sp (e.g., stp x22, x21, [sp, #112])
+  static bool is_stp_unsigned_offset(uint32_t inst);
   
   // Extract the immediate offset from stp instruction (in bytes)
   static int extract_stp_immediate(uint32_t inst);
