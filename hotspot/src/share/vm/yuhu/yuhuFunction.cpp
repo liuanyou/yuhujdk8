@@ -362,7 +362,12 @@ void YuhuFunction::initialize(const char *name) {
               // Load as i64, then inttoptr to oop pointer
               llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
               builder()->CreateRet(builder()->CreateIntToPtr(loaded, ret_llvm_type));
-          } else if (ret_type == T_FLOAT || ret_type == T_DOUBLE) {
+          } else if (ret_type == T_FLOAT) {
+              // Load directly as float (32-bit) from the return slot
+              // On little-endian AArch64, the float occupies the low 32 bits of the 8-byte slot
+              llvm::Value* loaded = builder()->CreateLoad(ret_llvm_type, _return_slot);
+              builder()->CreateRet(loaded);
+          } else if (ret_type == T_DOUBLE) {
               // Load as i64, then bitcast to FP type
               llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
               builder()->CreateRet(builder()->CreateBitCast(loaded, ret_llvm_type));
