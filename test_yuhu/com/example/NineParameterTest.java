@@ -110,9 +110,9 @@ public class NineParameterTest {
         
         // Test static method
         int result2 = 0;
-//         for (int i = 0; i < 100000; i++) {
-//             result2 = testNineParametersStatic(i, 20, 30, 40, 50, 60, 70, 80, 90);
-//         }
+        for (int i = 0; i < 100000; i++) {
+            result2 = testNineParametersStatic(i, 20, 30, 40, 50, 60, 70, 80, 90);
+        }
         System.out.println("Static method result: " + result2);
         System.out.println("Expected: 450");
         System.out.println();

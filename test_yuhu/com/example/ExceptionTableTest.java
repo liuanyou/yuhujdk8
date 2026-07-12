@@ -110,46 +110,46 @@ public class ExceptionTableTest {
         System.out.println("=== Exception Table Test ===");
         
         // Test 1
-//         for (int i = 0; i < 50000; i++) {
-//             int r1 = simpleTryCatch();
-//             System.out.println("simpleTryCatch: " + r1 + " (expected: -1)");
-//         }
+        for (int i = 0; i < 50000; i++) {
+            int r1 = simpleTryCatch();
+            System.out.println("simpleTryCatch: " + r1 + " (expected: -1)");
+        }
 
         // Test 2
-//         for (int i = 0; i < 50000; i++) {
-//             String r2 = multipleCatch(i);
-//             System.out.println("multipleCatch: " + r2);
-//         }
+        for (int i = 0; i < 50000; i++) {
+            String r2 = multipleCatch(i);
+            System.out.println("multipleCatch: " + r2);
+        }
 
         // Test 3
-//         for (int i = 0; i < 50000; i++) {
-//             String r3 = nestedTryCatch();
-//             System.out.println("nestedTryCatch: " + r3);
-//         }
+        for (int i = 0; i < 50000; i++) {
+            String r3 = nestedTryCatch();
+            System.out.println("nestedTryCatch: " + r3);
+        }
 
         // Test 4
-//         for (int i = 0; i < 50000; i++) {
-//             String r4 = catchAll();
-//             System.out.println("catchAll: " + r4);
-//         }
+        for (int i = 0; i < 50000; i++) {
+            String r4 = catchAll();
+            System.out.println("catchAll: " + r4);
+        }
 
         // Test 5
-//         for (int i = 0; i < 50000; i++) {
-//             try {
-//                 rethrowTest();
-//                 System.out.println("rethrowTest: FAILED (should have thrown)");
-//             } catch (IllegalStateException e) {
-//                 System.out.println("rethrowTest: caught IllegalStateException (expected)");
-//             }
-//         }
+        for (int i = 0; i < 50000; i++) {
+            try {
+                rethrowTest();
+                System.out.println("rethrowTest: FAILED (should have thrown)");
+            } catch (IllegalStateException e) {
+                System.out.println("rethrowTest: caught IllegalStateException (expected)");
+            }
+        }
 
         // Test 6
-//         for (int i = 0; i < 50000; i++) {
-//             int r6a = deoptWithCatch("hello");
-//             int r6b = deoptWithCatch(null);
-//             System.out.println("deoptWithCatch(hello): " + r6a + " (expected: 5)");
-//             System.out.println("deoptWithCatch(null): " + r6b + " (expected: -999)");
-//         }
+        for (int i = 0; i < 50000; i++) {
+            int r6a = deoptWithCatch("hello");
+            int r6b = deoptWithCatch(null);
+            System.out.println("deoptWithCatch(hello): " + r6a + " (expected: 5)");
+            System.out.println("deoptWithCatch(null): " + r6b + " (expected: -999)");
+        }
 
         // Test 7
         for (int i = 0; i < 50000; i++) {
