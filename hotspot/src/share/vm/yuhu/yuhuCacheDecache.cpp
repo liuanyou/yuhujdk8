@@ -139,18 +139,18 @@ llvm::Argument* YuhuNormalEntryCacher::get_function_arg(int local_index) {
 }
 
 // Read stack argument from x20 (esp) for arguments >= 8
-// Stack arguments are at [esp + (arg_index - 8) * 8] in caller's frame
+// Stack arguments are at [esp + stk_args_index * 8] in caller's frame
 // arg_index is the argument index in AArch64 calling convention (0-based, including receiver for non-static)
-llvm::Value* YuhuNormalEntryCacher::read_stack_arg(int arg_index) {
+llvm::Value* YuhuNormalEntryCacher::read_stack_arg(int stk_args_index) {
   // Read x29 (frame pointer) register
   llvm::Value* fp = builder()->CreateReadFramePointer();
   
-  // Calculate stack argument address: x29 + 16 + (arg_index - 8) * 8
+  // Calculate stack argument address: x29 + 16 + stk_args_index * 8
   // Parameters >= 8 are placed by interpreter at:
   //   - 9th parameter (index=8): x29 + 16
   //   - 10th parameter (index=9): x29 + 24
-  //   - nth parameter (index>=8): x29 + 16 + (index - 8) * 8
-  int stack_offset = 16 + (arg_index - 8) * wordSize;
+  //   - nth parameter (index>=8): x29 + 16 + stk_args_index * 8
+  int stack_offset = 16 + stk_args_index * wordSize;
   llvm::Value* stack_arg_addr = builder()->CreateGEP(
     YuhuType::intptr_type(),
     builder()->CreateIntToPtr(fp, llvm::PointerType::getUnqual(YuhuType::intptr_type())),
@@ -225,70 +225,91 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
         arg_index++;
       }
     }
-    
-    if (arg_index < 8) {
-      // Parameters 0-7: read from registers
-      if (arg_index == 7) {
-        // Special handling for p7 (8th parameter): read from x22 register where it was saved
-        loaded = builder()->CreateReadX22Register();
-      } else {
-        // Parameters 0-6: read from function arguments (x1-x7)
-        llvm::Argument* arg = get_function_arg(arg_index);
-        assert(arg != NULL, "function argument should exist");
-        loaded = arg;
-      }
-      
-      // Ensure type matches exactly (may need conversion for integers or pointers)
-      if (loaded->getType() != stack_ty) {
-        // For integer types, use CreateIntCast; for pointers, use CreateBitCast
-        if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
-          loaded = builder()->CreateIntCast(
-            loaded,
-            stack_ty,
-            value->basic_type() != T_CHAR,  // signed unless char
-            "arg_typed");
-        } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
-          loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
-        } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
-          // Convert i64 to ptr (for p7 when it's an oop)
-          loaded = builder()->CreateIntToPtr(loaded, stack_ty, "arg_typed");
-        } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
-          // Convert ptr to i64 (should not happen for p7, but handle for completeness)
-          loaded = builder()->CreatePtrToInt(loaded, stack_ty, "arg_typed");
+
+    uint int_args = is_static ? 0 : 1;
+    uint fp_args = 0;
+    uint stk_args = 0;
+    bool is_current_arg_float = false;
+    int arg_cnt = is_static ? arg_index : (arg_index - 1);
+
+    for (int i = 0; i <= arg_cnt; ++i) {
+        if (sig->type_at(i)->basic_type() == T_FLOAT || sig->type_at(i)->basic_type() == T_DOUBLE) {
+            if (fp_args < 8) {
+                fp_args++;
+            } else {
+                stk_args++;
+            }
+            if (i == arg_cnt) {
+                is_current_arg_float = true;
+            }
         } else {
-          // Fallback: try bitcast
-          loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+            if (int_args < 8) {
+                int_args++;
+            } else {
+                stk_args++;
+            }
         }
-      }
+    }
+
+    if (!is_current_arg_float) {
+        if (stk_args == 0) {
+            // it means argument is not on stack, still in register
+            if (int_args == 8) {
+                // if it is just the 8th argument
+                // Special handling for p7 (8th parameter): read from x22 register where it was saved
+                loaded = builder()->CreateReadX22Register();
+            } else {
+                // Parameters 0-6: read from function arguments (x1-x7)
+                llvm::Argument* arg = get_function_arg(arg_index);
+                assert(arg != NULL, "function argument should exist");
+                loaded = arg;
+            }
+        } else {
+            loaded = read_stack_arg(stk_args - 1);
+        }
+
+        // Ensure type matches exactly (may need conversion for integers or pointers)
+        if (loaded->getType() != stack_ty) {
+            // For integer types, use CreateIntCast; for pointers, use CreateBitCast
+            if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
+                loaded = builder()->CreateIntCast(
+                        loaded,
+                        stack_ty,
+                        value->basic_type() != T_CHAR,  // signed unless char
+                        "arg_typed");
+            } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
+                loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+            } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
+                // Convert i64 to ptr
+                loaded = builder()->CreateIntToPtr(loaded, stack_ty, "arg_typed");
+            } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
+                // Convert ptr to i64
+                loaded = builder()->CreatePtrToInt(loaded, stack_ty, "arg_typed");
+            } else {
+                // Fallback: try bitcast
+                loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+            }
+        }
     } else {
-      // Parameters >= 8: read from stack via x20 (esp)
-      // Use the argument index (not bytecode slot index) for stack offset calculation
-      int stack_arg_index = arg_index;
-      
-      loaded = read_stack_arg(stack_arg_index);
-      
-      // Cast to the expected type if needed
-      if (loaded->getType() != stack_ty) {
-        // For integer types, use CreateIntCast; for pointers, use CreateBitCast
-        if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
-          loaded = builder()->CreateIntCast(
-            loaded,
-            stack_ty,
-            value->basic_type() != T_CHAR,  // signed unless char
-            "stack_arg_typed");
-        } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
-            loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
-        } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
-            // Convert i64 to ptr (for p8 when it's an oop)
-            loaded = builder()->CreateIntToPtr(loaded, stack_ty, "arg_typed");
-        } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
-            // Convert ptr to i64 (should not happen for p8, but handle for completeness)
-            loaded = builder()->CreatePtrToInt(loaded, stack_ty, "arg_typed");
+        if (stk_args == 0) {
+            // it means argument is not on stack, still in register
+            llvm::Argument* arg = get_function_arg(arg_index);
+            assert(arg != NULL, "function argument should exist");
+            loaded = arg;
         } else {
-            // Fallback: try bitcast
-            loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+            loaded = read_stack_arg(stk_args - 1);
         }
-      }
+
+        if (loaded->getType() != stack_ty) {
+            if (stack_ty->isFloatTy()) {
+                // i64 → i32 → float (narrow then reinterpret)
+                llvm::Value* trunc = builder()->CreateTrunc(loaded, builder()->getInt32Ty());
+                loaded = builder()->CreateBitCast(trunc, stack_ty, "arg_typed");
+            } else if (stack_ty->isDoubleTy()) {
+                // i64 → double (same size, reinterpret)
+                loaded = builder()->CreateBitCast(loaded, stack_ty, "arg_typed");
+            }
+        }
     }
 
     // Write into frame locals so downstream reads see it in the expected slot

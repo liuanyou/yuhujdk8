@@ -372,8 +372,9 @@ class YuhuNormalEntryCacher : public YuhuFunctionEntryCacher {
   // Helper: Get function argument by index (0-based, accounting for static method NULL)
   llvm::Argument* get_function_arg(int local_index);
   
-  // Helper: Read stack argument from x20 (esp) for arguments >= 8
-  llvm::Value* read_stack_arg(int arg_index);
+  // Helper: Read stack argument from x20 (esp) for arguments that are not in register but on stack
+  // index is starting from 0
+  llvm::Value* read_stack_arg(int stk_args_index);
 };
 
 class YuhuOSREntryCacher : public YuhuFunctionEntryCacher {
