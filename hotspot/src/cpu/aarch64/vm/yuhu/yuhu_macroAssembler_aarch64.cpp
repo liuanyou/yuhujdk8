@@ -3919,7 +3919,9 @@ address YuhuMacroAssembler::write_insts_remove_frame(int framesize, YuhuRegister
             prologued_registers[num_registers - 2].as_general_register() == fp &&
             prologued_registers[num_registers - 1].is_general_register() &&
             prologued_registers[num_registers - 1].as_general_register() == lr, "last 2 registers must be fp and lr");
-    if (framesize < ((1 << 9) + num_registers * wordSize)) {
+    // need to make sure the maximum offset that framesize - 2 * wordSize is not greater than imm7 field for the 64-bit signed offset variant
+    // so use 2 * wordSize, not num_registers * wordSize
+    if (framesize < ((1 << 9) + 2 * wordSize)) {
         for (int i = 0; i < num_registers; i = i + 2) {
             if (prologued_registers[i].is_general_register()) {
                 write_inst_ldp(prologued_registers[i].as_general_register(), prologued_registers[i + 1].as_general_register(),
@@ -3931,6 +3933,7 @@ address YuhuMacroAssembler::write_insts_remove_frame(int framesize, YuhuRegister
         }
         write_inst("add sp, sp, #%d", framesize);
     } else {
+        // need to make sure framesize - num_registers * wordSize is not greater than imm12 field for unsigned immediate
         if (framesize < ((1 << 12) + num_registers * wordSize))
             write_inst("add sp, sp, #%d", framesize - num_registers * wordSize);
         else {
