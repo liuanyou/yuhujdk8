@@ -1049,6 +1049,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       env->record_failure("block has incomplete state analysis");
       return;
   }
+
+  if (YuhuCompileOnlyOf != NULL) {
+      if (fnmatch(YuhuCompileOnlyOf, base_name, 0)) {
+          env->record_failure("YuhuCompileOnlyOf flag is turned on, skipping mismatched functions");
+          return;
+      }
+  }
+
   // Bail out if any block has a trap (unloaded class at compile time).
   // Yuhu does not support deoptimization, so such methods cannot be compiled.
 //  for (int i = 0; i < flow->block_count(); i++) {

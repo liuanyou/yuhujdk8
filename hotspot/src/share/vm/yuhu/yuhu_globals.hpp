@@ -45,6 +45,9 @@
   develop(ccstr, YuhuPrintTypeflowOf, NULL,                                  \
           "Print the typeflow of the specified method")                       \
                                                                               \
+  develop(ccstr, YuhuCompileOnlyOf, NULL,                                  \
+          "Compile the specified method only")                       \
+                                                                              \
   diagnostic(ccstr, YuhuPrintBitcodeOf, NULL,                                \
           "Print the LLVM bitcode of the specified method")                   \
                                                                               \
