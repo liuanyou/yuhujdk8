@@ -53,6 +53,7 @@ echo "测试 1: 只编译 testNineParameters"
 echo "========================================="
 "$JAVA" \
   -XX:+UseYuhuCompiler \
+  -XX:-YuhuUseComplexityBased \
   -XX:CompileCommand=yuhuonly,com/example/NineParameterTest.testNineParameters \
   -XX:TieredStopAtLevel=6 \
   com.example.NineParameterTest
@@ -63,13 +64,26 @@ echo "测试 2: 只编译 testNineParametersStatic"
 echo "========================================="
 "$JAVA" \
   -XX:+UseYuhuCompiler \
+  -XX:-YuhuUseComplexityBased \
   -XX:CompileCommand=yuhuonly,com/example/NineParameterTest.testNineParametersStatic \
   -XX:TieredStopAtLevel=6 \
   com.example.NineParameterTest
 
 echo ""
 echo "========================================="
-echo "测试 3: 编译所有测试方法"
+echo "测试 3: 只编译 testNineParamsCallee"
+echo "========================================="
+"$JAVA" \
+  -XX:+UseYuhuCompiler \
+  -XX:-YuhuUseComplexityBased \
+  -XX:CompileCommand=yuhuonly,com/example/NineParameterTest.testNineParamsCallee \
+  -XX:YuhuCompileOnlyOf=com.example.NineParameterTest::testNineParamsCallee \
+  -XX:TieredStopAtLevel=6 \
+  com.example.NineParameterTest
+
+echo ""
+echo "========================================="
+echo "测试 4: 编译所有测试方法"
 echo "========================================="
 "$JAVA" \
   -XX:+UseYuhuCompiler \

@@ -80,6 +80,44 @@ public class NineParameterTest {
         
         return sum;
     }
+
+    public int testNineParamsCaller(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
+        int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+        if (useCallee) {
+            return testNineParamsCallee(p1, p2, p3, p4, p5, p6, p7, p8, p9);
+        }
+        return sum;
+    }
+
+    public int testNineParamsCallee(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
+        int sum = 0;
+        for (int i = 0; i < 10; i++) {
+            sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (sum > 100) {
+                sum -= 50;
+            }
+        }
+        return sum;
+    }
+
+        public int testNineParamsCaller4(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
+            int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (useCallee) {
+                return testNineParamsCallee(p1, p2, p3, p4, p5, p6, p7, p8, p9);
+            }
+            return sum;
+        }
+
+        public int testNineParamsCallee4(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
+            int sum = 0;
+            for (int i = 0; i < 10; i++) {
+                sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+                if (sum > 100) {
+                    sum -= 50;
+                }
+            }
+            return sum;
+        }
     
     /**
      * Main method to run the test.
@@ -99,32 +137,65 @@ public class NineParameterTest {
 //         }
         
         // Test instance method
-        int result1 = 0;
+//         int result1 = 0;
+//         for (int i = 0; i < 100000; i++) {
+//             result1 = test.testNineParameters(i, 2, 3, 4, 5, 6, 7, 8, 9);
+//         }
+// //         result1 = test.testNineParameters(99999, 2, 3, 4, 5, 6, 7, 8, 9);
+//         System.out.println("Instance method result: " + result1);
+//         System.out.println("Expected: 45");
+//         System.out.println();
+//
+//         // Test static method
+//         int result2 = 0;
+//         for (int i = 0; i < 100000; i++) {
+//             result2 = testNineParametersStatic(i, 20, 30, 40, 50, 60, 70, 80, 90);
+//         }
+//         System.out.println("Static method result: " + result2);
+//         System.out.println("Expected: 450");
+//         System.out.println();
+//
+//         // Verify results (adjusted for loop computation)
+//         if (result1 == 400 && result2 == 4000) {
+//             System.out.println("SUCCESS: All tests passed!");
+//         } else {
+//             System.out.println("FAILURE: Results do not match expected values!");
+//             System.out.println("Expected result1=400, got: " + result1);
+//             System.out.println("Expected result2=4000, got: " + result2);
+//             System.exit(1);
+//         }
+
         for (int i = 0; i < 100000; i++) {
-            result1 = test.testNineParameters(i, 2, 3, 4, 5, 6, 7, 8, 9);
+            test.testNineParamsCaller(false, i, 2, 3, 4, 5, 6, 7, 8, 9);
+            test.testNineParamsCallee(i, 2, 3, 4, 5, 6, 7, 8, 9);
         }
-//         result1 = test.testNineParameters(99999, 2, 3, 4, 5, 6, 7, 8, 9);
-        System.out.println("Instance method result: " + result1);
-        System.out.println("Expected: 45");
-        System.out.println();
-        
-        // Test static method
-        int result2 = 0;
-        for (int i = 0; i < 100000; i++) {
-            result2 = testNineParametersStatic(i, 20, 30, 40, 50, 60, 70, 80, 90);
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
         }
-        System.out.println("Static method result: " + result2);
-        System.out.println("Expected: 450");
-        System.out.println();
-        
-        // Verify results (adjusted for loop computation)
-        if (result1 == 400 && result2 == 4000) {
-            System.out.println("SUCCESS: All tests passed!");
-        } else {
-            System.out.println("FAILURE: Results do not match expected values!");
-            System.out.println("Expected result1=400, got: " + result1);
-            System.out.println("Expected result2=4000, got: " + result2);
-            System.exit(1);
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
         }
+
+        int result3 = test.testNineParamsCaller(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9);
+        System.out.println("result3: " + result3);
+
+//         for (int i = 0; i < 100000; i++) {
+//             test.testNineParamsCaller(false, i, 2, 3, 4, 5, 6, 7, 8, 9);
+//         }
+//
+//         try {
+//             Thread.sleep(60000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         int result3 = test.testNineParamsCaller(true, 0, 2, 3, 4, 5, 6, 7, 8, 9);
+//         System.out.println("result3: " + result3);
     }
 }
