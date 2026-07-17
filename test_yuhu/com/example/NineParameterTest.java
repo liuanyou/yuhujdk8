@@ -157,6 +157,105 @@ public class NineParameterTest {
         return sum;
     }
 
+    public int testNineParamsCaller7(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj7,
+                                    boolean b1, byte b2, short b3, long l,
+                                    float s1, float s2, float s3, float s4, float s5, float s6, float s7, float s8, float s9,
+                                    double d1) {
+        int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+        if (useCallee) {
+            return testNineParamsCallee7(p1, p2, p3, p4, p5, p6, p7, p8, p9, obj7, b1, b2, b3, l, s1, s2, s3, s4, s5, s6, s7, s8, s9, d1);
+        }
+        return sum;
+    }
+
+    public int testNineParamsCallee7(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj7,
+                                     boolean b1, byte b2, short b3, long l,
+                                     float s1, float s2, float s3, float s4, float s5, float s6, float s7, float s8, float s9,
+                                     double d1) {
+        int sum = (obj7 != null ? 0 : -1);
+        for (int i = 0; i < 10; i++) {
+            sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (sum > 100) {
+                sum -= 50;
+            }
+        }
+        System.out.println("p1=" + p1);
+        System.out.println("p2=" + p2);
+        System.out.println("p3=" + p3);
+        System.out.println("p4=" + p4);
+        System.out.println("p5=" + p5);
+        System.out.println("p6=" + p6);
+        System.out.println("p7=" + p7);
+        System.out.println("p8=" + p8);
+        System.out.println("p9=" + p9);
+        System.out.println("obj7=" + obj7);
+        System.out.println("b1=" + b1);
+        System.out.println("b2=" + b2);
+        System.out.println("b3=" + b3);
+        System.out.println("l=" + l);
+        System.out.println("s1=" + s1);
+        System.out.println("s2=" + s2);
+        System.out.println("s3=" + s3);
+        System.out.println("s4=" + s4);
+        System.out.println("s5=" + s5);
+        System.out.println("s6=" + s6);
+        System.out.println("s7=" + s7);
+        System.out.println("s8=" + s8);
+        System.out.println("s9=" + s9);
+        System.out.println("d1=" + d1);
+        return sum;
+    }
+
+    public int testNineParamsCaller8(boolean useCallee,
+                                    float s1, float s2, float s3, float s4, float s5, float s6, float s7, float s8, float s9,
+                                    double d1,
+                                    int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj8,
+                                    boolean b1, byte b2, short b3, long l) {
+        int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+        if (useCallee) {
+            return testNineParamsCallee8(s1, s2, s3, s4, s5, s6, s7, s8, s9, d1, p1, p2, p3, p4, p5, p6, p7, p8, p9, obj8, b1, b2, b3, l);
+        }
+        return sum;
+    }
+
+    public int testNineParamsCallee8(float s1, float s2, float s3, float s4, float s5, float s6, float s7, float s8, float s9,
+                                    double d1,
+                                    int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj8,
+                                    boolean b1, byte b2, short b3, long l) {
+        int sum = (obj8 != null ? 0 : -1);
+        for (int i = 0; i < 10; i++) {
+            sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (sum > 100) {
+                sum -= 50;
+            }
+        }
+        System.out.println("p1=" + p1);
+        System.out.println("p2=" + p2);
+        System.out.println("p3=" + p3);
+        System.out.println("p4=" + p4);
+        System.out.println("p5=" + p5);
+        System.out.println("p6=" + p6);
+        System.out.println("p7=" + p7);
+        System.out.println("p8=" + p8);
+        System.out.println("p9=" + p9);
+        System.out.println("obj8=" + obj8);
+        System.out.println("b1=" + b1);
+        System.out.println("b2=" + b2);
+        System.out.println("b3=" + b3);
+        System.out.println("l=" + l);
+        System.out.println("s1=" + s1);
+        System.out.println("s2=" + s2);
+        System.out.println("s3=" + s3);
+        System.out.println("s4=" + s4);
+        System.out.println("s5=" + s5);
+        System.out.println("s6=" + s6);
+        System.out.println("s7=" + s7);
+        System.out.println("s8=" + s8);
+        System.out.println("s9=" + s9);
+        System.out.println("d1=" + d1);
+        return sum;
+    }
+
     /**
      * Main method to run the test.
      */
@@ -266,10 +365,61 @@ public class NineParameterTest {
 //         assert(result5 == 99940);
 //         System.out.println("result5: " + result5);
 
-        Object obj6 = new Object();
+//         Object obj6 = new Object();
+//         for (int i = 0; i < 1000000; i++) {
+//             test.testNineParamsCaller6(false, i, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
+//             test.testNineParamsCallee6(i, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         int result6 = test.testNineParamsCaller6(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
+//         assert(result6 == 99940);
+//         System.out.println("result6: " + result6);
+
+//         Object obj7 = new Object();
+//         for (int i = 0; i < 1000000; i++) {
+//             test.testNineParamsCaller7(false, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj7,
+//                                        true, (byte)1, (short)2, 4l,
+//                                        1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
+//                                        10.0d);
+// //             test.testNineParamsCallee7(i, 2, 3, 4, 5, 6, 7, 8, 9, obj7);
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         int result7 = test.testNineParamsCaller7(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj7,
+//                                                 true, (byte)1, (short)2, 4l,
+//                                                 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
+//                                                 10.0d);
+//         assert(result7 == 99940);
+//         System.out.println("result7: " + result7);
+
+        Object obj8 = new Object();
         for (int i = 0; i < 1000000; i++) {
-            test.testNineParamsCaller6(false, i, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
-            test.testNineParamsCallee6(i, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
+            test.testNineParamsCaller8(false, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0d,
+                                        10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
+                                       true, (byte)1, (short)2, 4l);
         }
 
         try {
@@ -284,8 +434,10 @@ public class NineParameterTest {
 
         }
 
-        int result6 = test.testNineParamsCaller6(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj6);
-        assert(result6 == 99940);
-        System.out.println("result6: " + result6);
+        int result8 = test.testNineParamsCaller8(true, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0d,
+                                                10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
+                                                true, (byte)1, (short)2, 4l);
+        assert(result8 == 99940);
+        System.out.println("result8: " + result8);
     }
 }
