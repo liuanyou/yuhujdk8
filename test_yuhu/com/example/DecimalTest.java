@@ -92,45 +92,45 @@ public class DecimalTest {
         DecimalTest test = new DecimalTest();
 
         // Warmup and test double parameters
-//         double doubleResult = 0;
-//         for (int i = 0; i < 500000; i++) {
-//             doubleResult = addDoubles(1.5, 2.5, 3.5, 4.5);
-//         }
-//         System.out.println("addDoubles result: " + doubleResult);
-//         System.out.println("Expected: 12.0 + loop contribution");
-//         System.out.println();
+        double doubleResult = 0;
+        for (int i = 0; i < 500000; i++) {
+            doubleResult = addDoubles(1.5, 2.5, 3.5, 4.5);
+        }
+        System.out.println("addDoubles result: " + doubleResult);
+        System.out.println("Expected: 12.0 + loop contribution");
+        System.out.println();
 
         // Test float parameters
-//         float floatResult = 0;
-//         for (int i = 0; i < 1000000; i++) {
-//             floatResult = addFloats(1.5f, 2.5f, 3.5f, 4.5f);
-//         }
-//         System.out.println("addFloats result: " + floatResult);
-//         System.out.println();
+        float floatResult = 0;
+        for (int i = 0; i < 1000000; i++) {
+            floatResult = addFloats(1.5f, 2.5f, 3.5f, 4.5f);
+        }
+        System.out.println("addFloats result: " + floatResult);
+        System.out.println();
 
         // Test mixed int/double parameters
-//         double mixedResult = 0;
-//         for (int i = 0; i < 1000000; i++) {
-//             mixedResult = mixedIntDouble(5, 10.0, 2, 3.0);
-//         }
-//         System.out.println("mixedIntDouble result: " + mixedResult);
-//         System.out.println();
+        double mixedResult = 0;
+        for (int i = 0; i < 1000000; i++) {
+            mixedResult = mixedIntDouble(5, 10.0, 2, 3.0);
+        }
+        System.out.println("mixedIntDouble result: " + mixedResult);
+        System.out.println();
 
         // Test 9 double parameters (exceeds FP register limit)
-//         double nineResult = 0;
-//         for (int i = 0; i < 1000000; i++) {
-//             nineResult = nineDoubles(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
-//         }
-//         System.out.println("nineDoubles result: " + nineResult);
-//         System.out.println();
+        double nineResult = 0;
+        for (int i = 0; i < 1000000; i++) {
+            nineResult = nineDoubles(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+        }
+        System.out.println("nineDoubles result: " + nineResult);
+        System.out.println();
 
         // Test 10 mixed parameters
-//         double tenResult = 0;
-//         for (int i = 0; i < 1000000; i++) {
-//             tenResult = tenMixedParams(1, 10.0, 2, 20.0, 3, 30.0, 4, 40.0, 5, 50.0);
-//         }
-//         System.out.println("tenMixedParams result: " + tenResult);
-//         System.out.println();
+        double tenResult = 0;
+        for (int i = 0; i < 1000000; i++) {
+            tenResult = tenMixedParams(1, 10.0, 2, 20.0, 3, 30.0, 4, 40.0, 5, 50.0);
+        }
+        System.out.println("tenMixedParams result: " + tenResult);
+        System.out.println();
 
         // Test instance method with doubles
         double instanceResult = 0;

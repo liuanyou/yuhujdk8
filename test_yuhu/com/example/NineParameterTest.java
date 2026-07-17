@@ -417,7 +417,7 @@ public class NineParameterTest {
 
         Object obj8 = new Object();
         for (int i = 0; i < 1000000; i++) {
-            test.testNineParamsCaller8(false, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0d,
+            test.testNineParamsCaller8(false, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
                                         10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
                                        true, (byte)1, (short)2, 4l);
         }
@@ -434,7 +434,7 @@ public class NineParameterTest {
 
         }
 
-        int result8 = test.testNineParamsCaller8(true, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0d,
+        int result8 = test.testNineParamsCaller8(true, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
                                                 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
                                                 true, (byte)1, (short)2, 4l);
         assert(result8 == 99940);
