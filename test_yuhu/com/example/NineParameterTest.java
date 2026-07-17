@@ -100,24 +100,43 @@ public class NineParameterTest {
         return sum;
     }
 
-        public int testNineParamsCaller4(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
-            int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
-            if (useCallee) {
-                return testNineParamsCallee(p1, p2, p3, p4, p5, p6, p7, p8, p9);
-            }
-            return sum;
+    public int testNineParamsCaller4(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+        int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+        if (useCallee) {
+            return testNineParamsCallee4(p1, p2, p3, p4, p5, p6, p7, p8, p9, obj4);
         }
+        return sum;
+    }
 
-        public int testNineParamsCallee4(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9) {
-            int sum = 0;
-            for (int i = 0; i < 10; i++) {
-                sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
-                if (sum > 100) {
-                    sum -= 50;
-                }
+    public int testNineParamsCallee4(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+        int sum = (obj4 != null ? 0 : -1);
+        for (int i = 0; i < 10; i++) {
+            sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (sum > 100) {
+                sum -= 50;
             }
-            return sum;
         }
+        return sum;
+    }
+
+    public int testNineParamsCaller5(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+        int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+        if (useCallee) {
+            return testNineParamsCallee5(p1, p2, p3, p4, p5, p6, p7, p8, p9, obj4);
+        }
+        return sum;
+    }
+
+    public int testNineParamsCallee5(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+        int sum = (obj4 != null ? 0 : -1);
+        for (int i = 0; i < 10; i++) {
+            sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (sum > 100) {
+                sum -= 50;
+            }
+        }
+        return sum;
+    }
     
     /**
      * Main method to run the test.
@@ -165,37 +184,45 @@ public class NineParameterTest {
 //             System.exit(1);
 //         }
 
-        for (int i = 0; i < 100000; i++) {
-            test.testNineParamsCaller(false, i, 2, 3, 4, 5, 6, 7, 8, 9);
-            test.testNineParamsCallee(i, 2, 3, 4, 5, 6, 7, 8, 9);
-        }
-
-        try {
-            Thread.sleep(15000);
-        } catch(Exception e) {
-
-        }
-
-        try {
-            Thread.sleep(15000);
-        } catch(Exception e) {
-
-        }
-
-        int result3 = test.testNineParamsCaller(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9);
-        System.out.println("result3: " + result3);
-
 //         for (int i = 0; i < 100000; i++) {
 //             test.testNineParamsCaller(false, i, 2, 3, 4, 5, 6, 7, 8, 9);
+//             test.testNineParamsCallee(i, 2, 3, 4, 5, 6, 7, 8, 9);
 //         }
 //
 //         try {
-//             Thread.sleep(60000);
+//             Thread.sleep(15000);
 //         } catch(Exception e) {
 //
 //         }
 //
-//         int result3 = test.testNineParamsCaller(true, 0, 2, 3, 4, 5, 6, 7, 8, 9);
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         int result3 = test.testNineParamsCaller(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9);
 //         System.out.println("result3: " + result3);
+
+        Object obj4 = new Object();
+        for (int i = 0; i < 100000; i++) {
+            test.testNineParamsCaller4(false, i, 2, 3, 4, 5, 6, 7, 8, 9, obj4);
+        }
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
+        }
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
+        }
+
+        int result4 = test.testNineParamsCaller4(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj4);
+        assert(result4 == 99940);
+        System.out.println("result4: " + result4);
     }
 }
