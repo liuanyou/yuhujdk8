@@ -266,6 +266,7 @@ extern "C" void go_unwind() {
 
 int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
     int stk_args = 0;
+    bool is_first_int_checked = false;
     if (stk_basic_types != NULL) {
         for (int i = 0; i < stk_basic_types->length(); ++i) {
             switch (stk_basic_types->at(i)) {
@@ -274,7 +275,9 @@ int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
                 case T_CHAR:
                 case T_SHORT:
                 case T_INT:
-                    if (i != 0) { // first stk int is passed by w0
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                    } else {
                         stk_args++;
                     }
                     break;
@@ -287,7 +290,9 @@ int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
                 case T_LONG:
                 case T_OBJECT:
                 case T_ARRAY:
-                    if (i != 0) { // first stk int is passed by x0
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                    } else {
                         stk_args++;
                     }
                     break;
@@ -303,6 +308,8 @@ int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
 void generate_stk_args(YuhuMacroAssembler* masm, int frame_size_in_bytes, GrowableArray<BasicType>* stk_basic_types) {
     if (stk_basic_types != NULL) {
         int offset_in_bytes = 0;
+        int stk_args = 0;
+        bool is_first_int_checked = false;
         for (int i = 0; i < stk_basic_types->length(); ++i) {
             switch (stk_basic_types->at(i)) {
                 case T_BOOLEAN:
@@ -310,36 +317,41 @@ void generate_stk_args(YuhuMacroAssembler* masm, int frame_size_in_bytes, Growab
                 case T_CHAR:
                 case T_SHORT:
                 case T_INT:
-                    if (i == 0) {
-                        masm->write_inst_ldr(YuhuMacroAssembler::w0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes));
-                        // sxtw x0, w0 is not added for now, check it later if it needs to be done
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                        masm->write_inst_ldr(YuhuMacroAssembler::w0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + offset_in_bytes));
                         offset_in_bytes += 4;
                     } else {
+                        stk_args++;
                         masm->write_inst_ldr(YuhuMacroAssembler::w9, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + offset_in_bytes));
-                        masm->write_inst_str(YuhuMacroAssembler::w9, YuhuAddress(YuhuMacroAssembler::sp, (i - 1) * wordSize));
+                        masm->write_inst_str(YuhuMacroAssembler::w9, YuhuAddress(YuhuMacroAssembler::sp, (stk_args - 1) * wordSize));
                         offset_in_bytes += 4;
                     }
                     break;
                 case T_FLOAT:
+                    stk_args++;
                     masm->write_inst_ldr(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + offset_in_bytes));
-                    masm->write_inst_str(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::sp, (i - 1) * wordSize));
+                    masm->write_inst_str(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::sp, (stk_args - 1) * wordSize));
                     offset_in_bytes += 4;
                     break;
                 case T_DOUBLE:
+                    stk_args++;
                     // 8-bytes alignment
                     masm->write_inst_ldr(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + align_size_up(offset_in_bytes, 8)));
-                    masm->write_inst_str(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::sp, (i - 1) * wordSize));
+                    masm->write_inst_str(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::sp, (stk_args - 1) * wordSize));
                     offset_in_bytes = align_size_up(offset_in_bytes, 8) + 8; // 8-bytes alignment
                     break;
                 case T_LONG:
                 case T_OBJECT:
                 case T_ARRAY:
-                    if (i == 0) {
-                        masm->write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes));
-                        offset_in_bytes += 8;
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                        masm->write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + align_size_up(offset_in_bytes, 8)));
+                        offset_in_bytes = align_size_up(offset_in_bytes, 8) + 8;
                     } else {
+                        stk_args++;
                         masm->write_inst_ldr(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::sp, frame_size_in_bytes + align_size_up(offset_in_bytes, 8)));
-                        masm->write_inst_str(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::sp, (i - 1) * wordSize));
+                        masm->write_inst_str(YuhuMacroAssembler::x9, YuhuAddress(YuhuMacroAssembler::sp, (stk_args - 1) * wordSize));
                         offset_in_bytes = align_size_up(offset_in_bytes, 8) + 8;
                     }
                     break;

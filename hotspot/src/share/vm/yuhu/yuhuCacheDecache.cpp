@@ -231,7 +231,8 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
     // 8 float registers are d0-d7
     uint int_args = is_static ? 0 : 1;
     uint fp_args = 0;
-    uint stk_args = 0;
+    uint int_stk_args = 0;
+    uint fp_stk_args = 0;
     bool is_current_arg_float = false;
     int arg_cnt = is_static ? arg_index : (arg_index - 1);
 
@@ -240,7 +241,7 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             if (fp_args < 8) {
                 fp_args++;
             } else {
-                stk_args++;
+                fp_stk_args++;
             }
             if (i == arg_cnt) {
                 is_current_arg_float = true;
@@ -249,26 +250,23 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             if (int_args < 8) {
                 int_args++;
             } else {
-                stk_args++;
+                int_stk_args++;
             }
         }
     }
 
     if (!is_current_arg_float) {
-        if (stk_args == 0) {
-            // it means argument is not on stack, still in register
-            if (int_args == 8) {
-                // if it is just the 8th argument
-                // Special handling for p7 (8th parameter): read from x22 register where it was saved
-                loaded = builder()->CreateReadX22Register();
-            } else {
-                // Parameters 0-6: read from function arguments (x1-x7)
-                llvm::Argument* arg = get_function_arg(arg_index);
-                assert(arg != NULL, "function argument should exist");
-                loaded = arg;
-            }
+        if (int_args < 8) {
+            // Parameters 0-6: read from function arguments (x1-x7)
+            llvm::Argument* arg = get_function_arg(arg_index);
+            assert(arg != NULL, "function argument should exist");
+            loaded = arg;
+        } else if (int_args == 8 && int_stk_args == 0) {
+            // if it is just the 8th argument
+            // Special handling for p7 (8th parameter): read from x22 register where it was saved
+            loaded = builder()->CreateReadX22Register();
         } else {
-            loaded = read_stack_arg(stk_args - 1);
+            loaded = read_stack_arg(int_stk_args + fp_stk_args - 1);
         }
 
         // Ensure type matches exactly (may need conversion for integers or pointers)
@@ -294,13 +292,13 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             }
         }
     } else {
-        if (stk_args == 0) {
+        if (fp_stk_args == 0) {
             // it means argument is not on stack, still in register
             llvm::Argument* arg = get_function_arg(arg_index);
             assert(arg != NULL, "function argument should exist");
             loaded = arg;
         } else {
-            loaded = read_stack_arg(stk_args - 1);
+            loaded = read_stack_arg(int_stk_args + fp_stk_args - 1);
         }
 
         if (loaded->getType() != stack_ty) {
