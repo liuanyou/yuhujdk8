@@ -226,6 +226,9 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
       }
     }
 
+    // calculate number of int registers, number of float register and number of parameters in stack
+    // 8 int registers are x1-x7,x0, and x0 is the 8th argument
+    // 8 float registers are d0-d7
     uint int_args = is_static ? 0 : 1;
     uint fp_args = 0;
     uint stk_args = 0;

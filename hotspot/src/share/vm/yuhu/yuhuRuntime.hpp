@@ -56,10 +56,6 @@ class YuhuRuntime : public AllStatic {
   static address _safepoint_poll_stub;
 
   static address _handle_deoptimization_stub;
-
-  static volatile int _static_call_stub_exception_handler_offset; // this is the offset from the insts begin
-  static volatile int _virtual_call_stub_exception_handler_offset; // this is the offset from the insts begin
-  static volatile int _interface_call_stub_exception_handler_offset; // this is the offset from the insts begin
   
   // Stub generation functions
   static address generate_vm_stub(const char* name, address C_function);
@@ -94,22 +90,25 @@ class YuhuRuntime : public AllStatic {
   // Check if an address belongs to a Yuhu RuntimeStub
   static bool is_yuhu_call_stub(address addr);
 
-  static address exception_begin(address addr);
+  static address exception_handler_begin(address addr);
 
   // Generate static call stub for direct method calls
   static address generate_static_call_stub(ciMethod* target_method, 
-                                           ciMethod* current_method);
+                                           ciMethod* current_method,
+                                           GrowableArray<BasicType>* stk_basic_types);
   
   // Generate virtual call stub for virtual method calls
   // This stub performs vtable lookup at runtime and jumps to _from_compiled_entry
   static address generate_virtual_call_stub(ciMethod* target_method, 
                                             ciMethod* current_method, 
-                                            int vtable_index);
+                                            int vtable_index,
+                                            GrowableArray<BasicType>* stk_basic_types);
   
   // Generate interface call stub for interface method calls
   // This stub performs itable lookup at runtime and jumps to _from_compiled_entry
   static address generate_interface_call_stub(ciMethod* target_method, 
-                                              ciMethod* current_method);
+                                              ciMethod* current_method,
+                                              GrowableArray<BasicType>* stk_basic_types);
 
   static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);

@@ -1278,12 +1278,12 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   return NULL;
 }
 
-Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_addr) {
+Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
   // Generate call to static call stub that returns the _from_compiled_entry directly
   // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
   // the problematic field access in the generated LLVM IR
   // Pass both the target method and the current method being compiled
-  address stub_addr = YuhuRuntime::generate_static_call_stub(method, target());
+  address stub_addr = YuhuRuntime::generate_static_call_stub(method, target(), stk_basic_types);
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
   }
@@ -1299,12 +1299,12 @@ Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_
 Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
                                               ciMethod* call_method,
                                               int vtable_index,
-                                              address* out_stub_addr) {
+                                              address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
   // Generate a virtual call stub that performs vtable lookup at runtime.
   // The stub address becomes the compile-time constant call target.
   // call_method is the statically declared target from the bytecode.
   address stub_addr = YuhuRuntime::generate_virtual_call_stub(
-    call_method, target(), vtable_index);
+    call_method, target(), vtable_index, stk_basic_types);
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
   }
@@ -1318,11 +1318,11 @@ Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
 
 Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
                                                 ciMethod*   call_method,
-                                                address* out_stub_addr) {
+                                                address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
   // Generate an interface call stub that performs itable lookup at runtime.
   // The stub address becomes the compile-time constant call target.
   address stub_addr = YuhuRuntime::generate_interface_call_stub(
-    call_method, target());
+    call_method, target(), stk_basic_types);
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
   }
@@ -1425,6 +1425,155 @@ void YuhuTopLevelBlock::do_call() {
     }
   }
 
+    // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
+    // decache will pop all arguments from the stack via xpop(),
+    // so we must collect them first.
+    //
+    // CRITICAL: Must match HotSpot's Java calling convention for AArch64
+    // x0 = dummy/return value slot (unused for input parameters)
+    // x1 = first parameter (NULL for static, receiver for non-static)
+    // x2+ = remaining parameters
+    // See: assembler_aarch64.hpp line 77-82
+    std::vector<Value*> call_args;
+    int arg_slots = call_method->arg_size();
+
+    // calculate number of int registers, number of float register and number of parameters in stack
+    // it is a little bit different with hotspot ABI
+    // 8 int registers are x0-x7, and x0 is empty, need to manually populate x0 in stub
+    // 8 float registers are d0-d7
+    uint int_args = 0;
+    uint fp_args = 0;
+    GrowableArray<BasicType> stk_basic_types;
+
+    // Add dummy value for x0 (unused input slot, used for return value)
+    call_args.push_back(LLVMValue::intptr_constant(0));
+    int_args++; // x0 is empty, but int_args increases
+
+    if (is_static) {
+        // Static: x1 = first parameter, x2+ = remaining parameters
+        // Collect all Java arguments from stack in reverse order
+        for (int i = arg_slots - 1; i >= 0; i--) {
+            YuhuValue* v = xstack(i);
+            switch (v->basic_type()) {
+                case T_BOOLEAN:
+                case T_BYTE:
+                case T_CHAR:
+                case T_SHORT:
+                case T_INT:
+                    call_args.push_back(v->jint_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                case T_LONG:
+                    call_args.push_back(v->jlong_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
+                    i--;
+                    break;
+                case T_FLOAT:
+                    call_args.push_back(v->jfloat_value());
+                    if (fp_args < 8) {
+                        fp_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                case T_DOUBLE:
+                    call_args.push_back(v->jdouble_value());
+                    if (fp_args < 8) {
+                        fp_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
+                    i--;
+                    break;
+                case T_OBJECT:
+                case T_ARRAY:
+                    call_args.push_back(v->jobject_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                default:
+                    ShouldNotReachHere();
+            }
+        }
+    } else {
+        // Non-static: x1 = receiver
+        YuhuValue* recv_val = xstack(arg_slots - 1);
+        // Explicit null check for method call receiver
+        check_null(recv_val);
+        call_args.push_back(recv_val->jobject_value());  // receiver in x1
+        int_args++; // int_args increases coz receiver is in x1
+        // Collect remaining Java arguments (excluding receiver)
+        for (int i = arg_slots - 2; i >= 0; i--) {
+            YuhuValue* v = xstack(i);
+            switch (v->basic_type()) {
+                case T_BOOLEAN:
+                case T_BYTE:
+                case T_CHAR:
+                case T_SHORT:
+                case T_INT:
+                    call_args.push_back(v->jint_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                case T_LONG:
+                    call_args.push_back(v->jlong_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
+                    i--;
+                    break;
+                case T_FLOAT:
+                    call_args.push_back(v->jfloat_value());
+                    if (fp_args < 8) {
+                        fp_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                case T_DOUBLE:
+                    call_args.push_back(v->jdouble_value());
+                    if (fp_args < 8) {
+                        fp_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
+                    i--;
+                    break;
+                case T_OBJECT:
+                case T_ARRAY:
+                    call_args.push_back(v->jobject_value());
+                    if (int_args < 8) {
+                        int_args++;
+                    } else {
+                        stk_basic_types.append(v->basic_type());
+                    }
+                    break;
+                default:
+                    ShouldNotReachHere();
+            }
+        }
+    }
+
   // Find the method we are calling
   Value *callee;
   address compiled_entry_address = 0;
@@ -1434,111 +1583,22 @@ void YuhuTopLevelBlock::do_call() {
       int vtable_index = call_method->resolve_vtable_index(
         target()->holder(), klass);
       assert(vtable_index >= 0, "should be");
-      callee = get_virtual_callee(receiver, call_method, vtable_index, &compiled_entry_address);
+      callee = get_virtual_callee(receiver, call_method, vtable_index, &compiled_entry_address, &stk_basic_types);
     }
     else {
       assert(is_interface, "should be");
-      callee = get_interface_callee(receiver, call_method, &compiled_entry_address);
+      callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
     }
   }
   else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
     // which now returns the stub address that jumps to _from_compiled_entry
-    callee = get_direct_callee(call_method, &compiled_entry_address);
+    callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
   }
 
   // All callees (direct, virtual, interface) now return stub addresses
   // The stub handles loading _from_compiled_entry internally
   Value *from_compiled_entry = callee;
-
-  // IMPORTANT: Build argument list BEFORE decache_for_Java_call()!
-  // decache will pop all arguments from the stack via xpop(),
-  // so we must collect them first.
-  //
-  // CRITICAL: Must match HotSpot's Java calling convention for AArch64
-  // x0 = dummy/return value slot (unused for input parameters)
-  // x1 = first parameter (NULL for static, receiver for non-static)
-  // x2+ = remaining parameters
-  // See: assembler_aarch64.hpp line 77-82
-  std::vector<Value*> call_args;
-  int arg_slots = call_method->arg_size();
-
-  // Add dummy value for x0 (unused input slot, used for return value)
-  call_args.push_back(LLVMValue::intptr_constant(0));
-
-  if (is_static) {
-    // Static: x1 = first parameter, x2+ = remaining parameters
-    // Collect all Java arguments from stack in reverse order
-    for (int i = arg_slots - 1; i >= 0; i--) {
-      YuhuValue* v = xstack(i);
-      switch (v->basic_type()) {
-        case T_BOOLEAN:
-        case T_BYTE:
-        case T_CHAR:
-        case T_SHORT:
-        case T_INT:
-          call_args.push_back(v->jint_value());
-          break;
-        case T_LONG:
-          call_args.push_back(v->jlong_value());
-          // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
-          i--;
-          break;
-        case T_FLOAT:
-          call_args.push_back(v->jfloat_value());
-          break;
-        case T_DOUBLE:
-          call_args.push_back(v->jdouble_value());
-          // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
-          i--;
-          break;
-        case T_OBJECT:
-        case T_ARRAY:
-          call_args.push_back(v->jobject_value());
-          break;
-        default:
-          ShouldNotReachHere();
-      }
-    }
-  } else {
-    // Non-static: x1 = receiver
-    YuhuValue* recv_val = xstack(arg_slots - 1);
-    // Explicit null check for method call receiver
-    check_null(recv_val);
-    call_args.push_back(recv_val->jobject_value());  // receiver in x1
-    // Collect remaining Java arguments (excluding receiver)
-    for (int i = arg_slots - 2; i >= 0; i--) {
-      YuhuValue* v = xstack(i);
-      switch (v->basic_type()) {
-        case T_BOOLEAN:
-        case T_BYTE:
-        case T_CHAR:
-        case T_SHORT:
-        case T_INT:
-          call_args.push_back(v->jint_value());
-          break;
-        case T_LONG:
-          call_args.push_back(v->jlong_value());
-          // the next slot is padding slot for T_LONG2, just skip it, otherwise xstack() fails
-          i--;
-          break;
-        case T_FLOAT:
-          call_args.push_back(v->jfloat_value());
-          break;
-        case T_DOUBLE:
-          call_args.push_back(v->jdouble_value());
-          // the next slot is padding slot for T_DOUBLE2, just skip it, otherwise xstack() fails
-          i--;
-          break;
-        case T_OBJECT:
-        case T_ARRAY:
-          call_args.push_back(v->jobject_value());
-          break;
-        default:
-          ShouldNotReachHere();
-      }
-    }
-  }
 
   // NOW it's safe to decache (this will xpop() all arguments)
   // This creates an OopMap at the call site

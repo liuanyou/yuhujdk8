@@ -331,6 +331,20 @@ RuntimeStub::RuntimeStub(
   _caller_must_gc_arguments = caller_must_gc_arguments;
 }
 
+RuntimeStub::RuntimeStub(
+        const char* name,
+        CodeBuffer* cb,
+        int         header_size,
+        int         size,
+        int         frame_complete,
+        int         frame_size,
+        OopMapSet*  oop_maps,
+        bool        caller_must_gc_arguments
+)
+        : CodeBlob(name, cb, header_size, size, frame_complete, frame_size, oop_maps)
+{
+    _caller_must_gc_arguments = caller_must_gc_arguments;
+}
 
 RuntimeStub* RuntimeStub::new_runtime_stub(const char* stub_name,
                                            CodeBuffer* cb,
@@ -352,6 +366,45 @@ RuntimeStub* RuntimeStub::new_runtime_stub(const char* stub_name,
   return stub;
 }
 
+//----------------------------------------------------------------------------------------------------
+// Implementation of YuhuRuntimeStub
+
+YuhuRuntimeStub::YuhuRuntimeStub(
+        const char* name,
+        CodeBuffer* cb,
+        int         size,
+        int         frame_complete,
+        int         frame_size,
+        OopMapSet*  oop_maps,
+        bool        caller_must_gc_arguments,
+        int         exception_handler_begin_offset
+)
+        : RuntimeStub(name, cb, sizeof(YuhuRuntimeStub), size, frame_complete, frame_size, oop_maps, caller_must_gc_arguments)
+{
+    _exception_handler_begin_offset = exception_handler_begin_offset;
+}
+
+
+YuhuRuntimeStub* YuhuRuntimeStub::new_yuhu_runtime_stub(const char* stub_name,
+                                                       CodeBuffer* cb,
+                                                       int frame_complete,
+                                                       int frame_size,
+                                                       OopMapSet* oop_maps,
+                                                       bool caller_must_gc_arguments,
+                                                       int exception_handler_begin_offset)
+{
+    YuhuRuntimeStub* stub = NULL;
+    ThreadInVMfromUnknown __tiv;  // get to VM state in case we block on CodeCache_lock
+    {
+        MutexLockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+        unsigned int size = allocation_size(cb, sizeof(YuhuRuntimeStub));
+        stub = new (size) YuhuRuntimeStub(stub_name, cb, size, frame_complete, frame_size, oop_maps, caller_must_gc_arguments, exception_handler_begin_offset);
+    }
+
+    trace_new_stub(stub, "YuhuRuntimeStub - ", stub_name);
+
+    return stub;
+}
 
 void* RuntimeStub::operator new(size_t s, unsigned size) throw() {
   void* p = CodeCache::allocate(size, true);

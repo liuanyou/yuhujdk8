@@ -106,6 +106,8 @@ class CodeBlob VALUE_OBJ_CLASS_SPEC {
   virtual bool is_compiled_by_c2() const         { return false; }
   virtual bool is_compiled_by_c1() const         { return false; }
 
+  virtual bool is_yuhu_runtime_stub() const      { return false; }
+
   // Casting
   nmethod* as_nmethod_or_null()                  { return is_nmethod() ? (nmethod*) this : NULL; }
 
@@ -282,7 +284,20 @@ class RuntimeStub: public CodeBlob {
     bool        caller_must_gc_arguments
   );
 
+protected:
   void* operator new(size_t s, unsigned size) throw();
+
+    // Creation support
+    RuntimeStub(
+            const char* name,
+            CodeBuffer* cb,
+            int         header_size,
+            int         size,
+            int         frame_complete,
+            int         frame_size,
+            OopMapSet*  oop_maps,
+            bool        caller_must_gc_arguments
+    );
 
  public:
   // Creation
@@ -310,6 +325,43 @@ class RuntimeStub: public CodeBlob {
   void verify();
   void print_on(outputStream* st) const;
   void print_value_on(outputStream* st) const;
+};
+
+//----------------------------------------------------------------------------------------------------
+// YuhuRuntimeStub: used by Yuhu between Java to Java calls
+
+class YuhuRuntimeStub : public RuntimeStub {
+    friend class VMStructs;
+private:
+    int _exception_handler_begin_offset;
+
+    // Creation support
+    YuhuRuntimeStub(
+            const char* name,
+            CodeBuffer* cb,
+            int         size,
+            int         frame_complete,
+            int         frame_size,
+            OopMapSet*  oop_maps,
+            bool        caller_must_gc_arguments,
+            int         exception_handler_begin_offset
+    );
+
+public:
+    // Creation
+    static YuhuRuntimeStub* new_yuhu_runtime_stub(
+            const char* stub_name,
+            CodeBuffer* cb,
+            int         frame_complete,
+            int         frame_size,
+            OopMapSet*  oop_maps,
+            bool        caller_must_gc_arguments,
+            int         exception_handler_begin_offset
+    );
+
+    bool is_yuhu_runtime_stub() const                   { return true; }
+
+    int exception_handler_begin_offset() const { return _exception_handler_begin_offset; }
 };
 
 

@@ -501,7 +501,7 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
       return nm->exception_begin();
     }
   } else if (YuhuRuntime::is_yuhu_call_stub(return_address)) {
-      return YuhuRuntime::exception_begin(return_address);
+      return YuhuRuntime::exception_handler_begin(return_address);
   }
 
   // Entry code
