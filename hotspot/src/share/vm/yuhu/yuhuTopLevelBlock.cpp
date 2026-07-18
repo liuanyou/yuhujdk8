@@ -958,38 +958,8 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
       addr,
       llvm::PointerType::getUnqual(narrow_oop_type),
       "narrow_oop_addr");
-    value = builder()->CreateLoad(narrow_oop_type, narrow_addr, "compressed_oop");
-    
-    // Decompress: uncompressed = heap_base + (compressed << 3)
-    // If heap_base is NULL, then: uncompressed = compressed << 3
-    address heap_base = Universe::narrow_oop_base();
-    int shift = Universe::narrow_oop_shift();
-    
-    // value is i32 (compressed pointer), extend to i64 for arithmetic
-    Value* compressed_intptr = builder()->CreateZExt(
-      value, YuhuType::intptr_type(), "compressed_intptr");
-    
-    // Shift left by 3 (or by Universe::narrow_oop_shift())
-    Value* shifted = builder()->CreateShl(
-      compressed_intptr,
-      LLVMValue::intptr_constant(shift),
-      "compressed_shifted");
-    
-    if (heap_base != NULL) {
-      // Add heap base
-      value = builder()->CreateAdd(
-        shifted,
-        LLVMValue::intptr_constant((intptr_t)heap_base),
-        "decompressed_oop");
-    } else {
-      value = shifted;
-    }
-    
-    // Cast back to pointer type
-    value = builder()->CreateIntToPtr(
-      value,
-      YuhuType::oop_addrspace1_type(), // FIXED - object is allocated in heap
-      "decompressed_ptr");
+    Value *compressed = builder()->CreateLoad(narrow_oop_type, narrow_addr, "compressed_oop");
+    value = builder()->CreateDecodeHeapOop(compressed);
   } else {
     // Normal load for non-compressed oops or other types
     llvm::Type* element_type = YuhuType::to_arrayType(basic_type);
@@ -1080,7 +1050,9 @@ void YuhuTopLevelBlock::do_astore(BasicType basic_type) {
 
   case T_OBJECT:
     value = svalue->jobject_value();
-    // XXX assignability check
+    if (UseCompressedOops) {
+        value = builder()->CreateEncodeHeapOop(value); // ptr addrspace(1) → i32
+    }
     break;
 
   default:
