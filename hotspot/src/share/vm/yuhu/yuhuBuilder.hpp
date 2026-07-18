@@ -222,6 +222,8 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadCurrentPC(); // Read current pc on AArch64
   void CreateSaveX0ToX22();  // Save x0 to x22 (reserved register) to preserve p7 parameter
   llvm::CallInst* CreateReadX22Register();  // Read x22 register (holds saved p7 parameter)
+  llvm::CallInst* CreateReadX0Register();  // Read x0 register (holds saved p7 parameter)
+  llvm::LoadInst* CreateLoadX0Slot();
   llvm::CallInst* CreateReadRegister(const char* reg_name); // Generic register reader
   void CreateWriteStackPointer(llvm::Value* new_sp); // Write SP register (x31) on AArch64 using inline assembly
   llvm::CallInst* CreateMemset(llvm::Value* dst,

@@ -267,7 +267,7 @@ public:
                 .setCPU(MCPU)
                 .addFeatures(MAttrs);
 
-        JTMB.addFeatures({"+reserve-x19", "+reserve-x20", "+reserve-x21", "+reserve-x22", "+reserve-x23",
+        JTMB.addFeatures({"+reserve-x20", "+reserve-x21", "+reserve-x22", "+reserve-x23",
                           "+reserve-x24", "+reserve-x25", "+reserve-x26", "+reserve-x27", "+reserve-x28"});
 
         // CRITICAL: Reserve x28 (Thread*) and x12 (Method*) registers

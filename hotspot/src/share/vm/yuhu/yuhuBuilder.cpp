@@ -587,11 +587,6 @@ Value* YuhuBuilder::dump() {
 // Public interface to low-level non-VM calls
 
 CallInst* YuhuBuilder::CreateReadFramePointer() {
-  // Read frame pointer register (x29) on AArch64 using inline assembly
-  // LLVM's read_register intrinsic doesn't support x29 directly with "fp" name
-  // So we use inline assembly to directly read the register
-  YuhuContext& ctx = YuhuContext::current();
-  
   // Create inline assembly: "mov $0, x29"
   // $0 is the output operand (result register)
   // "=r" means output to a general-purpose register
@@ -618,11 +613,6 @@ CallInst* YuhuBuilder::CreateReadLinkRegister() {
 }
 
 CallInst* YuhuBuilder::CreateReadMethodRegister() {
-  // Read rmethod register (x12) on AArch64 using inline assembly
-  // LLVM's read_register intrinsic doesn't support x12 (and other general-purpose registers except x0)
-  // So we use inline assembly to directly read the register
-  YuhuContext& ctx = YuhuContext::current();
-  
   // Create inline assembly: "mov $0, x12"
   // $0 is the output operand (result register)
   // "=r" means output to a general-purpose register
@@ -641,11 +631,6 @@ CallInst* YuhuBuilder::CreateReadMethodRegister() {
 }
 
 CallInst* YuhuBuilder::CreateReadThreadRegister() {
-  // Read rthread register (x28) on AArch64 using inline assembly
-  // LLVM's read_register intrinsic doesn't support x28 (and other general-purpose registers except x0)
-  // So we use inline assembly to directly read the register
-  YuhuContext& ctx = YuhuContext::current();
-  
   // Create inline assembly: "mov $0, x28"
   // $0 is the output operand (result register)
   // "=r" means output to a general-purpose register
@@ -664,11 +649,6 @@ CallInst* YuhuBuilder::CreateReadThreadRegister() {
 }
 
 void YuhuBuilder::CreateSaveX0ToX22() {
-  // Save x0 to x22 (reserved register) immediately at function entry
-  // This preserves p7 (8th parameter) before any code can pollute x0
-  // x22 is safe because it's reserved via JTMB (+reserve-x22)
-  YuhuContext& ctx = YuhuContext::current();
-  
   // Create inline assembly: "mov x22, x0"
   llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::void_type(), false);
   llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
@@ -684,10 +664,6 @@ void YuhuBuilder::CreateSaveX0ToX22() {
 }
 
 CallInst* YuhuBuilder::CreateReadX22Register() {
-  // Read x22 register on AArch64 using inline assembly
-  // This is used for reading saved p7 (8th parameter) value
-  YuhuContext& ctx = YuhuContext::current();
-  
   // Create inline assembly: "mov $0, x22"
   llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
   llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
@@ -702,9 +678,26 @@ CallInst* YuhuBuilder::CreateReadX22Register() {
   return CreateCall(asm_type, asm_func, std::vector<Value*>(), "p7_saved");
 }
 
-CallInst *YuhuBuilder::CreateReadCurrentPC() {
-    YuhuContext &ctx = YuhuContext::current();
+CallInst* YuhuBuilder::CreateReadX0Register() {
+    // Create inline assembly: "mov $0, x0"
+    llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
+    llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+            asm_type,
+            "mov $0, x0",  // Move x20 to output register
+            "=r",          // Output constraint: =r means output to a register
+            false,         // Has side effects: no
+            false,         // Is align stack: no
+            llvm::InlineAsm::AD_ATT
+    );
 
+    return CreateCall(asm_type, asm_func, std::vector<Value*>(), "p7_arg"); // 8th int-like argument
+}
+
+LoadInst* YuhuBuilder::CreateLoadX0Slot() {
+    return CreateLoad(YuhuType::intptr_type(), function()->x0_slot(), "load_x0_slot");
+}
+
+CallInst *YuhuBuilder::CreateReadCurrentPC() {
     // Create function type that returns i64 (the PC value)
     llvm::FunctionType* asm_type = llvm::FunctionType::get(
             YuhuType::intptr_type(),  // Return type: i64 for PC address

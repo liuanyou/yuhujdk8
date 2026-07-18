@@ -69,10 +69,9 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuTopLevelBlock**              _blocks;
   GrowableArray<DeferredZeroCheck*> _deferred_zero_checks;
   YuhuStack*                       _stack;
-  llvm::Value*                     _arg_base;
-  llvm::Value*                     _arg_count;
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
   llvm::Value*                     _return_slot;         // Return slot (pc_slot in frame header)
+  llvm::Value*                     _x0_slot; // 8th int-like argument
 
  public:
   llvm::Function* function() const {
@@ -100,8 +99,8 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuStack* stack() const {
     return _stack;
   }
-  llvm::Value* arg_base() const { return _arg_base; }
-  llvm::Value* arg_count() const { return _arg_count; }
+
+  llvm::Value* x0_slot() const { return _x0_slot; }
   
   // On-stack replacement
  private:

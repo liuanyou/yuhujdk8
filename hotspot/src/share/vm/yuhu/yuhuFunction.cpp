@@ -96,10 +96,6 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
 void YuhuFunction::initialize(const char *name) {
   // Set the function pointer in builder so it can access deoptimization stub
   builder()->set_function(this);
-
-  // Initialize member variables
-  _arg_base = NULL;
-  _arg_count = NULL;
   
   _function = Function::Create(
     entry_point_type(),
@@ -199,10 +195,17 @@ void YuhuFunction::initialize(const char *name) {
         function());
       builder()->SetInsertPoint(early_entry_block);
 
-      // CRITICAL: Save p7 from x0 to x22 (reserved register) immediately
-      // This must be done BEFORE any code that might use x0
-      // x22 is safe because it's reserved via JTMB (+reserve-x22)
-      builder()->CreateSaveX0ToX22();
+      llvm::Value *p7_arg = builder()->CreateReadX0Register(); // 8th int argument
+
+       // Have to save 8th int-like argument immediately at beginning to entry
+       // Can't wait in CreateBuildAndPushFrame method, so create new alloca here to save x0
+        _x0_slot = builder()->CreateAlloca(YuhuType::intptr_type(), ConstantInt::get(YuhuType::intptr_type(), 1), "x0_sp");
+
+        std::vector<llvm::Value*> live_values;
+        live_values.push_back(_x0_slot);
+        builder()->CreateStackMap(X0_SP_ALLOCA_STATEPOINT_ID, 0, live_values); // create stack map to locate the offset from sp/fp
+
+        builder()->CreateStore(p7_arg, _x0_slot);
 
       // Create thread_ptr in this entry block
       llvm::Value *thread_int = builder()->CreateReadThreadRegister();
@@ -223,10 +226,6 @@ void YuhuFunction::initialize(const char *name) {
       // But if it does, try to set thread from existing blocks
       method = NULL;
     }
-    
-    // arg_base and arg_count are no longer needed
-    _arg_base = NULL;
-    _arg_count = NULL;
     
     // base_pc is no longer needed (can be read from PC register if needed in the future)
     // For now, set to NULL

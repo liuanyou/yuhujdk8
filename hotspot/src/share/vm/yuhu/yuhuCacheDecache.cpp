@@ -263,8 +263,8 @@ void YuhuNormalEntryCacher::process_local_slot(int          index,
             loaded = arg;
         } else if (int_args == 8 && int_stk_args == 0) {
             // if it is just the 8th argument
-            // Special handling for p7 (8th parameter): read from x22 register where it was saved
-            loaded = builder()->CreateReadX22Register();
+            // Special handling for p7 (8th parameter): read from x0 slot where it was saved
+            loaded = builder()->CreateLoadX0Slot();
         } else {
             loaded = read_stack_arg(int_stk_args + fp_stk_args - 1);
         }

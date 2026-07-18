@@ -331,6 +331,30 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                     }
                 }
                 assert(found_offset, "extended sp alloca should have offset");
+            } else if (X0_SP_ALLOCA_STATEPOINT_ID == StatepointID) {
+                bool found_offset = false;
+                for (auto LocationRecord : StatepointRecord.locations()) {
+                    auto Kind = LocationRecord.getKind();
+                    if (Kind == StackMapParser::LocationKind::Direct || Kind == StackMapParser::LocationKind::Indirect) {
+                        found_offset = true;
+                        uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                        int32_t Offset = LocationRecord.getOffset();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                FILE *f = fopen(YuhuStackMapFile, "a");
+                                fileStream fs(f, true);
+                                fs.print_cr("[StackMap]     X0 sp alloca at stack offset: %d , DwarfRegNum: %d , Kind: %d", Offset,
+                                            DwarfRegNum, static_cast<uint32_t>(Kind));
+                                fs.flush();
+                            } else {
+                                errs() << "[StackMap]     X0 sp alloca at stack offset: " << Offset << " , DwarfRegNum: "
+                                       << DwarfRegNum << " , Kind: " << static_cast<uint32_t>(Kind) << "\n";
+                            }
+                        }
+                        break;
+                    }
+                }
+                assert(found_offset, "extended sp alloca should have offset");
             } else if (UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID == StatepointID) {
                 YuhuDebugInformationRecorder::get()->set_unified_exit_block_start_pco(InstructionOffset);
             } else if (StatepointDirectives::DefaultStatepointID == StatepointID) {
