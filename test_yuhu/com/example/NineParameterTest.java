@@ -100,15 +100,15 @@ public class NineParameterTest {
         return sum;
     }
 
-    public int testNineParamsCaller4(boolean useCallee, int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+    public int testNineParamsCaller4(boolean useCallee, int p1, int p2, int p3, int p4, int p5, Object obj4, int p6, int p7, int p8, int p9) {
         int sum = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
         if (useCallee) {
-            return testNineParamsCallee4(p1, p2, p3, p4, p5, p6, p7, p8, p9, obj4);
+            return testNineParamsCallee4(p1, p2, p3, p4, p5, p6, obj4, p7, p8, p9);
         }
         return sum;
     }
 
-    public int testNineParamsCallee4(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, Object obj4) {
+    public int testNineParamsCallee4(int p1, int p2, int p3, int p4, int p5, int p6, Object obj4, int p7, int p8, int p9) {
         int sum = (obj4 != null ? 0 : -1);
         for (int i = 0; i < 10; i++) {
             sum += p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
@@ -322,26 +322,26 @@ public class NineParameterTest {
 //         int result3 = test.testNineParamsCaller(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9);
 //         System.out.println("result3: " + result3);
 
-//         Object obj4 = new Object();
-//         for (int i = 0; i < 100000; i++) {
-//             test.testNineParamsCaller4(false, i, 2, 3, 4, 5, 6, 7, 8, 9, obj4);
-//         }
-//
-//         try {
-//             Thread.sleep(15000);
-//         } catch(Exception e) {
-//
-//         }
-//
-//         try {
-//             Thread.sleep(15000);
-//         } catch(Exception e) {
-//
-//         }
-//
-//         int result4 = test.testNineParamsCaller4(true, 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj4);
-//         assert(result4 == 99940);
-//         System.out.println("result4: " + result4);
+        Object obj4 = new Object();
+        for (int i = 0; i < 100000; i++) {
+            test.testNineParamsCaller4(false, i, 2, 3, 4, 5, obj4, 6, 7, 8, 9);
+        }
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
+        }
+
+        try {
+            Thread.sleep(15000);
+        } catch(Exception e) {
+
+        }
+
+        int result4 = test.testNineParamsCaller4(true, 10000, 2, 3, 4, 5, obj4, 6, 7, 8, 9);
+        assert(result4 == 99940);
+        System.out.println("result4: " + result4);
 
 //         Object obj5 = new Object();
 //         for (int i = 0; i < 100000; i++) {
@@ -415,29 +415,29 @@ public class NineParameterTest {
 //         assert(result7 == 99940);
 //         System.out.println("result7: " + result7);
 
-        Object obj8 = new Object();
-        for (int i = 0; i < 1000000; i++) {
-            test.testNineParamsCaller8(false, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
-                                        10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
-                                       true, (byte)1, (short)2, 4l);
-        }
-
-        try {
-            Thread.sleep(15000);
-        } catch(Exception e) {
-
-        }
-
-        try {
-            Thread.sleep(15000);
-        } catch(Exception e) {
-
-        }
-
-        int result8 = test.testNineParamsCaller8(true, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
-                                                10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
-                                                true, (byte)1, (short)2, 4l);
-        assert(result8 == 99940);
-        System.out.println("result8: " + result8);
+//         Object obj8 = new Object();
+//         for (int i = 0; i < 1000000; i++) {
+//             test.testNineParamsCaller8(false, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
+//                                         10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
+//                                        true, (byte)1, (short)2, 4l);
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         try {
+//             Thread.sleep(15000);
+//         } catch(Exception e) {
+//
+//         }
+//
+//         int result8 = test.testNineParamsCaller8(true, 1.1f, 2.2f, 3.3f, 4.4f, 5.5f, 6.6f, 7.7f, 8.8f, 9.9f, 10.10d,
+//                                                 10000, 2, 3, 4, 5, 6, 7, 8, 9, obj8,
+//                                                 true, (byte)1, (short)2, 4l);
+//         assert(result8 == 99940);
+//         System.out.println("result8: " + result8);
     }
 }
