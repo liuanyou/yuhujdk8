@@ -77,7 +77,7 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
                      assert(out_match.virtual_offset == low16, "Mismatched virtual_offsets - placeholders don't belong to same call site");
                      return false;  // Early exit in all builds
                  }
-                 int call_site_type = extract_w20_imm16(instr);
+                 int call_site_type = extract_mov_imm16(instr);
                  out_match.call_target_type = static_cast<CallTargetType>(call_site_type);
                  found_ljpc = true;
              }

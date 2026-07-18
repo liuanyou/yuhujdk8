@@ -320,8 +320,8 @@ class YuhuVirtualAddressScanner : public AllStatic {
     };
 
     // Helper function to extract oop_id from marker
-    static int extract_w20_imm16(uint32_t* instr) {
-        // Extract imm16 from: mov w20, #imm16
+    static int extract_mov_imm16(uint32_t* instr) {
+        // Extract imm16 from: mov w19, #imm16
         // Encoding: 0x528xxxxxB4, where bits 5-20 contain imm16
         uint32_t mov_instr = instr[2];
         uint16_t imm16 = (mov_instr >> 5) & 0xFFFF;

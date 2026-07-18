@@ -376,7 +376,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
         0x16f7ea550: 0x00000001000000c8 0x0000000100000064 - local [4] / local [3]
         0x16f7ea560: 0x000000076ad73c30 0x000000076ad73c20 - local [2] / local [1]
         0x16f7ea570: 0x0000000100000001 0x000000076ad73c30 - local [0] / padding
-        0x16f7ea580: 0x0000000000000000 0x000000010c345060 - prologue x22 / x21
+        0x16f7ea580: 0x0000000000000000 0x000000010c345060 - x0 slot / padding (x0 saves 8th int-like argument)
         0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - prologue x20 / x19
         0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
      */

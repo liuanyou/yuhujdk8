@@ -960,7 +960,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     _pending_oops->at_put(oop_id, jmirror);
 
     // Generate marker + placeholder using inline assembly
-    // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w20, #oop_id; nop; nop;
+    // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w19, #oop_id; nop; nop;
     //          mov x0, #low16; movk x0, #mid-low16, lsl #16; movk x0, #mid-high16, lsl #32
     // Total: 8 instructions (3 marker + 2 nops + 3 placeholder) - C1 compatible format
     // Note: High 16 bits must be 0 (not 0xDEAF) because patch_oop only patches low 48 bits
@@ -970,7 +970,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     snprintf(asm_string, sizeof(asm_string),
              "mov w19, #0xCAFE\n"
              "movk w19, #0xBABE, lsl #16\n"
-             "mov w20, #%d\n"                    // ← oop_id (not oop_index!)
+             "mov w19, #%d\n"                    // ← oop_id (not oop_index!)
              "nop\n"
              "nop\n"
              "mov ${0:x}, #0x%04lx\n"
@@ -987,7 +987,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
     llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+            "=r,~{w19},~{memory}",  // Output + clobbers
             true,            // Has side effects: yes (to prevent optimization)
             false,           // Is align stack: no
             llvm::InlineAsm::AD_ATT
@@ -1080,7 +1080,7 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   _pending_oops->at_put(oop_id, jstring);
   
   // Generate marker + placeholder using inline assembly
-  // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w20, #oop_id; nop; nop;
+  // Pattern: mov w19, #0xCAFE; movk w19, #0xBABE, lsl #16; mov w19, #oop_id; nop; nop;
   //          mov x0, #low16; movk x0, #mid-low16, lsl #16; movk x0, #mid-high16, lsl #32
   // Total: 8 instructions (3 marker + 2 nops + 3 placeholder) - C1 compatible format
   // Note: High 16 bits must be 0 (not 0xDEAF) because patch_oop only patches low 48 bits
@@ -1090,7 +1090,7 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   snprintf(asm_string, sizeof(asm_string),
            "mov w19, #0xCAFE\n"
            "movk w19, #0xBABE, lsl #16\n"
-           "mov w20, #%d\n"                    // ← oop_id (not oop_index!)
+           "mov w19, #%d\n"                    // ← oop_id (not oop_index!)
            "nop\n"
            "nop\n"
            "mov ${0:x}, #0x%04lx\n"
@@ -1107,7 +1107,7 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
     asm_type,
     asm_string,
-    "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+    "=r,~{w19},~{memory}",  // Output + clobbers
     true,            // Has side effects: yes (to prevent optimization)
     false,           // Is align stack: no
     llvm::InlineAsm::AD_ATT
@@ -1129,7 +1129,7 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   LLVMContext& ctx = mod->getContext();
 
   // Allocate unique metadata_id and record the Metadata* in pending_metadata.
-  // The marker scanner later uses metadata_id (in w20) to look up the entry,
+  // The marker scanner later uses metadata_id (in w19) to look up the entry,
   // verifies that the placeholder address matches, and emits a
   // metadata_Relocation::spec(metadata_index) at the placeholder PC.
   int metadata_id = _next_metadata_id++;
@@ -1149,7 +1149,7 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   // Pattern (mirrors CreateInlineOop, but with 0xDEAD low marker for metadata):
   //   mov  w19, #0xDEAD                  ; marker low  (distinguishes metadata from oop)
   //   movk w19, #0xBABE, lsl #16         ; marker high
-  //   mov  w20, #metadata_id             ; index into _pending_metadata
+  //   mov  w19, #metadata_id             ; index into _pending_metadata
   //   nop
   //   nop
   //   mov  xN,  #addr[15:0]              ; placeholder = real Metadata* (48 bits)
@@ -1162,7 +1162,7 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   snprintf(asm_string, sizeof(asm_string),
            "mov w19, #0xDEAD\n"
            "movk w19, #0xBABE, lsl #16\n"
-           "mov w20, #%d\n"                    // metadata_id
+           "mov w19, #%d\n"                    // metadata_id
            "nop\n"
            "nop\n"
            "mov ${0:x}, #0x%04lx\n"
@@ -1179,7 +1179,7 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
     asm_type,
     asm_string,
-    "=r,~{w19},~{w20},~{memory}",  // Output + clobbers (w19/w20 hold marker)
+    "=r,~{w19},~{memory}",  // Output + clobbers (w19 hold marker)
     true,            // Has side effects: yes (prevent CSE/DCE)
     false,           // Is align stack: no
     llvm::InlineAsm::AD_ATT
@@ -1262,9 +1262,9 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     }
 
     auto patch_oop_index = [](uint32_t* instr, uint32_t* placeholder_instrs, int oop_index) -> bool {
-        // Update marker: change w20 from oop_id to oop_index
-        uint32_t new_mov_w20 = 0x52800000 | ((oop_index & 0xFFFF) << 5) | (instr[2] & 0x1F);
-        instr[2] = new_mov_w20;
+        // Update marker: change mov wXX, #oop_id to mov wXX, #oop_index, instr[2] & 0x1F keeps the register
+        uint32_t new_mov = 0x52800000 | ((oop_index & 0xFFFF) << 5) | (instr[2] & 0x1F);
+        instr[2] = new_mov;
 
         // Update placeholder with real oop_index (high 16 bits = 0)
         uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
@@ -1372,7 +1372,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
         if (YuhuVirtualAddressScanner::is_oop_marker_pattern(llvm_instr)) {
             // Extract oop_id from marker
-            int oop_id = YuhuVirtualAddressScanner::extract_w20_imm16(llvm_instr);
+            int oop_id = YuhuVirtualAddressScanner::extract_mov_imm16(llvm_instr);
 
             // Look up the real jobject from pending_oops using oop_id
             assert(oop_id >= 0 && oop_id < _pending_oops->length(), "oop_id out of range");
@@ -1412,13 +1412,13 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             // Unlike oops, the placeholder already holds the real Metadata*
             // address (CreateInlineMetadata embeds the address directly).
             // We therefore only need to:
-            //   1. extract metadata_id from w20
+            //   1. extract metadata_id from w19
             //   2. look up the Metadata* in _pending_metadata
             //   3. sanity-check that the placeholder address matches
             //   4. allocate a metadata_index and emit metadata_Relocation
             // The instruction stream is NOT patched (the immediate is already correct).
-            int metadata_id = YuhuVirtualAddressScanner::extract_w20_imm16(
-                    llvm_instr);  // same imm16-from-w20 extraction
+            int metadata_id = YuhuVirtualAddressScanner::extract_mov_imm16(
+                    llvm_instr);  // same imm16-from-w19 extraction
 
             assert(metadata_id >= 0 && metadata_id < _pending_metadata->length(), "metadata_id out of range");
             ::Metadata *metadata = _pending_metadata->at(metadata_id);
@@ -1460,7 +1460,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t *llvm_placeholder_instrs = llvm_instr + 5;
             assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
 
-            int type_val = YuhuVirtualAddressScanner::extract_w20_imm16((uint32_t*)(llvm_instr));
+            int type_val = YuhuVirtualAddressScanner::extract_mov_imm16((uint32_t*)(llvm_instr));
             CallSiteType call_site_type = static_cast<CallSiteType>(type_val);
             assert(call_site_type != CallSiteType::none, "call site type should exist");
 

@@ -466,7 +466,7 @@ llvm::Value* YuhuStack::CreateCallSitePlaceholderWithCallTarget(uint64_t virtual
     snprintf(asm_string, sizeof(asm_string),
              "mov w19, #%d\n"
              "movk w19, #0xDEAD, lsl #16\n"
-             "mov w20, #%d\n"
+             "mov w19, #%d\n"
              "nop\n"
              "nop\n"
              "movz ${0:x}, #0x%04lx, lsl #0\n"
@@ -484,7 +484,7 @@ llvm::Value* YuhuStack::CreateCallSitePlaceholderWithCallTarget(uint64_t virtual
     llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
             asm_type,
             asm_string,
-            "=r,~{w19},~{w20},~{memory}",  // Output + clobbers
+            "=r,~{w19},~{memory}",  // Output + clobbers
             true,            // Has side effects: yes (to prevent optimization)
             false,           // Is align stack: no
             llvm::InlineAsm::AD_ATT
