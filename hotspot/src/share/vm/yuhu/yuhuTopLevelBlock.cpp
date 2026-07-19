@@ -2041,23 +2041,17 @@ void YuhuTopLevelBlock::do_new() {
 
     // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
 #if LLVM_VERSION_MAJOR >= 20
-    Value *cmpxchg_result = builder()->CreateAtomicCmpXchg(
+    Value *check = builder()->CreateAtomicCmpXchg(
       top_addr, old_top, new_top,
       llvm::MaybeAlign(HeapWordSize),  // Alignment
       llvm::AtomicOrdering::SequentiallyConsistent,  // Success ordering
       llvm::AtomicOrdering::SequentiallyConsistent);  // Failure ordering
-    // Extract the success flag from the result (second element of the struct)
-    Value *success = builder()->CreateExtractValue(cmpxchg_result, 1, "success");
 #else
     Value *check = builder()->CreateAtomicCmpXchg(top_addr, old_top, new_top, llvm::AtomicOrdering::SequentiallyConsistent);
 #endif
-    builder()->CreateCondBr(
-#if LLVM_VERSION_MAJOR >= 20
-      success,
-#else
-      builder()->CreateICmpEQ(old_top, check),
-#endif
-      initialize, retry);
+    // Extract the success flag from the result (second element of the struct)
+    Value *success = builder()->CreateExtractValue(check, 1, "success");
+    builder()->CreateCondBr(success, initialize, retry);
 
     // Initialize the object
     builder()->SetInsertPoint(initialize);
