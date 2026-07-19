@@ -337,10 +337,10 @@ void YuhuIntrinsics::do_Unsafe_compareAndSwapInt() {
 #else
   Value *result = builder()->CreateAtomicCmpXchg(addr, e, x, llvm::AtomicOrdering::SequentiallyConsistent);
 #endif
+  Value *success = builder()->CreateExtractValue(result, 1, "success");
   // Push the result
   state()->push(
     YuhuValue::create_jint(
-      builder()->CreateIntCast(
-        builder()->CreateICmpEQ(result, e), YuhuType::jint_type(), true),
+      builder()->CreateIntCast(success, YuhuType::jint_type(), false),
       false));
 }
