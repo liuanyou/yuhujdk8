@@ -920,22 +920,12 @@ Value* YuhuBuilder::code_buffer_address(int offset) {
     LLVMValue::intptr_constant(offset));
 }
 
-Value* YuhuBuilder::CreateInlineOopForStaticField(int cp_index,
-                                                   YuhuStack* stack,
-                                                   const char* name) {
+Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* name) {
   llvm::Module* mod = GetInsertBlock()->getModule();
     LLVMContext& ctx = mod->getContext();
   llvm::Type* i32_ty = llvm::Type::getInt32Ty(mod->getContext());
   llvm::Type* ptr_ty = llvm::PointerType::get(mod->getContext(), 0);
   llvm::Type* i64_ty = llvm::Type::getInt64Ty(mod->getContext());
-  
-  // Resolve the field at compile time to get Klass* and offset
-  // Use function()->target_method() which is the method being compiled
-  ciMethod* current_method = function()->target_method();
-  
-  // Get the field using ciEnv's API (uses GUARDED_VM_ENTRY internally)
-  ciInstanceKlass* accessor = current_method->holder();
-  ciField* field = function()->env()->get_field_by_index(accessor, cp_index);
   
   // Get the klass that holds the static field and the field offset
   ciInstanceKlass* field_holder = field->holder();

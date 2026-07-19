@@ -1054,8 +1054,7 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
             }
         }
         // === GETSTATIC: Load static field value directly from klass mirror ===
-        int cp_index = iter()->get_field_index();
-        Value *field_value = builder()->CreateInlineOopForStaticField(cp_index, builder()->function()->stack());
+        Value *field_value = builder()->CreateInlineOopForStaticField(field);
 
         // CreateInlineOopForStaticField now returns the correct type directly:
         // - Object fields: ptr addrspace(1)

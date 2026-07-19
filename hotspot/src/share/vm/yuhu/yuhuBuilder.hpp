@@ -267,9 +267,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   public:
 
   // Static field access using CP index (like C1)
-  llvm::Value* CreateInlineOopForStaticField(int cp_index,
-                                              YuhuStack* stack,
-                                              const char* name = "oop");
+  llvm::Value* CreateInlineOopForStaticField(ciField* field, const char* name = "oop");
 
   llvm::Value* CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name = "");
   llvm::Value* CreateInlineMetadata(ciMetadata* metadata, llvm::PointerType* type, const char* name = "") {
