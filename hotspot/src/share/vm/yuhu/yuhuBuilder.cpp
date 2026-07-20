@@ -507,7 +507,7 @@ Value* YuhuBuilder::osr_migration_end() {
 
 Value* YuhuBuilder::throw_StackOverflowError() {
   // For AArch64, use SharedRuntime::throw_StackOverflowError
-  return make_function((address) SharedRuntime::throw_StackOverflowError, "T", "v");
+  return make_function((address) YuhuRuntime::throw_StackOverflowError_stub(), "T", "v");
 }
 
 CallInst* YuhuBuilder::CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {

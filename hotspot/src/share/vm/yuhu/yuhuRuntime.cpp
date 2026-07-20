@@ -726,6 +726,8 @@ address YuhuRuntime::_throw_ArithmeticException_stub = NULL;
 address YuhuRuntime::_throw_ArrayIndexOutOfBoundsException_stub = NULL;
 address YuhuRuntime::_throw_ClassCastException_stub = NULL;
 address YuhuRuntime::_throw_NullPointerException_stub = NULL;
+address YuhuRuntime::_throw_StackOverflowError_stub = NULL;
+
 address YuhuRuntime::_safepoint_poll_stub = NULL;
 
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
@@ -746,6 +748,7 @@ void YuhuRuntime::initialize_vm_stubs() {
   _throw_ArrayIndexOutOfBoundsException_stub = generate_vm_stub("yuhu_throw_ArrayIndexOutOfBoundsException_stub", (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException);
   _throw_ClassCastException_stub = generate_vm_stub("yuhu_throw_ClassCastException_stub", (address) YuhuRuntime::throw_ClassCastException);
   _throw_NullPointerException_stub = generate_vm_stub("yuhu_throw_NullPointerException_stub", (address) YuhuRuntime::throw_NullPointerException);
+  _throw_StackOverflowError_stub = generate_vm_stub("yuhu_throw_StackOverflowError_stub", (address) SharedRuntime::throw_StackOverflowError);
 
   _safepoint_poll_stub = generate_vm_stub("yuhu_safepoint_poll_stub", (address) gc_safepoint_poll);
 
@@ -767,6 +770,7 @@ void YuhuRuntime::initialize_vm_stubs() {
     tty->print_cr("  throw_ArrayIndexOutOfBoundsException_stub:    " PTR_FORMAT, p2i(_throw_ArrayIndexOutOfBoundsException_stub));
     tty->print_cr("  throw_ClassCastException_stub:    " PTR_FORMAT,             p2i(_throw_ClassCastException_stub));
     tty->print_cr("  throw_NullPointerException_stub:    " PTR_FORMAT,           p2i(_throw_NullPointerException_stub));
+    tty->print_cr("  _throw_StackOverflowError_stub:    " PTR_FORMAT,            p2i(_throw_StackOverflowError_stub));
     tty->print_cr("  safepoint_poll_stub:  " PTR_FORMAT,                         p2i(_safepoint_poll_stub));
     tty->print_cr("  handle_deoptimization_stub:  " PTR_FORMAT,                  p2i(_handle_deoptimization_stub));
   }

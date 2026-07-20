@@ -52,6 +52,7 @@ class YuhuRuntime : public AllStatic {
   static address _throw_ArrayIndexOutOfBoundsException_stub;
   static address _throw_ClassCastException_stub;
   static address _throw_NullPointerException_stub;
+  static address _throw_StackOverflowError_stub;
 
   static address _safepoint_poll_stub;
 
@@ -82,6 +83,7 @@ class YuhuRuntime : public AllStatic {
   static address throw_ArrayIndexOutOfBoundsException_stub() { return _throw_ArrayIndexOutOfBoundsException_stub; }
   static address throw_ClassCastException_stub() { return _throw_ClassCastException_stub; }
   static address throw_NullPointerException_stub() { return _throw_NullPointerException_stub; }
+  static address throw_StackOverflowError_stub() { return _throw_StackOverflowError_stub; }
 
   static address safepoint_poll_stub() { return _safepoint_poll_stub; }
 
@@ -150,6 +152,7 @@ class YuhuRuntime : public AllStatic {
   static void throw_NullPointerException(JavaThread* thread,
                                          const char* file,
                                          int         line);
+  // throw_StackOverflowError - SharedRuntime::throw_StackOverflowError
 
   // NOTE (Option A refactor): the previous private helpers
   //   last_frame() / method() / bcp() / two_byte_index() / tos_at()
