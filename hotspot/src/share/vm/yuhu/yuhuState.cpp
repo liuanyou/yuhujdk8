@@ -308,6 +308,7 @@ YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
   // Local variables
   for (int i = 0; i < max_locals(); i++) {
     ciType *type = block->local_type_at_entry(i);
+      set_local_type(i, type);  // Track slot type
     if (type->basic_type() == (BasicType) ciTypeFlow::StateVector::T_NULL) {
       // XXX we could do all kinds of clever stuff here
       type = ciType::make(T_OBJECT); // XXX what about T_ARRAY?

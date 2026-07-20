@@ -84,18 +84,6 @@ class YuhuState : public YuhuTargetInvariants {
   }
   void set_local(int index, YuhuValue* value) {
     *local_addr(index) = value;
-    // Update type tracking
-    if (value != NULL) {
-      _local_types[index] = value->type();
-      // For wide values (long/double), mark next slot as padding
-      if (value->is_two_word() && index + 1 < max_locals()) {
-        _local_types[index + 1] = (value->basic_type() == T_LONG) 
-          ? ciTypeFlow::StateVector::long2_type() 
-          : ciTypeFlow::StateVector::double2_type();
-      }
-    } else {
-      _local_types[index] = ciTypeFlow::StateVector::bottom_type();
-    }
   }
   
   ciType* local_type_at(int index) const {
