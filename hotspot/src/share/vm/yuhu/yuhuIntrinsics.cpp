@@ -304,19 +304,19 @@ void YuhuIntrinsics::do_Unsafe_compareAndSwapInt() {
 
   // Convert the offset
   // unsafe_field_offset_to_byte_offset signature: "l" -> "l" (long -> long)
-#if LLVM_VERSION_MAJOR >= 20
-  llvm::FunctionType* func_type = YuhuBuilder::make_ftype("l", "l");
-  std::vector<Value*> args;
-  args.push_back(offset);
-  offset = builder()->CreateCall(
-    func_type,
-    builder()->unsafe_field_offset_to_byte_offset(),
-    args);
-#else
-  offset = builder()->CreateCall(
-    builder()->unsafe_field_offset_to_byte_offset(),
-    offset);
-#endif
+//#if LLVM_VERSION_MAJOR >= 20
+//  llvm::FunctionType* func_type = YuhuBuilder::make_ftype("l", "l");
+//  std::vector<Value*> args;
+//  args.push_back(offset);
+//  offset = builder()->CreateCall(
+//    func_type,
+//    builder()->unsafe_field_offset_to_byte_offset(),
+//    args);
+//#else
+//  offset = builder()->CreateCall(
+//    builder()->unsafe_field_offset_to_byte_offset(),
+//    offset);
+//#endif
 
   // Locate the field
   Value *addr = builder()->CreateIntToPtr(
