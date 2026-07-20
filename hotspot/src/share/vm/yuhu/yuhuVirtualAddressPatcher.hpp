@@ -220,7 +220,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
     static int64_t extract_page_offset(uint32_t* instr) {
         // Extract the 21-bit immediate and shift left by 12
         int64_t imm = ((instr[0] >> 29) & 0x3) |           // immlo (2 bits)
-                      (((int64_t)instr[0] >> 5) & 0x7FFFF); // immhi (19 bits)
+                      (((instr[0] >> 5) & 0x7FFFF) << 2); // immhi (19 bits)
 
         // Sign-extend from 21 bits to 64 bits
         if (imm & (1ULL << 20)) {
