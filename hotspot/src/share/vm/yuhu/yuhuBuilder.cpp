@@ -402,7 +402,7 @@ Value* YuhuBuilder::load_klass_from_object(Value* object) {
 }
 
 Value* YuhuBuilder::safepoint() {
-  return make_function((address) SafepointSynchronize::block, "T", "v");
+  return make_function((address) SafepointSynchronize::block, "T", "v"); // not in use
 }
 
 Value* YuhuBuilder::throw_ArithmeticException() {
@@ -428,70 +428,70 @@ Value* YuhuBuilder::throw_NullPointerException() {
 // High-level non-VM calls
 
 Value* YuhuBuilder::f2i() {
-  return make_function((address) SharedRuntime::f2i, "f", "i");
+  return make_function((address) SharedRuntime::f2i, "f", "i"); // leaf call
 }
 
 Value* YuhuBuilder::f2l() {
-  return make_function((address) SharedRuntime::f2l, "f", "l");
+  return make_function((address) SharedRuntime::f2l, "f", "l"); // leaf call
 }
 
 Value* YuhuBuilder::d2i() {
-  return make_function((address) SharedRuntime::d2i, "d", "i");
+  return make_function((address) SharedRuntime::d2i, "d", "i"); // leaf call
 }
 
 Value* YuhuBuilder::d2l() {
-  return make_function((address) SharedRuntime::d2l, "d", "l");
+  return make_function((address) SharedRuntime::d2l, "d", "l"); // leaf call
 }
 
 Value* YuhuBuilder::is_subtype_of() {
-  return make_function(YuhuRuntime::is_subtype_of_stub(), "KK", "c");
+  return make_function((address) YuhuRuntime::is_subtype_of, "KK", "c"); // leaf call
 }
 
 Value* YuhuBuilder::current_time_millis() {
-  return make_function(YuhuRuntime::current_time_millis_stub(), "", "l");
+  return make_function((address) os::javaTimeMillis, "", "l"); // leaf call
 }
 
 Value* YuhuBuilder::sin() {
-  return make_function("llvm.sin.f64", "d", "d");
+  return make_function("llvm.sin.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::cos() {
-  return make_function("llvm.cos.f64", "d", "d");
+  return make_function("llvm.cos.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::tan() {
   // Explicit cast to function pointer to resolve overload ambiguity
-  return make_function((address) (double (*)(double))::tan, "d", "d");
+  return make_function((address) (double (*)(double))::tan, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::atan2() {
   // Explicit cast to function pointer to resolve overload ambiguity
-  return make_function((address) (double (*)(double, double))::atan2, "dd", "d");
+  return make_function((address) (double (*)(double, double))::atan2, "dd", "d"); // leaf call
 }
 
 Value* YuhuBuilder::sqrt() {
-  return make_function("llvm.sqrt.f64", "d", "d");
+  return make_function("llvm.sqrt.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::log() {
-  return make_function("llvm.log.f64", "d", "d");
+  return make_function("llvm.log.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::log10() {
-  return make_function("llvm.log10.f64", "d", "d");
+  return make_function("llvm.log10.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::pow() {
-  return make_function("llvm.pow.f64", "dd", "d");
+  return make_function("llvm.pow.f64", "dd", "d"); // leaf call
 }
 
 Value* YuhuBuilder::exp() {
-  return make_function("llvm.exp.f64", "d", "d");
+  return make_function("llvm.exp.f64", "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::fabs() {
   // Explicit cast to function pointer to resolve overload ambiguity
-  return make_function((address) (double (*)(double))::fabs, "d", "d");
+  return make_function((address) (double (*)(double))::fabs, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::unsafe_field_offset_to_byte_offset() {
@@ -573,15 +573,15 @@ Value* YuhuBuilder::frame_address() {
 }
 
 Value* YuhuBuilder::unimplemented() {
-  return make_function((address) report_unimplemented, "Ci", "v");
+  return make_function((address) report_unimplemented, "Ci", "v"); // not in use
 }
 
 Value* YuhuBuilder::should_not_reach_here() {
-  return make_function((address) report_should_not_reach_here, "Ci", "v");
+  return make_function((address) report_should_not_reach_here, "Ci", "v"); // not in use
 }
 
 Value* YuhuBuilder::dump() {
-  return make_function((address) YuhuRuntime::dump, "Cx", "v");
+  return make_function((address) YuhuRuntime::dump, "Cx", "v"); // not in use
 }
 
 // Public interface to low-level non-VM calls
@@ -1520,12 +1520,12 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry.offset = llvm_blr_offset + adapter_size;
                 reloc_entry.reloc_type = relocInfo::relocType::none;
                 reloc_entries.append(reloc_entry);
-            } else {
+            } else if (call_site_type == CallSiteType::vm_call || call_site_type == CallSiteType::java_call) {
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = (i + 5) * 4 + adapter_size;
                 reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
-            }
+            } // skip leaf call
 
             processed_llvm_blr_offsets.append(llvm_blr_offset);
             movz_movk_count++;

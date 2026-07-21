@@ -720,8 +720,6 @@ address YuhuRuntime::_monitorenter_stub = NULL;
 address YuhuRuntime::_monitorexit_stub = NULL;
 address YuhuRuntime::_register_finalizer_stub = NULL;
 address YuhuRuntime::_find_exception_handler_stub = NULL;
-address YuhuRuntime::_is_subtype_of_stub = NULL;
-address YuhuRuntime::_current_time_millis_stub = NULL;
 address YuhuRuntime::_throw_ArithmeticException_stub = NULL;
 address YuhuRuntime::_throw_ArrayIndexOutOfBoundsException_stub = NULL;
 address YuhuRuntime::_throw_ClassCastException_stub = NULL;
@@ -742,8 +740,6 @@ void YuhuRuntime::initialize_vm_stubs() {
   _monitorexit_stub = generate_vm_stub("yuhu_monitorexit_stub", (address) YuhuRuntime::monitorexit);
   _register_finalizer_stub = generate_vm_stub("yuhu_register_finalizer_stub", (address) YuhuRuntime::register_finalizer);
   _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
-  _is_subtype_of_stub = generate_vm_stub("yuhu_is_subtype_of_stub", (address) YuhuRuntime::is_subtype_of);
-  _current_time_millis_stub = generate_vm_stub("yuhu_current_time_millis_stub", (address) os::javaTimeMillis);
   _throw_ArithmeticException_stub = generate_vm_stub("yuhu_throw_ArithmeticException_stub", (address) YuhuRuntime::throw_ArithmeticException);
   _throw_ArrayIndexOutOfBoundsException_stub = generate_vm_stub("yuhu_throw_ArrayIndexOutOfBoundsException_stub", (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException);
   _throw_ClassCastException_stub = generate_vm_stub("yuhu_throw_ClassCastException_stub", (address) YuhuRuntime::throw_ClassCastException);
@@ -764,8 +760,6 @@ void YuhuRuntime::initialize_vm_stubs() {
     tty->print_cr("  monitorexit_stub:            " PTR_FORMAT,                  p2i(_monitorexit_stub));
     tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT,                  p2i(_register_finalizer_stub));
     tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT,                  p2i(_find_exception_handler_stub));
-    tty->print_cr("  is_subtype_of_stub:          " PTR_FORMAT,                  p2i(_is_subtype_of_stub));
-    tty->print_cr("  current_time_millis_stub:    " PTR_FORMAT,                  p2i(_current_time_millis_stub));
     tty->print_cr("  throw_ArithmeticException_stub:    " PTR_FORMAT,            p2i(_throw_ArithmeticException_stub));
     tty->print_cr("  throw_ArrayIndexOutOfBoundsException_stub:    " PTR_FORMAT, p2i(_throw_ArrayIndexOutOfBoundsException_stub));
     tty->print_cr("  throw_ClassCastException_stub:    " PTR_FORMAT,             p2i(_throw_ClassCastException_stub));

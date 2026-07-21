@@ -46,8 +46,6 @@ class YuhuRuntime : public AllStatic {
   static address _monitorexit_stub;
   static address _register_finalizer_stub;
   static address _find_exception_handler_stub;
-  static address _is_subtype_of_stub;
-  static address _current_time_millis_stub;
   static address _throw_ArithmeticException_stub;
   static address _throw_ArrayIndexOutOfBoundsException_stub;
   static address _throw_ClassCastException_stub;
@@ -77,8 +75,6 @@ class YuhuRuntime : public AllStatic {
   static address monitorexit_stub() { return _monitorexit_stub; }
   static address register_finalizer_stub() { return _register_finalizer_stub; }
   static address find_exception_handler_stub() { return _find_exception_handler_stub; }
-  static address is_subtype_of_stub() { return _is_subtype_of_stub; }
-  static address current_time_millis_stub() { return _current_time_millis_stub; }
   static address throw_ArithmeticException_stub() { return _throw_ArithmeticException_stub; }
   static address throw_ArrayIndexOutOfBoundsException_stub() { return _throw_ArrayIndexOutOfBoundsException_stub; }
   static address throw_ClassCastException_stub() { return _throw_ClassCastException_stub; }
@@ -136,8 +132,6 @@ class YuhuRuntime : public AllStatic {
                                       int         num_indexes);
 
     static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
-
-    // current_time_millis - os::javaTimeMillis
 
   static void throw_ArithmeticException(JavaThread* thread,
                                         const char* file,

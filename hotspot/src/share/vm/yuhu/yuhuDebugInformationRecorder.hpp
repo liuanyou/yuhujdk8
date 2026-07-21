@@ -20,7 +20,8 @@ enum class CallSiteType : uint8_t {
     vm_call = 2,
     java_call = 3,
     deopt_call = 4,
-    unwind_call = 5
+    unwind_call = 5,
+    leaf_call = 6
 };
 
 class CallSiteMachineCodeOffsets : public ResourceObj {

@@ -671,7 +671,34 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
       break;
 
     case Bytecodes::_f2i: {
-      Value* callee = builder()->f2i();
+        Value* callee = builder()->f2i();
+
+        uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+        // Step 2: Create dual virtual addresses with same virtual_offset
+        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+        // Step 3: Extract actual helper address from callee (inttoptr constant)
+        uint64_t helper_address = 0;
+        if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+            if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+                if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                    helper_address = IntConst->getZExtValue();
+                }
+            }
+        }
+
+        assert(helper_address != 0, "helper_address should have a value");
+
+        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+        callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+        YuhuDebugInformationRecorder::get()->register_call_site(
+                virtual_offset, call_target_va, helper_address,
+                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "i"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("f", "i");
@@ -681,6 +708,33 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     }
     case Bytecodes::_f2l: {
       Value* callee = builder()->f2l();
+
+        uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+        // Step 2: Create dual virtual addresses with same virtual_offset
+        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+        // Step 3: Extract actual helper address from callee (inttoptr constant)
+        uint64_t helper_address = 0;
+        if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+            if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+                if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                    helper_address = IntConst->getZExtValue();
+                }
+            }
+        }
+
+        assert(helper_address != 0, "helper_address should have a value");
+
+        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+        callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+        YuhuDebugInformationRecorder::get()->register_call_site(
+                virtual_offset, call_target_va, helper_address,
+                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "l"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("f", "l");
@@ -696,6 +750,33 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
 
     case Bytecodes::_d2i: {
       Value* callee = builder()->d2i();
+
+        uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+        // Step 2: Create dual virtual addresses with same virtual_offset
+        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+        // Step 3: Extract actual helper address from callee (inttoptr constant)
+        uint64_t helper_address = 0;
+        if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+            if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+                if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                    helper_address = IntConst->getZExtValue();
+                }
+            }
+        }
+
+        assert(helper_address != 0, "helper_address should have a value");
+
+        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+        callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+        YuhuDebugInformationRecorder::get()->register_call_site(
+                virtual_offset, call_target_va, helper_address,
+                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "i"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("d", "i");
@@ -705,6 +786,33 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     }
     case Bytecodes::_d2l: {
       Value* callee = builder()->d2l();
+
+        uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+        // Step 2: Create dual virtual addresses with same virtual_offset
+        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+        // Step 3: Extract actual helper address from callee (inttoptr constant)
+        uint64_t helper_address = 0;
+        if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+            if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+                if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                    helper_address = IntConst->getZExtValue();
+                }
+            }
+        }
+
+        assert(helper_address != 0, "helper_address should have a value");
+
+        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+        callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+        YuhuDebugInformationRecorder::get()->register_call_site(
+                virtual_offset, call_target_va, helper_address,
+                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "l"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("d", "l");

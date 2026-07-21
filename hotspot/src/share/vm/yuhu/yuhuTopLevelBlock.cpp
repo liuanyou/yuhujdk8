@@ -574,14 +574,14 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
       assert(helper_address != 0, "helper_address should have a value");
 
       // Replace callee with virtual address
-      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
+      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
 
       callee = builder()->CreateIntToPtr(call_target,
               callee->getType());
 
       YuhuDebugInformationRecorder::get()->register_call_site(
               virtual_offset, call_target_va, helper_address,
-              CallSiteType::vm_call, bci(), current_state()->num_monitors());
+              CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
     builder()->CreateCondBr(
       builder()->CreateICmpNE(
@@ -1832,14 +1832,14 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
     assert(helper_address != 0, "helper_address should have a value");
 
     // Replace callee with virtual address
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
 
     callee = builder()->CreateIntToPtr(call_target,
             callee->getType());
 
     YuhuDebugInformationRecorder::get()->register_call_site(
             virtual_offset, call_target_va, helper_address,
-            CallSiteType::vm_call, bci(), current_state()->num_monitors());
+            CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;

@@ -186,6 +186,35 @@ void YuhuIntrinsics::do_Math_minmax(ICmpInst::Predicate p) {
 void YuhuIntrinsics::do_Math_1to1(Value *function) {
   YuhuValue *empty = state()->pop();
   assert(empty == NULL, "should be");
+
+  Value* callee = function;
+
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+    // Step 2: Create dual virtual addresses with same virtual_offset
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+    // Step 3: Extract actual helper address from callee (inttoptr constant)
+    uint64_t helper_address = 0;
+    if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+        if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+            if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                helper_address = IntConst->getZExtValue();
+            }
+        }
+    }
+
+    assert(helper_address != 0, "helper_address should have a value");
+
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+    callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+    YuhuDebugInformationRecorder::get()->register_call_site(
+            virtual_offset, call_target_va, helper_address,
+            CallSiteType::leaf_call, bci(), state()->num_monitors());
+
   // LLVM 20+ requires FunctionType for CreateCall
   // Math 1to1 functions have signature "d" -> "d" (double -> double)
 #if LLVM_VERSION_MAJOR >= 20
@@ -194,12 +223,12 @@ void YuhuIntrinsics::do_Math_1to1(Value *function) {
   args.push_back(state()->pop()->jdouble_value());
   state()->push(
     YuhuValue::create_jdouble(
-      builder()->CreateCall(func_type, function, args)));
+      builder()->CreateCall(func_type, callee, args)));
 #else
   state()->push(
     YuhuValue::create_jdouble(
       builder()->CreateCall(
-        function, state()->pop()->jdouble_value())));
+        callee, state()->pop()->jdouble_value())));
 #endif
   state()->push(NULL);
 }
@@ -212,6 +241,34 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
   assert(empty == NULL, "should be");
   Value *x = state()->pop()->jdouble_value();
 
+  Value* callee = function;
+
+    uint64_t virtual_offset = code_buffer()->create_unique_offset();
+
+    // Step 2: Create dual virtual addresses with same virtual_offset
+    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
+    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+
+    // Step 3: Extract actual helper address from callee (inttoptr constant)
+    uint64_t helper_address = 0;
+    if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+        if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+            if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                helper_address = IntConst->getZExtValue();
+            }
+        }
+    }
+
+    assert(helper_address != 0, "helper_address should have a value");
+
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
+
+    callee = builder()->CreateIntToPtr(call_target, callee->getType());
+
+    YuhuDebugInformationRecorder::get()->register_call_site(
+            virtual_offset, call_target_va, helper_address,
+            CallSiteType::leaf_call, bci(), state()->num_monitors());
+
   // LLVM 20+ requires FunctionType for CreateCall
   // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "dd" -> "d"
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("dd", "d");
@@ -220,7 +277,7 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
   args.push_back(y);
   state()->push(
     YuhuValue::create_jdouble(
-      builder()->CreateCall(func_type, function, args)));
+      builder()->CreateCall(func_type, callee, args)));
   state()->push(NULL);
 }
 
@@ -258,12 +315,12 @@ void YuhuIntrinsics::do_System_currentTimeMillis() {
   assert(helper_address != 0, "helper_address should have a value");
   
   // Replace callee with virtual address
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
+    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
     callee = builder()->CreateIntToPtr(call_target, callee->getType());
 
     YuhuDebugInformationRecorder::get()->register_call_site(
       virtual_offset, call_target_va, helper_address,
-      CallSiteType::vm_call, bci(), state()->num_monitors());
+      CallSiteType::leaf_call, bci(), state()->num_monitors());
   
   // Create the call
 #if LLVM_VERSION_MAJOR >= 20

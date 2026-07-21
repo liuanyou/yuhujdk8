@@ -54,7 +54,8 @@ enum class CallTargetType : uint8_t {
     vm = 2,
     java = 3,
     deopt = 4,
-    unwind = 5
+    unwind = 5,
+    leaf = 6
 };
 
 // Information about matched placeholders for a single statepoint
