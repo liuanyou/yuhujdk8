@@ -898,6 +898,9 @@ int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes) {
 
     masm.pin_label(label);
 
+    // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
+    masm.write_inst("nop");
+
     if (need_stack_bang(frame_size_in_bytes)) {
         masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
     }
@@ -919,7 +922,10 @@ int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified
 
   masm.pin_label(label);
 
-  *verified_entry_point = masm.current_pc();
+    *verified_entry_point = masm.current_pc();
+
+  // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
+  masm.write_inst("nop");
 
   if (need_stack_bang(frame_size_in_bytes)) {
       masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
