@@ -48,7 +48,7 @@ class YuhuStack : public YuhuCompileInvariants {
     : YuhuCompileInvariants(parent) {}
 
  protected:
-  void initialize(llvm::Value* method, llvm::BasicBlock* exit_block);
+  void initialize(llvm::Value* method, ciMethod* target);
 
  protected:
   // Stack overflow check - checks if the new stack pointer (sp) has enough space

@@ -425,25 +425,33 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   
   // Call target
   masm.write_inst_blr(YuhuMacroAssembler::x9);
+
+  YuhuLabel normal_exit;
+  masm.write_inst_b(normal_exit);
+
+    int exception_handler_begin_offset = (int) (masm.current_pc() - begin);
+
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+
+    masm.pin_label(normal_exit);
   
   // Epilogue: restore x19, FP, LR
   masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
   masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
   masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-  
+
+  // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
+
   // Return
   masm.write_inst("ret");
-
-  int exception_handler_begin_offset = (int) (masm.current_pc() - begin);
-
-    // pop frame
-    masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
-    masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
-    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-    // x0 contains exception oop, save x0 to pending exception field
-    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
-    // Return to caller
-    masm.write_inst("ret");
 
   masm.flush();
   
@@ -465,8 +473,28 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   address stub_addr = stub->entry_point();
   
   if (YuhuTraceInstalls) {
-    tty->print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s",
-                  p2i(stub_addr), target_method->name()->as_utf8());
+      if (YuhuStackMapFile != NULL) {
+          FILE *f = fopen(YuhuStackMapFile, "a");
+          fileStream fs(f, true);
+          fs.print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(stub_addr),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+          fs.flush();
+      } else {
+          tty->print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(stub_addr),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+      }
   }
   
   return stub_addr;
@@ -518,24 +546,32 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   
   // Step 5: Jump to compiled entry
   masm.write_inst_blr(YuhuMacroAssembler::x9);
+
+    YuhuLabel normal_exit;
+    masm.write_inst_b(normal_exit);
+
+    int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
+
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+
+    masm.pin_label(normal_exit);
   
   // Epilogue: restore x19, FP, LR
     masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
     masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
     masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
 
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
+
     // Return
-    masm.write_inst("ret");
-
-    int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
-
-    // pop frame
-    masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
-    masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
-    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-    // x0 contains exception oop, save x0 to pending exception field
-    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
-    // Return to caller
     masm.write_inst("ret");
 
     masm.flush();
@@ -554,11 +590,33 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   );
   
   address stub_addr = stub->entry_point();
-  
-  if (YuhuTraceInstalls) {
-    tty->print_cr("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s (vtable_index=%d)",
-                  p2i(stub_addr), target_method->name()->as_utf8(), vtable_index);
-  }
+
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                          p2i(stub_addr),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          vtable_index,
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                          p2i(stub_addr),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          vtable_index,
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
   
   return stub_addr;
 }
@@ -651,10 +709,29 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   // Step 5: Jump to compiled entry
   masm.write_inst_blr(YuhuMacroAssembler::x9);
 
+    YuhuLabel normal_exit;
+    masm.write_inst_b(normal_exit);
+
+    int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
+
+    // x0 contains exception oop, save x0 to pending exception field
+    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+
+    masm.pin_label(normal_exit);
+
     // Epilogue: restore x19, FP, LR (only reached if interface not found - should not return)
     masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
     masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
     masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
+
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
 
     // Return
     masm.write_inst("ret");
@@ -662,17 +739,6 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   masm.pin_label(L_no_such_interface);
   masm.write_insts_far_jump(YuhuRuntimeAddress(StubRoutines::throw_IncompatibleClassChangeError_entry()));
   masm.write_insts_stop("should not reach here");
-
-    int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
-
-    // pop frame
-    masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
-    masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
-    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-    // x0 contains exception oop, save x0 to pending exception field
-    masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
-    // Return to caller
-    masm.write_inst("ret");
 
     masm.flush();
   
@@ -690,11 +756,31 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   );
   
   address stub_addr = stub->entry_point();
-  
-  if (YuhuTraceInstalls) {
-    tty->print_cr("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s",
-                  p2i(stub_addr), target_method->name()->as_utf8());
-  }
+
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(stub_addr),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(stub_addr),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
   
   return stub_addr;
 }
@@ -850,6 +936,11 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
 JRT_LEAF(bool, YuhuRuntime::is_yuhu_call_stub(address addr))
   CodeBlob* blob = CodeCache::find_blob(addr);
   return blob != NULL && blob->is_yuhu_runtime_stub();
+JRT_END
+
+JRT_LEAF(bool, YuhuRuntime::is_yuhu_nmethod(address addr))
+    CodeBlob* blob = CodeCache::find_blob(addr);
+    return blob != NULL && blob->is_nmethod() && blob->is_compiled_by_yuhu();
 JRT_END
 
 address YuhuRuntime::exception_handler_begin(address addr) {

@@ -33,7 +33,7 @@
 
 using namespace llvm;
 
-void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
+void YuhuStack::initialize(Value* method, ciMethod* target) {
   int locals_words  = max_locals();
   // For AArch64, header_words includes all frame header metadata:
   //   - oop_tmp (1 word)
@@ -51,16 +51,23 @@ void YuhuStack::initialize(Value* method, llvm::BasicBlock* exit_block) {
   _extended_frame_size = frame_words + locals_words;
   // No need to align 16 bytes here, llvm will handle it
 
+    ResourceMark rm;
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
           FILE *f = fopen(YuhuStackMapFile, "a");
           fileStream fs(f, true);
-          fs.print_cr("Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+          fs.print_cr("Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                      target->holder()->name()->as_utf8(),
+                      target->name()->as_utf8(),
+                      target->signature()->as_symbol()->as_utf8(),
                       header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
           fs.flush();
       } else {
           tty->print_cr(
-                  "Yuhu: stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                  "Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                  target->holder()->name()->as_utf8(),
+                  target->name()->as_utf8(),
+                  target->signature()->as_symbol()->as_utf8(),
                   header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
       }
   }
@@ -582,7 +589,7 @@ YuhuStackWithNormalFrame::YuhuStackWithNormalFrame(YuhuFunction* function,
   // be set during each decache, so it is not necessary to do them
   // at the time the frame is created.  However, we set them for
   // non-PRODUCT builds to make crash dumps easier to understand.
-  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), function->unified_exit_block());
+  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), function->target_method());
 }
 YuhuStackWithNativeFrame::YuhuStackWithNativeFrame(YuhuNativeWrapper* wrp,
                                                      Value*              method)

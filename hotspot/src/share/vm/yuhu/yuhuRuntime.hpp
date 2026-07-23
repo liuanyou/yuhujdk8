@@ -88,6 +88,8 @@ class YuhuRuntime : public AllStatic {
   // Check if an address belongs to a Yuhu RuntimeStub
   static bool is_yuhu_call_stub(address addr);
 
+    static bool is_yuhu_nmethod(address addr);
+
   static address exception_handler_begin(address addr);
 
   // Generate static call stub for direct method calls

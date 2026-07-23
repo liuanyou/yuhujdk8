@@ -106,6 +106,7 @@ class CodeBlob VALUE_OBJ_CLASS_SPEC {
   virtual bool is_compiled_by_c2() const         { return false; }
   virtual bool is_compiled_by_c1() const         { return false; }
 
+  virtual bool is_compiled_by_yuhu() const         { return false; }
   virtual bool is_yuhu_runtime_stub() const      { return false; }
 
   // Casting
