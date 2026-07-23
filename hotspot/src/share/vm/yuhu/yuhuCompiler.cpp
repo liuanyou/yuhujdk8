@@ -1057,8 +1057,41 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   }
 
   if (YuhuCompileOnlyOf != NULL) {
-      if (fnmatch(YuhuCompileOnlyOf, base_name, 0)) {
+      // Support comma-separated patterns, e.g. *putVal*,*addCount*
+      char* patterns_copy = os::strdup(YuhuCompileOnlyOf);
+      bool matched = false;
+      char* save_ptr = NULL;
+      char* token = strtok_r(patterns_copy, ",", &save_ptr);
+      while (token != NULL) {
+          if (!fnmatch(token, base_name, 0)) {
+              matched = true;
+              break;
+          }
+          token = strtok_r(NULL, ",", &save_ptr);
+      }
+      os::free(patterns_copy);
+      if (!matched) {
           env->record_failure("YuhuCompileOnlyOf flag is turned on, skipping mismatched functions");
+          return;
+      }
+  }
+
+  if (YuhuCompileExcludeOf != NULL) {
+      // Support comma-separated patterns, e.g. *addCount*,*resize*
+      char* patterns_copy = os::strdup(YuhuCompileExcludeOf);
+      char* save_ptr = NULL;
+      char* token = strtok_r(patterns_copy, ",", &save_ptr);
+      bool excluded = false;
+      while (token != NULL) {
+          if (!fnmatch(token, base_name, 0)) {
+              excluded = true;
+              break;
+          }
+          token = strtok_r(NULL, ",", &save_ptr);
+      }
+      os::free(patterns_copy);
+      if (excluded) {
+          env->record_failure("YuhuCompileExcludeOf: skipping matched function");
           return;
       }
   }

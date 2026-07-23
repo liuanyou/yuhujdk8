@@ -48,6 +48,9 @@
   develop(ccstr, YuhuCompileOnlyOf, NULL,                                  \
           "Compile the specified method only")                       \
                                                                               \
+  develop(ccstr, YuhuCompileExcludeOf, NULL,                                 \
+          "Exclude specified methods from Yuhu compilation (comma-separated patterns)") \
+                                                                              \
   diagnostic(ccstr, YuhuPrintBitcodeOf, NULL,                                \
           "Print the LLVM bitcode of the specified method")                   \
                                                                               \
