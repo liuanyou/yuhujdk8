@@ -1576,6 +1576,7 @@ int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, GrowableA
     // 3. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
     masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
 
@@ -1629,6 +1630,7 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
     // 3. caller is not yuhu but c1/c2/interpreter, then go to normal unwind handler
     masm.pin_label(caller_is_not_yuhu);
     masm.write_inst_ldr(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
+    masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::pending_exception_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_oop_offset()));
     masm.write_inst_str(YuhuMacroAssembler::xzr, YuhuAddress(YuhuMacroAssembler::x28, JavaThread::exception_pc_offset()));
 
