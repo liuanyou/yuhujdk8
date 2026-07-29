@@ -208,6 +208,7 @@ public:
         // LLVM 20+: Set DataLayout for modules BEFORE creating ExecutionEngine
         // This is critical to avoid SIGSEGV in getABITypeAlign
         // We need to create a TargetMachine to get the DataLayout
+        std::string DLStrWithNI;
 #if LLVM_VERSION_MAJOR >= 20
         {
             // Get target triple from module
@@ -237,11 +238,15 @@ public:
             if (TM) {
                 // Get DataLayout string from TargetMachine
                 const llvm::DataLayout& DL = TM->createDataLayout();
-                std::string DLStr = DL.getStringRepresentation();
+                // Mark addrspace(1) (GC heap references) as non-integral so the
+                // optimizer is forbidden from folding ptrtoint/inttoptr round-trips
+                // that would carry a GC pointer across a statepoint as a raw i64
+                std::string DLStr = DL.getStringRepresentation() + "-ni:1";
 
                 // Set DataLayout for both modules BEFORE creating ExecutionEngine
                 _normal_context->module()->setDataLayout(DLStr);
                 _native_context->module()->setDataLayout(DLStr);
+                DLStrWithNI = DLStr;
 
                 // DEBUG: Verify DataLayout was set
                 std::string verify1 = _normal_context->module()->getDataLayout().getStringRepresentation();
@@ -294,7 +299,13 @@ public:
         };
 
         // Configure ORC JIT with custom ObjectLinkingLayer and TracingIRCompiler
-        auto JIT = llvm::orc::LLJITBuilder()
+        auto JITBuilder = llvm::orc::LLJITBuilder();
+        // Keep LLJIT's DataLayout (used for symbol mangling) identical to the
+        // module DataLayout, including the ni:1 non-integral marker
+        if (!DLStrWithNI.empty()) {
+            JITBuilder.setDataLayout(llvm::DataLayout(DLStrWithNI));
+        }
+        auto JIT = JITBuilder
                 .setJITTargetMachineBuilder(JTMB)
                 .setObjectLinkingLayerCreator(CreateObjectLinkingLayer)
                 .setCompileFunctionCreator(

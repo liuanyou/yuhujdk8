@@ -74,9 +74,20 @@ Value* YuhuBuilder::CreateAddressOfStructEntry(Value*      base,
                                                 ByteSize    offset,
                                                 llvm::Type* type,
                                                 const char* name) {
+  // GC-managed oops (addrspace 1) must be addressed with a GEP so the result
+  // stays a derived pointer that RS4GC's liveness can track and relocate.
+  // ptrtoint/inttoptr addressing strands the address in an integer, which is
+  // invisible to RS4GC and ill-typed under the ni:1 DataLayout.
+  llvm::PointerType* base_ptr_type = llvm::dyn_cast<llvm::PointerType>(base->getType());
+  if (base_ptr_type != NULL && base_ptr_type->getAddressSpace() == 1) {
+    return CreateGEP(
+      YuhuType::jbyte_type(), base,
+      LLVMValue::intptr_constant(in_bytes(offset)), name);
+  }
+
+  // Non-GC pointers (Thread*, Method*, ...): keep integer addressing.
   // LLVM 20+ uses opaque pointer types, so we can't get element type from PointerType
   // Calculate address as: base_as_int + offset
-  // This is more explicit and avoids potential GEP optimization issues
   Value* base_int = CreatePtrToInt(base, YuhuType::intptr_type());
   Value* byte_offset = LLVMValue::intptr_constant(in_bytes(offset));
   Value* result_int = CreateAdd(base_int, byte_offset, "field_addr_int");
@@ -145,6 +156,13 @@ Value* YuhuBuilder::CreateArrayAddress(Value*      arrayoop,
       LLVMValue::intptr_constant(exact_log2(element_bytes)));
   offset = CreateAdd(
     LLVMValue::intptr_constant(in_bytes(base_offset)), offset);
+
+  // Same rule as CreateAddressOfStructEntry: element addresses of GC-managed
+  // arrays must remain derived pointers (GEP), never integers.
+  llvm::PointerType* array_ptr_type = llvm::dyn_cast<llvm::PointerType>(arrayoop->getType());
+  if (array_ptr_type != NULL && array_ptr_type->getAddressSpace() == 1) {
+    return CreateGEP(YuhuType::jbyte_type(), arrayoop, offset, name);
+  }
 
   return CreateIntToPtr(
     CreateAdd(CreatePtrToInt(arrayoop, YuhuType::intptr_type()), offset),
@@ -888,19 +906,32 @@ CallInst* YuhuBuilder::CreateDump(Value* value) {
 // HotSpot memory barriers
 
 void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
-  if (bs->kind() != BarrierSet::CardTableModRef)
-    Unimplemented();
+    if (bs->kind() != BarrierSet::CardTableModRef)
+        Unimplemented();
 
-  CreateStore(
-    LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card_val()),
-    CreateIntToPtr(
-      CreateAdd(
-        LLVMValue::intptr_constant(
-          (intptr_t) ((CardTableModRefBS *) bs)->byte_map_base),
-        CreateLShr(
-          CreatePtrToInt(field, YuhuType::intptr_type()),
-          LLVMValue::intptr_constant(CardTableModRefBS::card_shift))),
-      PointerType::getUnqual(YuhuType::jbyte_type())));
+    CardTableModRefBS* ctbs = (CardTableModRefBS*) bs;
+
+    // 1. 计算卡表索引（仍然需要 ptrtoint，但只取地址值）
+    Value* field_addr_int = CreatePtrToInt(field, YuhuType::intptr_type());
+    Value* card_index = CreateLShr(field_addr_int,
+                                   LLVMValue::intptr_constant(ctbs->card_shift));
+
+    // 2. 将卡表基地址转为指针（只做一次，可缓存）
+    Value* card_table_base_ptr = CreateIntToPtr(
+            LLVMValue::intptr_constant((intptr_t)ctbs->byte_map_base),
+            PointerType::getUnqual(YuhuType::jbyte_type()));
+
+    // 3. 使用 GEP 计算卡表条目地址（关键改进！）
+    Value* card_entry_ptr = CreateGEP(
+            YuhuType::jbyte_type(),           // 元素类型
+            card_table_base_ptr,              // 基指针
+            card_index                        // 索引
+    );
+
+    // 4. 写入脏标记
+    CreateStore(
+            LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card_val()),
+            card_entry_ptr);
 }
 
 // Helpers for accessing the code buffer
@@ -924,7 +955,6 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* na
   llvm::Module* mod = GetInsertBlock()->getModule();
     LLVMContext& ctx = mod->getContext();
   llvm::Type* i32_ty = llvm::Type::getInt32Ty(mod->getContext());
-  llvm::Type* ptr_ty = llvm::PointerType::get(mod->getContext(), 0);
   llvm::Type* i64_ty = llvm::Type::getInt64Ty(mod->getContext());
   
   // Get the klass that holds the static field and the field offset
@@ -988,12 +1018,12 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* na
             CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
             YuhuType::oop_addrspace1_type());
   
-  // Calculate field address: mirror + field_offset
+  // Calculate field address: mirror + field_offset.  The mirror is a heap
+  // oop, so use a GEP to keep the field address a derived pointer that RS4GC
+  // can track (integer addressing would hide it from liveness).
   llvm::Value* field_offset_val = llvm::ConstantInt::get(i64_ty, field_offset);
-  llvm::Value* field_addr_int = CreateAdd(
-    CreatePtrToInt(mirror_oop, i64_ty),
-    field_offset_val);
-  llvm::Value* field_addr = CreateIntToPtr(field_addr_int, ptr_ty);
+  llvm::Value* field_addr = CreateGEP(
+    YuhuType::jbyte_type(), mirror_oop, field_offset_val, "static_field_addr");
   
   // Load field value based on type
   llvm::Value* field_value;

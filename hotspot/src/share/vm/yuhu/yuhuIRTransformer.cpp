@@ -18,9 +18,78 @@
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+
+// GC heap references live in addrspace(1). With ni:1 in the DataLayout these
+// pointer<->integer casts are ill-typed per the LangRef, but the LLVM verifier
+// only rejects the ConstantExpr forms, so instruction-level escapes must be
+// caught by this scan. Every hit is a frontend site that must migrate to
+// GEP-based addressing on ptr addrspace(1).
+static const unsigned GC_ADDRSPACE = 1;
+
+static void reportNonIntegralPointerCasts(Module &M) {
+    unsigned escapes = 0;
+    for (Function &F : M) {
+        if (F.isDeclaration()) continue;
+        for (BasicBlock &BB : F) {
+            for (llvm::Instruction &I : BB) {
+                if (auto *PTI = dyn_cast<PtrToIntInst>(&I)) {
+                    if (PTI->getPointerAddressSpace() == GC_ADDRSPACE) {
+                        if (YuhuTraceIRCompilation) {
+                            errs() << "Yuhu GC-escape: ptrtoint on addrspace(1) in "
+                                   << F.getName() << " block " << BB.getName()
+                                   << ": " << I << "\n";
+                        }
+                        escapes++;
+                    }
+                } else if (auto *ITP = dyn_cast<IntToPtrInst>(&I)) {
+                    if (ITP->getAddressSpace() == GC_ADDRSPACE) {
+                        if (YuhuTraceIRCompilation) {
+                            errs() << "Yuhu GC-escape: inttoptr to addrspace(1) in "
+                                   << F.getName() << " block " << BB.getName()
+                                   << ": " << I << "\n";
+                        }
+                        escapes++;
+                    }
+                }
+                // ConstantExpr forms (e.g. inttoptr (i64 ... to ptr addrspace(1)))
+                // as direct operands - these the verifier would also reject
+                for (Use &U : I.operands()) {
+                    auto *CE = dyn_cast<ConstantExpr>(U.get());
+                    if (CE == NULL) continue;
+                    if (CE->getOpcode() == llvm::Instruction::IntToPtr &&
+                        CE->getType()->getPointerAddressSpace() == GC_ADDRSPACE) {
+                        if (YuhuTraceIRCompilation) {
+                            errs() << "Yuhu GC-escape: inttoptr ConstantExpr to addrspace(1) in "
+                                   << F.getName() << " block " << BB.getName()
+                                   << ": " << I << "\n";
+                        }
+                        escapes++;
+                    } else if (CE->getOpcode() == llvm::Instruction::PtrToInt &&
+                               CE->getOperand(0)->getType()->getPointerAddressSpace() == GC_ADDRSPACE) {
+                        if (YuhuTraceIRCompilation) {
+                            errs() << "Yuhu GC-escape: ptrtoint ConstantExpr on addrspace(1) in "
+                                   << F.getName() << " block " << BB.getName()
+                                   << ": " << I << "\n";
+                        }
+                        escapes++;
+                    }
+                }
+            }
+        }
+    }
+    if (escapes > 0) {
+        if (YuhuTraceIRCompilation) {
+            errs() << "Yuhu GC-escape: " << escapes
+                   << " non-integral pointer cast(s) in module " << M.getName()
+                   << " - unsafe under ni:1, must be converted to addrspace(1) GEPs\n";
+        }
+    }
+}
 
 void declareGCSafepointPoll(Module& M) {
     LLVMContext& Ctx = M.getContext();
@@ -90,6 +159,11 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
         }
 
         declareGCSafepointPoll(M);
+
+        // Inventory frontend-emitted GC-pointer/integer escapes BEFORE any pass
+        // runs: InstCombine would fold/move them and RS4GC inserts legitimate
+        // internal ptrtoint casts that would show up as false positives
+        reportNonIntegralPointerCasts(M);
 
         // 1. 创建 PassBuilder 和 StandardInstrumentations
         PassInstrumentationCallbacks PIC;

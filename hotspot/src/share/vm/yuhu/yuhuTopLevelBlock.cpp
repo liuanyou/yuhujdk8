@@ -662,13 +662,50 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
                                                             is_method_entry_safepoint ? -1 : bci(),
                                                             current_state()->num_monitors());
 
+    // Decache: flush all live OOPs to stack slots and create OopMap
+    decache_for_VM_call(virtual_offset);
+
+//    // Build gc-live operand bundle with all live JVM state
+//    YuhuState* state = current_state();
+//    std::vector<llvm::Value*> gclive_operands;
+//
+//    // 1. Local variables (in order 0..max_locals-1)
+//    for (int i = 0; i < max_locals(); i++) {
+//        ciType* type = state->local_type_at(i);
+//        BasicType slot_type = type->basic_type();
+//
+//        if (slot_type == T_OBJECT || slot_type == T_ARRAY) {
+//            YuhuValue* local_val = state->local(i);
+//            if (local_val != NULL) {
+//                gclive_operands.push_back(local_val->jobject_value());
+//            }
+//        }
+//    }
+//
+//    // 2. Expression stack (in order top..bottom)
+//    for (int i = 0; i < state->stack_depth(); i++) {
+//        YuhuValue* stack_val = state->stack(i);
+//
+//        if (stack_val != NULL) {
+//            BasicType slot_type = stack_val->basic_type();
+//            if (slot_type == T_OBJECT || slot_type == T_ARRAY) {
+//                gclive_operands.push_back(stack_val->jobject_value());
+//            }
+//        }
+//    }
+
     llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::safepoint_poll);
 
     llvm::Module* mod = builder()->GetInsertBlock()->getModule();
     llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), { YuhuType::thread_type() }, false);
     llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
+//    llvm::OperandBundleDef gclive_bundle("gc-live", gclive_operands);
+//    builder()->CreateCall(poll_ftype, callee, { thread() }, { gclive_bundle });
 
     builder()->CreateCall(poll_ftype, callee, { thread() });
+
+    // Cache: reload all live OOPs from stack slots (GC may have moved them)
+    cache_after_VM_call();
 
   current_state()->set_has_safepointed(true);
 }
@@ -953,12 +990,10 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
     llvm::Type* narrow_oop_type = YuhuType::jint_type();  // i32 for compressed oop
     Value* addr = builder()->CreateArrayAddress(
       array->jarray_value(), basic_type, index->jint_value());
-    // Cast address to i32* for loading compressed pointer
-    Value* narrow_addr = builder()->CreateBitCast(
-      addr,
-      llvm::PointerType::getUnqual(narrow_oop_type),
-      "narrow_oop_addr");
-    Value *compressed = builder()->CreateLoad(narrow_oop_type, narrow_addr, "compressed_oop");
+    // Opaque pointers: load the narrowOop directly from the element address
+    // (a bitcast would be invalid across address spaces now that element
+    // addresses are addrspace(1) GEPs)
+    Value *compressed = builder()->CreateLoad(narrow_oop_type, addr, "compressed_oop");
     value = builder()->CreateDecodeHeapOop(compressed);
   } else {
     // Normal load for non-compressed oops or other types
@@ -1119,8 +1154,10 @@ void YuhuTopLevelBlock::do_if(ICmpInst::Predicate p,
                                YuhuValue*         a) {
   Value *llvm_a, *llvm_b;
   if (a->is_jobject()) {
-    llvm_a = a->intptr_value(builder());
-    llvm_b = b->intptr_value(builder());
+    // Compare oops as addrspace(1) pointers.  A ptrtoint here would escape
+    // the reference from RS4GC's liveness (and is ill-typed under ni:1).
+    llvm_a = a->jobject_value();
+    llvm_b = b->jobject_value();
   }
   else {
     llvm_a = a->jint_value();

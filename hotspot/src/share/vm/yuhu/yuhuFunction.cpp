@@ -358,9 +358,10 @@ void YuhuFunction::initialize(const char *name) {
           
           // Handle different return types from intptr slot
           if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
-              // Load as i64, then inttoptr to oop pointer
-              llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
-              builder()->CreateRet(builder()->CreateIntToPtr(loaded, ret_llvm_type));
+              // Load the oop directly as ptr addrspace(1).  Loading as i64 +
+              // inttoptr would hide the reference in an integer (invisible to
+              // RS4GC and ill-typed under the ni:1 DataLayout).
+              builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
           } else if (ret_type == T_FLOAT) {
               // Load directly as float (32-bit) from the return slot
               // On little-endian AArch64, the float occupies the low 32 bits of the 8-byte slot
@@ -593,8 +594,8 @@ llvm::BasicBlock* YuhuFunction::unified_exit_block() {
       
       // Handle different return types from intptr slot
       if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
-          llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
-          builder()->CreateRet(builder()->CreateIntToPtr(loaded, ret_llvm_type));
+          // Load the oop directly as ptr addrspace(1) (see non-OSR exit above)
+          builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
       } else if (ret_type == T_FLOAT || ret_type == T_DOUBLE) {
           llvm::Value* loaded = builder()->CreateLoad(YuhuType::intptr_type(), _return_slot);
           builder()->CreateRet(builder()->CreateBitCast(loaded, ret_llvm_type));
