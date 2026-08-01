@@ -49,6 +49,8 @@ YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
 
   _deopt_bundles = new GrowableArray<DeoptBundle*>();
 
+  _const_symbol_entries = new GrowableArray<ConstSymbolEntry*>();
+
   _frame_layout_info = new FrameLayoutInfo();
 
   _exception_table_info_records = new GrowableArray<ExceptionTableInfoRecord*>();
@@ -260,6 +262,19 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
 
     DeoptBundle* bundle = _deopt_bundles->at(index);
     bundle->num_monitors = num_monitors;
+}
+
+void YuhuDebugInformationRecorder::register_const_symbol(uint64_t addr, uint64_t start, uint64_t end) {
+    int index = _const_symbol_entries->find(&addr, [](void* token, ConstSymbolEntry* entry) -> bool {
+        return *((uint32_t*)token) == entry->addr;
+    });
+    if (index == -1) {
+        auto const_symbol_entry = new ConstSymbolEntry();
+        const_symbol_entry->addr = addr;
+        const_symbol_entry->start = start;
+        const_symbol_entry->end = end;
+        _const_symbol_entries->append(const_symbol_entry);
+    }
 }
 
 void YuhuDebugInformationRecorder::register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words) {

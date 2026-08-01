@@ -1377,14 +1377,11 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     int adrp_count = 0;
     int blr_count = 0;
 
-    struct RelocEntry {
-        relocInfo::relocType reloc_type;
-        size_t offset;
-        int spec_index;
-    };
-
     GrowableArray<uint64_t> processed_llvm_blr_offsets;
     GrowableArray<RelocEntry> reloc_entries;
+    GrowableArray<uint64_t> copied_const_srcs; // const_symbol_entry->start
+    GrowableArray<uint64_t> copied_const_dsts; // address in cb->consts()
+    GrowableArray<std::pair<uint64_t, uint64_t>> copied_const_symbols;
 
     // Scan machine code for marker pattern
     for (size_t i = 0; i < llvm_code_size / 4; i++) {
@@ -1559,7 +1556,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             processed_llvm_blr_offsets.append(llvm_blr_offset);
             movz_movk_count++;
-        } else if (YuhuVirtualAddressScanner::is_adrp_pattern(llvm_instr)) {
+        } else if (YuhuVirtualAddressScanner::is_adrp_got_pattern(llvm_instr)) {
             // Locate target page
             int64_t page_offset = YuhuVirtualAddressScanner::extract_page_offset(llvm_instr);
             uint64_t pc_page = ((uint64_t)llvm_instr) & ~0xFFFULL;
@@ -1577,7 +1574,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             assert(llvm_blr_offset != 0, "should be valid offset");
 
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
-            assert(YuhuVirtualAddressScanner::is_adrp_pattern(instr), "should be adrp instructions");
+            assert(YuhuVirtualAddressScanner::is_adrp_got_pattern(instr), "should be adrp got instructions");
 
             // Create relocation record
             if (function_address == (uint64_t)&handle_deoptimization) {
@@ -1627,6 +1624,40 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             // no need to create runtime_call_type for blr instruction
             processed_llvm_blr_offsets.append(i * 4);
             blr_count++;
+        } else if (YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(llvm_instr)) {
+            // Locate target page
+            int64_t page_offset = YuhuVirtualAddressScanner::extract_page_offset(llvm_instr);
+            uint64_t pc_page = ((uint64_t)llvm_instr) & ~0xFFFULL;
+            uint64_t target_page = pc_page + page_offset;
+            uint32_t imm12 = (llvm_instr[1] >> 10) & 0xFFF;
+            uint64_t target_address = target_page + imm12;
+
+            ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(target_address);
+            assert(const_symbol_entry != NULL, "Const symbol should exist");
+
+            address new_table_addr;
+            int idx = copied_const_srcs.find(const_symbol_entry->start);
+            if (idx >= 0) {
+                new_table_addr = (address)copied_const_dsts.at(idx);
+            } else {
+                new_table_addr = cb->consts()->end();
+                size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
+                memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
+                cb->consts()->set_end(new_table_addr + symbol_size);
+                copied_const_srcs.append(const_symbol_entry->start);
+                copied_const_dsts.append((uint64_t)new_table_addr);
+            }
+
+            uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
+            assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(instr), "should be adrp jump table instructions");
+            bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_table_addr);
+            assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(instr), "should patch successfully");
+
+            RelocEntry reloc_entry{};
+            reloc_entry.offset = i * 4 + adapter_size;
+            reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
+            reloc_entry.target = (uint64_t)new_table_addr;
+            reloc_entries.append(reloc_entry);
         }
     }
 
@@ -1650,6 +1681,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             cb->relocate((address)(instr), reloc_entry.reloc_type);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::runtime_call_type) {
             cb->relocate((address)(instr), reloc_entry.reloc_type);
+        } else if (reloc_entry.reloc_type == relocInfo::relocType::internal_word_type) {
+            cb->relocate((address)(instr), internal_word_Relocation::spec((address)reloc_entry.target));
         }
     }
 

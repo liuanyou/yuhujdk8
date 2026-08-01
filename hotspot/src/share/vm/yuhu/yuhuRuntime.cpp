@@ -252,19 +252,19 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
 }
 
 extern "C" void gc_safepoint_poll(JavaThread* thread) {
-    if (SafepointSynchronize::do_call_back()) {
-        SafepointSynchronize::block(thread);
-    }
-
-//    {
-//        Thread::WXWriteFromExecSetter __wx_write;
-//        ThreadInVMfromJava __tiv(thread);
-//
-//        unsigned int gc_count = Universe::heap()->total_collections();
-//        unsigned int full_gc_count = Universe::heap()->total_full_collections();
-//        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
-//        VMThread::execute(&op);
+//    if (SafepointSynchronize::do_call_back()) {
+//        SafepointSynchronize::block(thread);
 //    }
+//
+////    {
+////        Thread::WXWriteFromExecSetter __wx_write;
+////        ThreadInVMfromJava __tiv(thread);
+////
+////        unsigned int gc_count = Universe::heap()->total_collections();
+////        unsigned int full_gc_count = Universe::heap()->total_full_collections();
+////        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
+////        VMThread::execute(&op);
+////    }
 }
 
 extern "C" void handle_deoptimization() {
@@ -446,20 +446,21 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
     masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
 
     masm.pin_label(normal_exit);
+
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_inst("ldr x8, [sp, #%d]", frame_size_in_bytes + 8));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::x8));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
   
   // Epilogue: restore x19, FP, LR
   masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
   masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
   masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-
-  // save return value and return address
-    NOT_PRODUCT(YuhuLabel is_valid_return_address);
-    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
-    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
-    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
-    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
-    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
-    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
 
   // Return
   masm.write_inst("ret");
@@ -519,8 +520,8 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   ResourceMark rm;
   
   const int stub_size = 64;
-  CodeBuffer buffer("yuhu_virtual_call_stub", stub_size, stub_size);
-  YuhuMacroAssembler masm(&buffer);
+  CodeBuffer cb("yuhu_virtual_call_stub", stub_size, stub_size);
+  YuhuMacroAssembler masm(&cb);
 
   address begin = masm.current_pc();
 
@@ -567,20 +568,21 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
     masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
 
     masm.pin_label(normal_exit);
+
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_inst("ldr x8, [sp, #%d]", frame_size_in_bytes + 8));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::x8));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
   
   // Epilogue: restore x19, FP, LR
     masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
     masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
     masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-
-    // save return value and return address
-    NOT_PRODUCT(YuhuLabel is_valid_return_address);
-    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
-    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
-    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
-    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
-    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
-    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
 
     // Return
     masm.write_inst("ret");
@@ -592,7 +594,7 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   
   YuhuRuntimeStub* stub = YuhuRuntimeStub::new_yuhu_runtime_stub(
       "yuhu_virtual_call_stub",
-      &buffer,
+      &cb,
       CodeOffsets::frame_never_safe,
       frame_size_in_words,
       NULL,  // no oops saved
@@ -730,19 +732,20 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
 
     masm.pin_label(normal_exit);
 
-    // Epilogue: restore x19, FP, LR (only reached if interface not found - should not return)
-    masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
-    masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
-    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
-
     // save return value and return address
     NOT_PRODUCT(YuhuLabel is_valid_return_address);
     NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
-    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::lr));
+    NOT_PRODUCT(masm.write_inst("ldr x8, [sp, #%d]", frame_size_in_bytes + 8));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::x8));
     NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
     NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
     NOT_PRODUCT(masm.pin_label(is_valid_return_address));
     NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
+
+    // Epilogue: restore x19, FP, LR (only reached if interface not found - should not return)
+    masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
+    masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
+    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
 
     // Return
     masm.write_inst("ret");

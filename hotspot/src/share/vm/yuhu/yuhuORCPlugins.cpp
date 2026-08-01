@@ -183,6 +183,24 @@ void CallSiteExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationRespons
 
 llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                                                       llvm::orc::MaterializationResponsibility &MR) {
+    for (auto &Section : G.sections()) {
+        if (!Section.getName().ends_with("__const"))
+            continue;
+        for (auto *Sym : Section.symbols()) {
+            if (!Sym->hasName()) {
+                continue;
+            }
+            assert(Sym->getAddress().getValue() == Sym->getRange().Start.getValue(), "addr should match to range start");
+            YuhuDebugInformationRecorder::get()->register_const_symbol(Sym->getAddress().getValue(), Sym->getRange().Start.getValue(), Sym->getRange().End.getValue());
+            if (YuhuTraceMachineCode) {
+                errs() << "[CallSite Extractor] const name: " << *(Sym->getName())
+                        << ", address: " << Sym->getAddress().getValue()
+                        << ", start: " << Sym->getRange().Start.getValue()
+                        << ", end: " << Sym->getRange().End.getValue() << "\n";
+            }
+        }
+    }
+
     // Iterate over all sections looking for code sections
     for (auto &Section : G.sections()) {
         // Only process executable sections (code)
@@ -390,6 +408,17 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                                    << " , blr_offset=" << block_offset + match.call_target_blr_offset << "\n";
                         }
                     }
+                } else if (YuhuVirtualAddressScanner::is_adrp_jump_table_pattern((uint32_t *) (CodeData + offset))) {
+                    uint32_t* instr = (uint32_t *) (CodeData + offset);
+                    int64_t page_offset = YuhuVirtualAddressScanner::extract_page_offset(instr);
+                    uint64_t pc_page = ((uint64_t)instr) & ~0xFFFULL;
+                    uint64_t target_page = pc_page + page_offset;
+
+                    uint32_t imm12 = (instr[1] >> 10) & 0xFFF;
+                    uint64_t target_address = target_page + imm12;
+                    assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(target_address) != NULL, "Jump table should exist");
+                } else if (YuhuVirtualAddressScanner::is_unknown_adrp_pattern((uint32_t *) (CodeData + offset))) {
+                    ShouldNotReachHere();
                 }
             }
         }

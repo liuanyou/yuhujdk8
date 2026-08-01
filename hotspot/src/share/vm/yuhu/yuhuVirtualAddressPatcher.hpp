@@ -238,7 +238,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
      * @param instr
      * @return
      */
-    static bool is_adrp_pattern(uint32_t* instr) {
+    static bool is_adrp_got_pattern(uint32_t* instr) {
         // Check instruction encoding (little-endian):
         // adrp   x8, 3
         // ldr    x8, [x8, #0x718]
@@ -248,6 +248,38 @@ class YuhuVirtualAddressScanner : public AllStatic {
         }
         return false;
     };
+
+    /**
+     * check if it is jump table pattern which is using adrp + add instructions.
+     *
+     * @param instr
+     * @return
+     */
+    static bool is_adrp_jump_table_pattern(uint32_t* instr) {
+        // Check instruction encoding (little-endian):
+        // adrp   x11, 3
+        // add    x11, x11, #0x0
+        if ((instr[0] & 0x9F000000) == 0x90000000 &&
+            (instr[1] & 0xFFC00000) == 0x91000000) {
+            return true;
+        }
+        return false;
+    };
+
+    /**
+     * determine if it is unknown adrp instructions.
+     *
+     * @param instr
+     * @return
+     */
+    static bool is_unknown_adrp_pattern(uint32_t* instr) {
+        if ((instr[0] & 0x9F000000) == 0x90000000) {
+            if ((instr[1] & 0xFFC00000) != 0xF9400000 && (instr[1] & 0xFFC00000) != 0x91000000) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     static bool is_blr_pattern(uint32_t* instr) {
         uint32_t inst = instr[0];

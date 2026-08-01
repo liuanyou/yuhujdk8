@@ -116,8 +116,12 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         }
         // Section.getName() returns in format of segment,section eg
         // Section: __TEXT,__text
+        // Section: $__GOT
         // Section: __LD,__compact_unwind
+        // Section: __TEXT,__const
         // Section: __LLVM_STACKMAPS,__llvm_stackmaps
+        // Section: __TEXT,__lcl_macho_hdr
+        // Section: __TEXT,__unwind_info
         if (!Section.getName()->ends_with("__llvm_stackmaps")) continue;
         if (YuhuTraceMachineCode) {
             if (YuhuStackMapFile != NULL) {

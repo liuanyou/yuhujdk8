@@ -123,7 +123,7 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
                  }
                  found_ljpc = true;
              }
-         } else if (is_adrp_pattern(instr)) {
+         } else if (is_adrp_got_pattern(instr)) {
             // Locate target page
             int64_t page_offset = extract_page_offset(instr);
             uint64_t pc_page = ((uint64_t)instr) & ~0xFFFULL;

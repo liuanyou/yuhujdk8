@@ -75,6 +75,13 @@ public:
     uint32_t num_monitors = 0; // num of monitors, 0 by default
 };
 
+class ConstSymbolEntry : public ResourceObj {
+public:
+    uint64_t addr;
+    uint64_t start;
+    uint64_t end;
+};
+
 class FrameLayoutInfo : public ResourceObj {
 public:
     int total_frame_size_in_bytes = -1; // extracted from machine code's prologue
@@ -124,6 +131,8 @@ private:
 
   // deopt statepoint locations
   GrowableArray<DeoptBundle*>* _deopt_bundles;
+
+  GrowableArray<ConstSymbolEntry*>* _const_symbol_entries;
 
   // frame layout information
   FrameLayoutInfo* _frame_layout_info;
@@ -312,6 +321,23 @@ public:
         return _deopt_bundles->at(index);
     }
 
+  ConstSymbolEntry* get_const_symbol_by_addr(uint64_t addr) const {
+      if (!addr) return NULL;
+      int index = _const_symbol_entries->find(&addr, [](void* token, ConstSymbolEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->addr;
+      });
+      if (index == -1) return NULL;
+      return _const_symbol_entries->at(index);
+  }
+
+  size_t total_const_symbol_size() const {
+      size_t total = 0;
+      for (int i = 0; i < _const_symbol_entries->length(); ++i) {
+          total += _const_symbol_entries->at(i)->end - _const_symbol_entries->at(i)->start;
+      }
+      return total;
+  }
+
   void update_call_site_machine_code_offsets(uint64_t virtual_offset,
                                              uint64_t return_pc_offset,
                                              uint64_t blr_offset,
@@ -356,6 +382,8 @@ public:
   void register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t basic_type);
 
   void register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint32_t num_monitors);
+
+  void register_const_symbol(uint64_t address, uint64_t start, uint64_t end);
 
   void register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
 

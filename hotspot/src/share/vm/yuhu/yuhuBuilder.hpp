@@ -43,6 +43,14 @@
 // Forward declarations
 class YuhuFunction;
 
+class RelocEntry : public ResourceObj {
+public:
+    relocInfo::relocType reloc_type;
+    size_t offset;
+    int spec_index;
+    uint64_t target;
+};
+
 class YuhuBuilder : public llvm::IRBuilder<> {
   friend class YuhuCompileInvariants;
   friend class YuhuFunction;
