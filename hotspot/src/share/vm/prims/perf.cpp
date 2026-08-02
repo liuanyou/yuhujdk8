@@ -93,6 +93,7 @@ PERF_ENTRY(jobject, Perf_Attach(JNIEnv *env, jobject unused, jstring user, int v
 
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     return env->NewDirectByteBuffer(address, (jlong)capacity);
   }
 
@@ -108,6 +109,7 @@ PERF_ENTRY(void, Perf_Detach(JNIEnv *env, jobject unused, jobject buffer))
   // get buffer address and capacity
   {
    ThreadToNativeFromVM ttnfv(thread);
+   Thread::WXExecFromWriteSetter wx_exec;
    address = env->GetDirectBufferAddress(buffer);
    capacity = env->GetDirectBufferCapacity(buffer);
   }
@@ -215,6 +217,8 @@ PERF_ENTRY(jobject, Perf_CreateByteArray(JNIEnv *env, jobject perf,
 
     name_utf = jstr_to_utf(env, name, CHECK_NULL);
 
+    Thread::WXExecFromWriteSetter wx_exec;
+
     value_length = env->GetArrayLength(value);
 
     value_local = NEW_RESOURCE_ARRAY(jbyte, value_length + 1);
@@ -256,6 +260,7 @@ PERF_ENTRY(jobject, Perf_CreateByteArray(JNIEnv *env, jobject perf,
 
   {
     ThreadToNativeFromVM ttnfv(thread);
+    Thread::WXExecFromWriteSetter wx_exec;
     return env->NewDirectByteBuffer(cp, maxlength+1);
   }
 
