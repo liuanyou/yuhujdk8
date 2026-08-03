@@ -252,19 +252,19 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
 }
 
 extern "C" void gc_safepoint_poll(JavaThread* thread) {
-//    if (SafepointSynchronize::do_call_back()) {
-//        SafepointSynchronize::block(thread);
-//    }
+    if (SafepointSynchronize::do_call_back()) {
+        SafepointSynchronize::block(thread);
+    }
+
+//    {
+//        Thread::WXWriteFromExecSetter __wx_write;
+//        ThreadInVMfromJava __tiv(thread);
 //
-////    {
-////        Thread::WXWriteFromExecSetter __wx_write;
-////        ThreadInVMfromJava __tiv(thread);
-////
-////        unsigned int gc_count = Universe::heap()->total_collections();
-////        unsigned int full_gc_count = Universe::heap()->total_full_collections();
-////        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
-////        VMThread::execute(&op);
-////    }
+//        unsigned int gc_count = Universe::heap()->total_collections();
+//        unsigned int full_gc_count = Universe::heap()->total_full_collections();
+//        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
+//        VMThread::execute(&op);
+//    }
 }
 
 extern "C" void handle_deoptimization() {

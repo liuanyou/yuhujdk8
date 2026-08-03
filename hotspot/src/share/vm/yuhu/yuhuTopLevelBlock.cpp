@@ -778,9 +778,27 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   
   // 1. Local variables (in order 0..max_locals-1)
   for (int i = 0; i < max_locals(); i++) {
+      // Basic type collected at YuhuNormalEntryState is not reliable.
+      // Especially for T_CONFLICT, which means unknown type.
+      // Have to use realtime local value to get basic type.
+      // For NULL value, still use basic type at entry state.
+      YuhuValue* local_val = state->local(i);
+      if (local_val != NULL) {
+          BasicType basic_type = local_val->basic_type();
+          deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+          if (basic_type == T_LONG || basic_type == T_DOUBLE) {
+              assert(i + 1 < max_locals(), "padding slot should be next to T_LONG/T_DOUBLE");
+              YuhuValue* next = state->local(i + 1);
+              assert(next == NULL, "next must be padding value");
+              BasicType padding_type = (basic_type == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
+              deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
+              i++;
+          }
+          continue;
+      }
     ciType* type = state->local_type_at(i);
     BasicType slot_type = type->basic_type();
-
+    assert(slot_type == ciTypeFlow::StateVector::T_BOTTOM, "basic type should be T_CONFLICT");
     deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), slot_type));
   }
   
@@ -794,9 +812,7 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
       assert(i + 1 < state->stack_depth(), "padding slot should be on top of T_LONG/T_DOUBLE");
       YuhuValue* next = state->stack(i + 1);
       assert(next && next->is_two_word(), "next must be wide value");
-      BasicType padding_type = (next->basic_type() == T_LONG)
-        ? (BasicType)ciTypeFlow::StateVector::T_LONG2 
-        : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
+      BasicType padding_type = (next->basic_type() == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
       deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
       continue;
     }
