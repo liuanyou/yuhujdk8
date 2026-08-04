@@ -207,6 +207,10 @@ bool frame::is_runtime_frame() const {
   return (_cb != NULL && _cb->is_runtime_stub());
 }
 
+bool frame::is_yuhu_runtime_frame() const {
+    return (_cb != NULL && _cb->is_yuhu_runtime_stub());
+}
+
 bool frame::is_safepoint_blob_frame() const {
   return (_cb != NULL && _cb->is_safepoint_stub());
 }

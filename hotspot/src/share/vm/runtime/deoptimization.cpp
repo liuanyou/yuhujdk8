@@ -462,7 +462,7 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
   // QQQ I'd rather see this pushed down into last_frame_adjust
   // and have it take the sender (aka caller).
 
-  if (deopt_sender.is_compiled_frame() || caller_was_method_handle) {
+  if (deopt_sender.is_compiled_frame() || deopt_sender.is_yuhu_runtime_frame() || caller_was_method_handle) {
     caller_adjustment = last_frame_adjust(0, callee_locals);
   } else if (callee_locals > callee_parameters) {
     // The caller frame may need extending to accommodate

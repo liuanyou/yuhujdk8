@@ -150,6 +150,7 @@ frame(void* sp, void* fp, void* pc);
   bool is_ignored_frame()        const;
   bool is_native_frame()         const;
   bool is_runtime_frame()        const;
+  bool is_yuhu_runtime_frame()   const;
   bool is_compiled_frame()       const;
   bool is_safepoint_blob_frame() const;
   bool is_deoptimized_frame()    const;
