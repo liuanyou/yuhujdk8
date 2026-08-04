@@ -1456,10 +1456,9 @@ address YuhuMacroAssembler::write_insts_leave() {
 }
 
 address YuhuMacroAssembler::write_insts_stop(const char *msg) {
-    address ip = current_pc();
     write_insts_pusha();
     write_insts_mov_ptr(x0, (uintptr_t)(address)msg);
-    write_insts_mov_ptr(x1, (uintptr_t)ip);
+    write_inst("adr x1, .");
     write_inst("mov x2, sp");
     write_insts_mov_imm64(x3, (uint64_t)CAST_FROM_FN_PTR(address, MacroAssembler::debug64));
     write_inst("blr x3");
