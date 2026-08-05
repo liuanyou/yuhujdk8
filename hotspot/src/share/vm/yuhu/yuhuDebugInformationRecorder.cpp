@@ -549,6 +549,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                         case T_ARRAY: {
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::oop, local_offset_in_bytes));
                             locals->append(scopeValue);
+                            oopmap->set_oop(YuhuStack::slot2reg(local_offset_in_bytes >> LogBytesPerWord));
                         }
                             break;
                         case T_LONG: {
@@ -607,6 +608,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                         case T_ARRAY: {
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::oop, express_stack_offset_in_bytes));
                             expressions->append(scopeValue);
+                            oopmap->set_oop(YuhuStack::slot2reg(express_stack_offset_in_bytes >> LogBytesPerWord));
                         }
                             break;
                         case ciTypeFlow::StateVector::T_LONG2: {
@@ -664,6 +666,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                     Location basicLockLoc = Location::new_stk_loc(Location::normal, monitor_object_offset_in_bytes - wordSize);
 
                     monitors->append(new MonitorValue(scopeValue, basicLockLoc));
+                    oopmap->set_oop(YuhuStack::slot2reg(monitor_object_offset_in_bytes >> LogBytesPerWord));
                 }
             }
 
