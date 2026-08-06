@@ -663,7 +663,7 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
                                                             current_state()->num_monitors());
 
     // Decache: flush all live OOPs to stack slots and create OopMap
-    decache_for_VM_call(virtual_offset);
+//    decache_for_VM_call(virtual_offset);
 
 //    // Build gc-live operand bundle with all live JVM state
 //    YuhuState* state = current_state();
@@ -705,7 +705,7 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     builder()->CreateCall(poll_ftype, callee, { thread() });
 
     // Cache: reload all live OOPs from stack slots (GC may have moved them)
-    cache_after_VM_call();
+//    cache_after_VM_call();
 
   current_state()->set_has_safepointed(true);
 }
