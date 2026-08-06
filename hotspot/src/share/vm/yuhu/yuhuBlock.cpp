@@ -1164,10 +1164,20 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
         // === GETSTATIC: Load static field value directly from klass mirror ===
         Value *field_value = builder()->CreateInlineOopForStaticField(field);
 
-        // CreateInlineOopForStaticField now returns the correct type directly:
-        // - Object fields: ptr addrspace(1)
-        // - Primitive fields: appropriate LLVM type (i64, i32, float, double, etc.)
-        // No conversion needed
+        // CreateInlineOopForStaticField loads primitive fields using to_arrayType
+        // (the storage type), which for T_BOOLEAN/T_BYTE is i8.  The JVM stack
+        // representation requires to_stackType (i32 for T_BOOLEAN/T_BYTE).
+        // Convert from storage type to stack type, matching what getfield does.
+        if (field->type()->is_primitive_type()) {
+            BasicType basic_type = field->type()->basic_type();
+            llvm::Type *stack_type = YuhuType::to_stackType(basic_type);
+            llvm::Type *field_type = YuhuType::to_arrayType(basic_type);
+            if (field_type != stack_type) {
+                field_value = builder()->CreateIntCast(field_value, stack_type,
+                                                       basic_type != T_CHAR);
+            }
+        }
+
         value = YuhuValue::create_generic(field->type(), field_value, false);
         push(value);
         return;
