@@ -364,7 +364,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
     });
 
     // RS4GC doesn't include monitor objects in stack map, need to handle it manually
-    // a normal frame layout should be like:
+    // a normal yuhu frame layout should be like:
     /*
         0x16f7ea3f0: 0x0000000000000003 0x00000000d8001c5a - spill area
         0x16f7ea400: 0x00000006c000e280 0x0000000100000001 - spill area
@@ -535,6 +535,34 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             GrowableArray<ScopeValue*>* expressions = NULL;
             GrowableArray<MonitorValue*>* monitors = NULL;
 
+            // an interpreter layout should be like:
+            /*
+                x22 = 0x0000000107736348
+                x24 = 0x000000016b580c18
+                x26 = 0x0000000107005c88
+                x12 = 0x000000010707f9c0
+                sp = 0x000000016b580b20
+                x20 = 0x000000016b580b40
+
+                0x16b580b20: 0x000000016b580b30 0x0000000148072ba8
+                0x16b580b30: 0x000000016b580bb0 0x000000014807fa90
+                0x16b580b40: 0x00000006c02f72e8 0xdeaddeaf00000009 - / expression stack [4] (top)
+                0x16b580b50: 0x000000076aceb8b8 0xdeaddeaf32641199 - expression stack [3] / expression stack [2]
+                0x16b580b60: 0x000000076b4e1688 0x00000006c0344020 - expression stack [1] / expression stack [0] (bottom)
+                0x16b580b70: 0x000000016b580b70 0x0000000107004de0 - initial sp / byte code pointer
+                0x16b580b80: 0x000000016b580c18 0x0000000107005c88 - locals pointer / constant pool cache
+                0x16b580b90: 0x0000000107736348 0x0000000107004ef0 - method data / method
+                0x16b580ba0: 0x0000000000000000 0x000000016b580c00 - last_esp / sender_sp
+                0x16b580bb0: 0x000000016b580c80 0x000000014807cca8 - prologue x29 / x30
+                0x16b580bc0: 0x0000000000000000 0x0000000000000000 - local [11] / local [10]
+                0x16b580bd0: 0x0000000000000000 0x0000000000000000 - local [9] / local [8]
+                0x16b580be0: 0x0000000000000000 0x000000076aceb8b8 - local [7] / local [6]
+                0x16b580bf0: 0xdeaddeaf00000009 0xdeaddeaf00000001 - local [5] / local [4]
+
+                0x16b580c00: 0x000000076b4e16e8 0x000000076b4e1688 - arg [3] / arg [2]
+                0x16b580c10: 0xdeaddeaf32641199 0x00000006c0344020 - arg [1] / arg [0]
+             */
+
             // Convert locals
             if (bundle->locals && bundle->locals->length() > 0) {
                 locals = new GrowableArray<ScopeValue*>();
@@ -553,8 +581,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                         }
                             break;
                         case T_LONG: {
-                            // in deopt bundle, first slot is T_LONG with actual value, second slot is T_LONG2 with padding
-                            // but in physical stack frame, first slot has padding, second slot has actual value, and this is
+                            // in deopt bundle, j slot is T_LONG with actual value, j+1 slot is T_LONG2 with padding
+                            // and in physical stack frame, local[j] slot has padding, local[j+1] slot has actual value, and this is
                             // the desired layout for interpreter
                             // construct second slot
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::lng, local_offset_in_bytes - wordSize));
@@ -567,8 +595,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                         }
                             break;
                         case T_DOUBLE: {
-                            // in deopt bundle, first slot is T_DOUBLE with actual value, second slot is T_LONG2 with padding
-                            // but in physical stack frame, first slot has padding, second slot has actual value, and this is
+                            // in deopt bundle, j slot is T_DOUBLE with actual value, j+1 slot is T_LONG2 with padding
+                            // and in physical stack frame, local[j] slot has padding, local[j+1] slot has actual value, and this is
                             // the desired layout for interpreter
                             // construct second slot
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::dbl, local_offset_in_bytes - wordSize));
@@ -598,7 +626,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             // Convert expression stacks
             if (bundle->expression_stacks && bundle->expression_stacks->length() > 0) {
                 expressions = new GrowableArray<ScopeValue*>();
-                for (int j = 0; j < bundle->expression_stacks->length(); j++) {
+                // deopt bundle is from top to bottom, but we need to iterate it from bottom to top, which is desired by deoptimization blob
+                for (int j = bundle->expression_stacks->length() - 1; j >= 0; j--) {
                     uint8_t basic_type = bundle->expression_stacks->at(j);
                     int express_stack_offset_in_bytes = (spill_words + _frame_layout_info->stack_words - bundle->expression_stacks->length() + j) * wordSize;
 
@@ -611,29 +640,29 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                             oopmap->set_oop(YuhuStack::slot2reg(express_stack_offset_in_bytes >> LogBytesPerWord));
                         }
                             break;
-                        case ciTypeFlow::StateVector::T_LONG2: {
-                            // in deopt bundle, first slot is T_LONG2 with padding, second slot is T_LONG with actual value
-                            // but in physical stack frame, first slot has actual value, second slot has padding, and this is
-                            // not the desired layout for interpreter
-                            // construct first slot
-                            Location invalid_location;
+                        case T_LONG: {
+                            // in deopt bundle, j slot is T_LONG with actual value, j-1 slot is T_LONG2 with padding
+                            // but in physical stack frame, expression[j] slot has padding, expression[j-1] slot has actual value, and this is
+                            // not the desired layout for interpreter, we need to reverse
                             // construct second slot
-                            assert(bundle->expression_stacks->at(++j) == T_LONG, "should be T_LONG type");
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::lng, express_stack_offset_in_bytes - wordSize));
+                            // construct first slot
+                            assert(bundle->expression_stacks->at(--j) == ciTypeFlow::StateVector::T_LONG2, "should be T_LONG2 type");
+                            Location invalid_location;
 
                             expressions->append(new LocationValue(invalid_location));
                             expressions->append(scopeValue);
                         }
                             break;
-                        case ciTypeFlow::StateVector::T_DOUBLE2: {
-                            // in deopt bundle, first slot is T_DOUBLE2 with padding, second slot is T_DOUBLE with actual value
-                            // but in physical stack frame, first slot has actual value, second slot has padding, and this is
-                            // not the desired layout for interpreter
-                            // construct first slot
-                            Location invalid_location;
-                            // construct first slot
-                            assert(bundle->expression_stacks->at(++j) == T_DOUBLE, "should be T_DOUBLE type");
+                        case T_DOUBLE: {
+                            // in deopt bundle, j slot is T_DOUBLE with actual value, j-1 slot is T_LONG2 with padding
+                            // but in physical stack frame, expression[j] slot has padding, expression[j-1] slot has actual value, and this is
+                            // not the desired layout for interpreter, we need to reverse
+                            // construct second slot
                             ScopeValue *scopeValue = new LocationValue(Location::new_stk_loc(Location::dbl, express_stack_offset_in_bytes - wordSize));
+                            // construct first slot
+                            assert(bundle->expression_stacks->at(--j) == ciTypeFlow::StateVector::T_DOUBLE2, "should be T_DOUBLE2 type");
+                            Location invalid_location;
 
                             expressions->append(new LocationValue(invalid_location));
                             expressions->append(scopeValue);
