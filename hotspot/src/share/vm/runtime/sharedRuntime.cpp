@@ -840,7 +840,7 @@ address SharedRuntime::continuation_for_implicit_exception(JavaThread* thread,
           // 3. Implict null exception in nmethod
 
           if (!cb->is_nmethod()) {
-            bool is_in_blob = cb->is_adapter_blob() || cb->is_method_handles_adapter_blob();
+            bool is_in_blob = cb->is_adapter_blob() || cb->is_method_handles_adapter_blob() || cb->is_yuhu_runtime_stub();
             if (!is_in_blob) {
               cb->print();
               fatal(err_msg("exception happened outside interpreter, nmethods and vtable stubs at pc " INTPTR_FORMAT, pc));
