@@ -1612,7 +1612,13 @@ void YuhuTopLevelBlock::do_call() {
     }
     else {
       assert(is_interface, "should be");
-      callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
+      if (call_method->itable_index() >= 0) {
+        callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
+      } else {
+        // Method has no itable index (e.g. static interface method or non-virtual).
+        // Fall back to direct call instead of itable dispatch.
+        callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
+      }
     }
   }
   else {
