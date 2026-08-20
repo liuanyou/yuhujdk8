@@ -1359,6 +1359,27 @@ Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
     "interface_callee_stub");
 }
 
+Value* YuhuTopLevelBlock::get_dynamic_resolution_callee(YuhuValue *receiver,
+                                                         ciMethod*   call_method,
+                                                         address* out_stub_addr,
+                                                         GrowableArray<BasicType>* reg_basic_types,
+                                                         GrowableArray<BasicType>* stk_basic_types) {
+  // Generate a dynamic resolution stub for interface methods with itable_index() < 0.
+  // These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
+  // The stub calls LinkResolver at runtime to resolve the target method dynamically.
+  address stub_addr = YuhuRuntime::generate_dynamic_resolution_call_stub(
+    call_method, target(), reg_basic_types, stk_basic_types);
+  if (out_stub_addr != NULL) {
+      *out_stub_addr = stub_addr;
+  }
+  
+  // Return the stub address as an integer constant
+  return builder()->CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)stub_addr),
+    YuhuType::intptr_type(),
+    "dynamic_resolution_callee_stub");
+}
+
 void YuhuTopLevelBlock::do_call() {
   // Set frequently used booleans
   bool is_static = bc() == Bytecodes::_invokestatic;
@@ -1468,6 +1489,7 @@ void YuhuTopLevelBlock::do_call() {
     // 8 float registers are d0-d7
     uint int_args = 0;
     uint fp_args = 0;
+    GrowableArray<BasicType> reg_basic_types;
     GrowableArray<BasicType> stk_basic_types;
 
     // Add dummy value for x0 (unused input slot, used for return value)
@@ -1487,6 +1509,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_INT:
                     call_args.push_back(v->jint_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1495,6 +1518,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_LONG:
                     call_args.push_back(v->jlong_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1505,6 +1529,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_FLOAT:
                     call_args.push_back(v->jfloat_value());
                     if (fp_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         fp_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1513,6 +1538,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_DOUBLE:
                     call_args.push_back(v->jdouble_value());
                     if (fp_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         fp_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1524,6 +1550,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_ARRAY:
                     call_args.push_back(v->jobject_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1539,6 +1566,7 @@ void YuhuTopLevelBlock::do_call() {
         // Explicit null check for method call receiver
         check_null(recv_val);
         call_args.push_back(recv_val->jobject_value());  // receiver in x1
+        reg_basic_types.append(recv_val->basic_type());
         int_args++; // int_args increases coz receiver is in x1
         // Collect remaining Java arguments (excluding receiver)
         for (int i = arg_slots - 2; i >= 0; i--) {
@@ -1551,6 +1579,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_INT:
                     call_args.push_back(v->jint_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1559,6 +1588,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_LONG:
                     call_args.push_back(v->jlong_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1569,6 +1599,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_FLOAT:
                     call_args.push_back(v->jfloat_value());
                     if (fp_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         fp_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1577,6 +1608,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_DOUBLE:
                     call_args.push_back(v->jdouble_value());
                     if (fp_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         fp_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1588,6 +1620,7 @@ void YuhuTopLevelBlock::do_call() {
                 case T_ARRAY:
                     call_args.push_back(v->jobject_value());
                     if (int_args < 8) {
+                        reg_basic_types.append(v->basic_type());
                         int_args++;
                     } else {
                         stk_basic_types.append(v->basic_type());
@@ -1615,9 +1648,10 @@ void YuhuTopLevelBlock::do_call() {
       if (call_method->itable_index() >= 0) {
         callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
       } else {
-        // Method has no itable index (e.g. static interface method or non-virtual).
-        // Fall back to direct call instead of itable dispatch.
-        callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
+        // Method has no itable index (e.g. Object methods re-declared in interface
+        // like equals/hashCode/toString). These require dynamic resolution via
+        // LinkResolver at runtime since compile-time indices are insufficient.
+        callee = get_dynamic_resolution_callee(receiver, call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
       }
     }
   }

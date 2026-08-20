@@ -4,7 +4,7 @@
 2026-08-07
 
 ## Status
-**Resolved** — root cause confirmed by inspecting `Method::_vtable_index` and `ciMethod::itable_index()`. Fix: check `itable_index() >= 0` before generating itable dispatch stub; fall back to direct call for non-virtual methods.
+**Resolved** — root cause confirmed. Two-phase fix: (1) interface methods with `itable_index() >= 0` use existing itable dispatch; (2) interface methods with `itable_index() < 0` (Object methods like `equals`/`hashCode`/`toString` re-declared in interfaces) require dynamic resolution via a new `generate_dynamic_resolution_call_stub` (not yet implemented).
 
 ## Problem Description
 
@@ -73,11 +73,21 @@ The stub then computes: `x9 = x9 + (-2) * 8 = x9 - 16`, reading from **before** 
 
 ## Root Cause
 
-The `do_call()` method in `yuhuTopLevelBlock.cpp` does not check whether the interface method has a valid itable index before generating the itable dispatch stub. Methods with `_vtable_index == -2` (nonvirtual) — such as static interface methods or methods resolved to non-virtual targets — cannot be dispatched via itable.
+The `do_call()` method in `yuhuTopLevelBlock.cpp` does not check whether the interface method has a valid itable index before generating the itable dispatch stub. Interface methods with `itable_index() < 0` cannot be dispatched via itable.
 
-## Fix
+There are two categories of methods with `itable_index() < 0`:
 
-In `yuhuTopLevelBlock.cpp`, check `call_method->itable_index() >= 0` before using itable dispatch. If the method has no itable index, fall back to direct call:
+1. **Object methods re-declared in interfaces** (e.g. `Set.equals()`, `Map.hashCode()`, `List.toString()`): `equals()` is declared in `java.lang.Object`. Interfaces re-declare it for documentation. The method is an Object method — dispatched via vtable, not itable. For these: `itable_index() == -2`, and `resolve_vtable_index()` on the interface method returns `-4` (`invalid_vtable_index`) because the interface has no vtable.
+
+2. **Static interface methods**: These are non-virtual and should be called directly.
+
+## Initial Fix (Incorrect)
+
+The first attempt fell back to `get_direct_callee` when `itable_index() < 0`. This calls the interface's abstract method declaration directly → `AbstractMethodError`. For `Set.equals()`, `get_direct_callee` calls `Set.equals()` (abstract) instead of the concrete implementation on the receiver's class.
+
+## Corrected Fix
+
+In `yuhuTopLevelBlock.cpp`, check `call_method->itable_index() >= 0` before using itable dispatch:
 
 ```cpp
 else {
@@ -85,14 +95,66 @@ else {
     if (call_method->itable_index() >= 0) {
         callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
     } else {
-        // Method has no itable index (e.g. static interface method or non-virtual).
-        // Fall back to direct call instead of itable dispatch.
-        callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
+        // Method has no itable index (e.g. Object methods re-declared in interface
+        // like equals/hashCode/toString). These use vtable dispatch, not itable.
+        assert(klass->is_linked(), "scan_for_traps responsibility");
+        int vtable_index = call_method->resolve_vtable_index(
+          target()->holder(), klass);
+        assert(vtable_index >= 0, "should have vtable index");
+        callee = get_virtual_callee(receiver, call_method, vtable_index, &compiled_entry_address, &stk_basic_types);
     }
 }
 ```
 
-`get_direct_callee` calls the method's `_from_compiled_entry` directly — no dispatch table needed. This is correct for non-virtual methods.
+**However**, `call_method->resolve_vtable_index()` returns `-4` (`invalid_vtable_index`) for interface methods like `Set.equals()` because the method is queried in the interface's context (which has no vtable). This means vtable dispatch also fails for this case.
+
+## How C1/C2 Handles This
+
+Neither C1 nor C2 uses `itable_index()` for interface call dispatch. Both use `SharedRuntime::get_resolve_virtual_call_stub()` — a runtime resolution stub that:
+
+1. Walks the stack to find the caller frame and bytecode
+2. Retrieves the actual receiver object
+3. Calls `LinkResolver::resolve_invokeinterface()` which:
+   - Calls `lookup_instance_method_in_klasses(sel_method, recv_klass, name, sig)` — searches the **receiver's concrete class hierarchy** for the method by name and signature
+   - At `linkResolver.cpp:1354-1357`: checks `has_itable_index()` — if false, uses vtable path; if true, uses itable path
+4. Patches the `CompiledIC` at the call site (inline cache)
+5. Returns `callee_method->verified_code_entry()`
+
+The key: the runtime resolves using the **receiver's actual class**, not compile-time indices on the interface method.
+
+## Planned Fix: Dynamic Resolution Stub (Not Yet Implemented)
+
+Generate a new kind of stub `generate_dynamic_resolution_call_stub` that delegates method resolution to a VM runtime entry point, similar to `SharedRuntime::resolve_virtual_call_C` but without `CompiledIC` patching.
+
+### Stub Design
+
+The stub:
+1. Receives the receiver oop (in x1 per calling convention)
+2. Calls a Yuhu-specific VM runtime entry point, passing resolution context (constant pool index + interface klass, or pre-resolved `resolved_klass` + `method_name` + `signature`)
+3. The runtime returns the resolved method's `verified_code_entry()` in x0
+4. The stub jumps to x0 (BLR x0)
+
+### VM Runtime Entry Point
+
+A new function (e.g. `YuhuRuntime::resolve_interface_call_C`) using `JRT_ENTRY`:
+1. Calls `LinkResolver::resolve_invokeinterface()` (or equivalent) with the receiver and method info
+2. Returns `selected_method->verified_code_entry()`
+3. No `CompiledIC` patching (Yuhu doesn't have inline caches)
+
+### Performance Consideration
+
+Without caching, every call goes through the VM runtime (thread state transition + LinkResolver lookup). This is slower than C1/C2's inline cache approach but correct. A one-slot inline cache can be added later: the stub checks `receiver->klass() == cached_klass` and jumps directly to the cached entry if it matches.
+
+### JRT_ENTRY vs JRT_BLOCK_ENTRY
+
+- `JRT_ENTRY`: wrapper covers the entire function (ThreadInVMfromJava + safepoint + exception handling for entire scope)
+- `JRT_BLOCK_ENTRY`: wrapper only active inside an explicit `JRT_BLOCK` section; code outside runs in `_thread_in_native` mode
+
+The reference `resolve_virtual_call_C` uses `JRT_BLOCK_ENTRY` + `JRT_BLOCK` around `resolve_helper`, returning the entry point after the block ends. For the Yuhu entry point, `JRT_ENTRY` is simpler and sufficient since the function body is just resolution + return.
+
+### Why Not JRT_LEAF
+
+`JRT_LEAF` cannot throw exceptions or enter safepoints. `LinkResolver::resolve_invokeinterface` can throw `NullPointerException` (null receiver), `AbstractMethodError` (abstract method), and `IncompatibleClassChangeError`. Must use `JRT_ENTRY` or `JRT_BLOCK_ENTRY`.
 
 ## Deferred Issue: Metadata GC Tracking in YuhuRuntimeStub
 
@@ -168,9 +230,11 @@ Both options ensure `Metadata::mark_on_stack` is called on the embedded `interfa
 
 ## Lessons Learned
 
-1. **Always check `itable_index()` validity before generating itable dispatch.** A method declared in an interface may not have an itable index if it's non-virtual (static interface method, or resolved to a non-virtual target).
-2. **`ciMethod::itable_index()` returns -2 for non-virtual methods.** This is `Method::nonvirtual_vtable_index`, not a bug in the index computation. The caller must check `has_itable_index()` or `itable_index() >= 0`.
-3. **RuntimeStubs don't participate in metadata GC tracking.** Any metadata pointer embedded in a RuntimeStub is invisible to `nmethod::metadata_do` and `MetadataOnStackMark`. If the metadata can be unloaded independently, the stub will have a dangling pointer. This is a latent defect that may manifest under class unloading pressure.
+1. **`itable_index() < 0` does not mean "call directly".** Interface methods with `itable_index() == -2` are typically Object methods (`equals`, `hashCode`, `toString`) re-declared in interfaces. They need dynamic dispatch, not direct call. Calling the interface's abstract declaration throws `AbstractMethodError`.
+2. **Compile-time indices are insufficient for interface dispatch of Object methods.** `itable_index() == -2` (no itable entry) and `resolve_vtable_index() == -4` (no vtable entry in interface context). Both indices are invalid because they're queried on the interface method, not on a concrete class. The resolution requires the receiver's actual class.
+3. **C1/C2 never use `itable_index()` for dispatch.** Both use `SharedRuntime::get_resolve_virtual_call_stub()` which delegates to `LinkResolver::resolve_invokeinterface()`. The LinkResolver searches the receiver's concrete class hierarchy by name and signature (`lookup_instance_method_in_klasses`), then decides vtable vs itable based on `has_itable_index()` on the resolved method.
+4. **`get_direct_callee` calls the interface's abstract method, not the concrete implementation.** For `Set.equals()`, `get_direct_callee` calls `Set.equals()` (abstract) → `AbstractMethodError`. The concrete `equals()` lives on the receiver's class (e.g. `HashSet`), not on the interface.
+5. **RuntimeStubs don't participate in metadata GC tracking.** Any metadata pointer embedded in a RuntimeStub is invisible to `nmethod::metadata_do` and `MetadataOnStackMark`. If the metadata can be unloaded independently, the stub will have a dangling pointer. This is a latent defect that may manifest under class unloading pressure.
 
 ## Related Activities
 

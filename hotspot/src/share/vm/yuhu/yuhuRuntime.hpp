@@ -110,6 +110,14 @@ class YuhuRuntime : public AllStatic {
                                               ciMethod* current_method,
                                               GrowableArray<BasicType>* stk_basic_types);
 
+  // Generate dynamic resolution call stub for interface methods with itable_index() < 0.
+  // These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
+  // The stub calls resolve_interface_call to dynamically resolve the target method at runtime.
+  static address generate_dynamic_resolution_call_stub(ciMethod* target_method,
+                                                        ciMethod* current_method,
+                                                        GrowableArray<BasicType>* reg_basic_types,
+                                                        GrowableArray<BasicType>* stk_basic_types);
+
   static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);
   static void anewarray(JavaThread* thread, Klass* element_klass, int size);
@@ -149,6 +157,14 @@ class YuhuRuntime : public AllStatic {
                                          const char* file,
                                          int         line);
   // throw_StackOverflowError - SharedRuntime::throw_StackOverflowError
+
+  // Dynamic resolution of interface calls for methods with itable_index() < 0
+  // (e.g. Object methods re-declared in interfaces like equals/hashCode/toString)
+  static address resolve_interface_call(JavaThread* thread,
+                                         oop recv_oop,
+                                         Klass* interface_klass,
+                                         Method* target_method,
+                                         Klass* current_klass);
 
   // NOTE (Option A refactor): the previous private helpers
   //   last_frame() / method() / bcp() / two_byte_index() / tos_at()

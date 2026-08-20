@@ -35,6 +35,7 @@
 #include "runtime/registerMap.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "interpreter/linkResolver.hpp"
 #ifdef TARGET_ARCH_aarch64
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #endif
@@ -46,6 +47,7 @@
 // Define _JNI_IMPLEMENTATION_ to get JNIEXPORT visibility (not JNIIMPORT)
 #define _JNI_IMPLEMENTATION_
 #include "prims/jni.h"
+#include "yuhuStack.hpp"
 
 using namespace llvm;
 
@@ -202,6 +204,34 @@ JRT_ENTRY(void, YuhuRuntime::throw_NullPointerException(JavaThread* thread,
     thread, file, line,
     vmSymbols::java_lang_NullPointerException(),
     "");
+JRT_END
+
+// Resolve interface call dynamically.
+// Used for interface methods with itable_index() < 0 (e.g. Object methods
+// re-declared in interfaces like Set.equals()). These methods cannot use
+// itable dispatch and require runtime resolution via LinkResolver.
+JRT_ENTRY(address, YuhuRuntime::resolve_interface_call(JavaThread* thread,
+                                                        oop recv_oop,
+                                                        Klass* interface_klass,
+                                                        Method* target_method,
+                                                        Klass* current_klass))
+  Handle recv(THREAD, recv_oop);
+  KlassHandle recv_klass(THREAD, recv_oop->klass());
+  KlassHandle resolved_klass(THREAD, interface_klass);
+  KlassHandle h_current_klass(THREAD, current_klass);
+
+  CallInfo call_info;
+    Symbol* method_name = target_method->name();
+    Symbol* method_signature = target_method->signature();
+  LinkResolver::resolve_interface_call(call_info, recv, recv_klass, resolved_klass,
+                                        method_name, method_signature, h_current_klass,
+                                        true, true, CHECK_NULL);
+
+  methodHandle sel_method = call_info.selected_method();
+  assert(sel_method.not_null(), "resolved method should not be null");
+  // Store Method* for the stub to retrieve and set in x12 for c2i adapter
+  thread->set_vm_result_2(sel_method());
+  return sel_method->verified_code_entry();
 JRT_END
 
 // Non-VM calls
@@ -796,6 +826,288 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
         }
     }
   
+  return stub_addr;
+}
+
+void store_reg_args(YuhuMacroAssembler* masm, int stk_args_size_in_bytes, int reg_args_size_in_bytes,
+                    GrowableArray<BasicType>* reg_basic_types, GrowableArray<BasicType>* stk_basic_types, OopMap* oopmap) {
+    if (reg_basic_types != NULL) {
+        for (int i = 0; i < reg_basic_types->length(); i = i+2) {
+            // if num of registers is odd, then add x0 as pair which can also cover 8th argument x0 scenario
+            if (reg_basic_types->length() % 2 == 1 && i == reg_basic_types->length() - 1) {
+                masm->write_inst_stp(YuhuMacroAssembler::as_register(i+1, 0, 0b10).as_general_register(),
+                                     YuhuMacroAssembler::x0,
+                                     YuhuAddress(YuhuMacroAssembler::sp, stk_args_size_in_bytes + i*wordSize));
+            } else {
+                masm->write_inst_stp(YuhuMacroAssembler::as_register(i+1, 0, 0b10).as_general_register(),
+                                     YuhuMacroAssembler::as_register(i+2, 0, 0b10).as_general_register(),
+                                     YuhuAddress(YuhuMacroAssembler::sp, stk_args_size_in_bytes + i*wordSize));
+            }
+        }
+        // reg_basic_types does not include 8th argument x0
+        for (int i = 0; i < reg_basic_types->length(); ++i) {
+            switch (reg_basic_types->at(i)) {
+                case T_BOOLEAN:
+                case T_BYTE:
+                case T_CHAR:
+                case T_SHORT:
+                case T_INT:
+                case T_LONG:
+                case T_FLOAT:
+                case T_DOUBLE:
+                    break;
+                case T_OBJECT:
+                case T_ARRAY:
+                    oopmap->set_oop(YuhuStack::slot2reg((stk_args_size_in_bytes + i*wordSize) >> LogBytesPerWord));
+                    break;
+                default:
+                    ShouldNotReachHere();
+            }
+        }
+    }
+    if (stk_basic_types != NULL) {
+        int stk_args = 0;
+        bool is_first_int_checked = false;
+        for (int i = 0; i < stk_basic_types->length(); ++i) {
+            switch (stk_basic_types->at(i)) {
+                case T_BOOLEAN:
+                case T_BYTE:
+                case T_CHAR:
+                case T_SHORT:
+                case T_INT:
+                case T_LONG:
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                    } else {
+                        stk_args++;
+                    }
+                    break;
+                case T_FLOAT:
+                case T_DOUBLE:
+                    stk_args++;
+                    break;
+                case T_OBJECT:
+                case T_ARRAY:
+                    if (!is_first_int_checked) {
+                        is_first_int_checked = true;
+                        // record the slot at reg args area
+                        oopmap->set_oop(YuhuStack::slot2reg((stk_args_size_in_bytes + reg_args_size_in_bytes - wordSize) >> LogBytesPerWord));
+                    } else {
+                        stk_args++;
+                        oopmap->set_oop(YuhuStack::slot2reg(((stk_args - 1) * wordSize) >> LogBytesPerWord));
+                    }
+                    break;
+                default:
+                    ShouldNotReachHere();
+            }
+        }
+    }
+}
+
+void load_reg_args(YuhuMacroAssembler* masm, int stk_args_size_in_bytes, GrowableArray<BasicType>* reg_basic_types) {
+    if (reg_basic_types != NULL) {
+        for (int i = 0; i < reg_basic_types->length(); i = i+2) {
+            // if num of registers is odd, then add x0 as pair which can also cover 8th argument x0 scenario
+            if (reg_basic_types->length() % 2 == 1 && i == reg_basic_types->length() - 1) {
+                masm->write_inst_ldp(YuhuMacroAssembler::as_register(i+1, 0, 0b10).as_general_register(),
+                                     YuhuMacroAssembler::x0,
+                                     YuhuAddress(YuhuMacroAssembler::sp, stk_args_size_in_bytes + i*wordSize));
+            } else {
+                masm->write_inst_ldp(YuhuMacroAssembler::as_register(i+1, 0, 0b10).as_general_register(),
+                                     YuhuMacroAssembler::as_register(i+2, 0, 0b10).as_general_register(),
+                                     YuhuAddress(YuhuMacroAssembler::sp, stk_args_size_in_bytes + i*wordSize));
+            }
+        }
+    }
+}
+
+// Generate dynamic resolution call stub for interface methods with itable_index() < 0.
+// These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
+// The stub calls resolve_interface_call to dynamically resolve the target method at runtime
+// via LinkResolver, then jumps to the resolved method's verified_code_entry.
+// Coz we have to call YuhuRuntime::resolve_interface_call to get call target, need to save registers
+// in stack, so the layout contains stk area, saved register area and prologue area.
+/*
+        0x16f7ea530: 0x000000076ad73c40 0x00000006c000e280 - stk 0 / stk 1
+        0x16f7ea540: 0x00000000deadbeef 0x0000000000000000 - stk 2 / padding
+        0x16f7ea550: 0x00000001000000c8 0x0000000100000064 - x1 / x2
+        0x16f7ea560: 0x000000076ad73c30 0x000000076ad73c20 - x3 / x4
+        0x16f7ea570: 0x0000000100000001 0x000000076ad73c30 - x5 / x6
+        0x16f7ea580: 0x0000000000000000 0x000000010c345060 - x7 / x0
+        0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - xzr / x19
+        0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
+ */
+address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_method,
+                                                            ciMethod* current_method,
+                                                            GrowableArray<BasicType>* reg_basic_types,
+                                                            GrowableArray<BasicType>* stk_basic_types) {
+  ResourceMark rm;
+
+  const int stub_size = 256;
+  CodeBuffer cb("yuhu_dynamic_resolution_call_stub", stub_size, stub_size);
+  YuhuMacroAssembler masm(&cb);
+
+  address begin = masm.current_pc();
+
+  int stk_args = count_stk_args(stk_basic_types);
+
+  assert(reg_basic_types->length() <= 7, "should be less than or equal to 7");
+
+  // Prologue: save FP, LR, x19
+  int stk_args_size_in_bytes = align_size_up(stk_args * wordSize, 16);
+  int reg_args_size_in_bytes = align_size_up(reg_basic_types->length() * wordSize, 16);
+  int frame_size_in_bytes = stk_args_size_in_bytes + reg_args_size_in_bytes + 4 * wordSize;
+  masm.write_inst("sub sp, sp, #%d", frame_size_in_bytes);
+  masm.write_inst("stp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
+  masm.write_inst("stp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
+  masm.write_inst("add x29, sp, #%d", frame_size_in_bytes - 16);
+
+  generate_stk_args(&masm, frame_size_in_bytes, stk_basic_types);
+
+    auto *oopmap_set = new OopMapSet();
+    int arg_count = 0;
+    auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size_in_bytes / wordSize),
+                              YuhuStack::oopmap_slot_munge(arg_count));
+
+  // store reg args
+  store_reg_args(&masm, stk_args_size_in_bytes, reg_args_size_in_bytes, reg_basic_types, stk_basic_types, oopmap);
+
+    masm.write_insts_set_last_java_frame(YuhuMacroAssembler::sp, YuhuMacroAssembler::noreg, YuhuMacroAssembler::noreg, YuhuMacroAssembler::x9);
+
+    YuhuLabel label;
+    masm.write_inst_adr(YuhuMacroAssembler::x9, label);
+    masm.write_inst("stp xzr, x9, [sp, #-16]!");
+
+    // Load arguments for resolve_interface_call:
+    //   x0 = JavaThread* (thread)
+    //   x1 = oop recv_oop (receiver)
+    //   x2 = Klass* interface_klass
+    //   x3 = Method* target_method
+    //   x4 = Klass* current_klass
+
+    // x0 = thread (x28 holds the thread register per Yuhu convention)
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x28);
+
+    // x1 = receiver object (per Yuhu calling convention)
+
+    // x2 = interface_klass (embedded as metadata constant for GC tracking)
+    ciInstanceKlass* ci_interface_klass = target_method->holder();
+    InstanceKlass* interface_klass = ci_interface_klass->get_instanceKlass();
+    int interface_metadata_index = cb.oop_recorder()->allocate_metadata_index(interface_klass);
+    RelocationHolder interface_metadata_rspec = metadata_Relocation::spec(interface_metadata_index);
+    cb.relocate(masm.current_pc(), interface_metadata_rspec);
+    masm.write_insts_lea(YuhuMacroAssembler::x2, YuhuAddress((address)interface_klass, relocInfo::metadata_type));
+
+    // x3 = target_method Method*
+    Method* method_ptr = target_method->get_Method();
+    int method_metadata_index = cb.oop_recorder()->allocate_metadata_index(method_ptr);
+    RelocationHolder method_metadata_rspec = metadata_Relocation::spec(method_metadata_index);
+    cb.relocate(masm.current_pc(), method_metadata_rspec);
+    masm.write_insts_lea(YuhuMacroAssembler::x3, YuhuAddress((address)method_ptr, relocInfo::metadata_type));
+
+    // x4 = current_klass (the class containing the call, for access checking)
+    ciInstanceKlass* ci_current_klass = current_method->holder();
+    InstanceKlass* current_klass = ci_current_klass->get_instanceKlass();
+    int current_metadata_index = cb.oop_recorder()->allocate_metadata_index(current_klass);
+    RelocationHolder current_metadata_rspec = metadata_Relocation::spec(current_metadata_index);
+    cb.relocate(masm.current_pc(), current_metadata_rspec);
+    masm.write_insts_lea(YuhuMacroAssembler::x4, YuhuAddress((address)current_klass, relocInfo::metadata_type));
+
+    masm.write_insts_lea(YuhuMacroAssembler::x8, YuhuExternalAddress(CAST_FROM_FN_PTR(address, YuhuRuntime::resolve_interface_call)));
+    masm.write_inst_blr(YuhuMacroAssembler::x8);
+
+    oopmap_set->add_gc_map(masm.current_pc() - begin, oopmap);
+
+    masm.pin_label(label);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x0);
+
+    masm.write_inst("add sp, sp, #16");
+
+    masm.write_insts_reset_last_java_frame(true);
+
+    // load reg args
+    load_reg_args(&masm, stk_args_size_in_bytes, reg_basic_types);
+
+  // Load Method* from thread->vm_result_2() into x12 for c2i adapter
+  masm.write_inst_ldr(YuhuMacroAssembler::x12,
+                      YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::vm_result_2_offset())));
+  // Clear vm_result_2
+  masm.write_inst_str(YuhuMacroAssembler::xzr,
+                      YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::vm_result_2_offset())));
+
+  // Jump to resolved compiled entry (x8 = verified_code_entry)
+  masm.write_inst_blr(YuhuMacroAssembler::x8);
+
+  YuhuLabel normal_exit;
+  masm.write_inst_b(normal_exit);
+
+  int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
+
+  // x0 contains exception oop, save x0 to pending exception field
+  masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+
+  masm.pin_label(normal_exit);
+
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_inst("ldr x8, [sp, #%d]", frame_size_in_bytes + 8));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::x8));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
+
+  // Epilogue: restore x19, FP, LR
+  masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
+  masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
+  masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
+
+  // Return
+  masm.write_inst("ret");
+
+  masm.flush();
+
+  // Create RuntimeStub
+  int frame_size_in_words = frame_size_in_bytes / wordSize;
+
+  YuhuRuntimeStub* stub = YuhuRuntimeStub::new_yuhu_runtime_stub(
+      "yuhu_dynamic_resolution_call_stub",
+      &cb,
+      CodeOffsets::frame_never_safe,
+      frame_size_in_words,
+      oopmap_set,  // collect oop in stack
+      false,
+      exception_handler_begin_offset
+  );
+
+  address stub_addr = stub->entry_point();
+
+  if (YuhuTraceInstalls) {
+      if (YuhuStackMapFile != NULL) {
+          FILE *f = fopen(YuhuStackMapFile, "a");
+          fileStream fs(f, true);
+          fs.print_cr("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(stub_addr),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+          fs.flush();
+      } else {
+          tty->print_cr("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(stub_addr),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+      }
+  }
+
   return stub_addr;
 }
 

@@ -690,6 +690,22 @@ address YuhuMacroAssembler::write_inst_str(YuhuRegister reg, YuhuAddress addr) {
     return current_pc();
 }
 
+address YuhuMacroAssembler::write_inst_stp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr) {
+    switch (addr.getMode()) {
+        case YuhuAddress::base_plus_offset:
+            return write_inst("stp %s, %s, [%s, #%d]", reg1, reg2, addr);
+        case YuhuAddress::base_plus_offset_reg:
+            return write_inst("stp %s, %s, [%s, %s, %s #%d]", reg1, reg2, addr);
+        case YuhuAddress::pre:
+            return write_inst("stp %s, %s, [%s, #%d]!", reg1, reg2, addr);
+        case YuhuAddress::post:
+            return write_inst("stp %s, %s, [%s], #%d", reg1, reg2, addr);
+        default:
+            ShouldNotReachHere();
+    }
+    return current_pc();
+}
+
 address YuhuMacroAssembler::write_inst_strh(YuhuRegister reg, YuhuAddress addr) {
     switch (addr.getMode()) {
         case YuhuAddress::base_plus_offset:

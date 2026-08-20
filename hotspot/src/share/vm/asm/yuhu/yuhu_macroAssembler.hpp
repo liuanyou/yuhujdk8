@@ -343,6 +343,8 @@ public:
 
     address write_inst_str(YuhuRegister reg, YuhuAddress addr);
 
+    address write_inst_stp(YuhuRegister reg1, YuhuRegister reg2, YuhuAddress addr);
+
     address write_inst_str(YuhuFloatRegister reg, YuhuAddress addr);
 
     address write_inst_strh(YuhuRegister reg, YuhuAddress addr);
