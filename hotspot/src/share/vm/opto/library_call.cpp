@@ -3056,6 +3056,10 @@ bool LibraryCallKit::inline_unsafe_load_store(BasicType type, LoadStoreKind kind
   Node* proj = _gvn.transform(new (C) SCMemProjNode(load_store));
   set_memory(proj, alias_idx);
 
+  // Save the original LoadStore node (GetAndSetP/GetAndSetN) before any DecodeN
+  // wrapping. This is needed as the MemBarAcquire precedent must be a LoadStore.
+  Node* load_store_for_barrier = load_store;
+
   if (type == T_OBJECT && kind == LS_xchg) {
 #ifdef _LP64
     if (adr->bottom_type()->is_ptr_to_narrowoop()) {
@@ -3076,8 +3080,9 @@ bool LibraryCallKit::inline_unsafe_load_store(BasicType type, LoadStoreKind kind
   // Add the trailing membar surrounding the access
   insert_mem_bar(Op_MemBarCPUOrder);
   // Set _kind = TrailingLoadStore for CAS operation (after CAS)
-  // Pass load_store as precedent to ensure membar follows the LoadStore node
-  insert_mem_bar_trailing_load_store(Op_MemBarAcquire, load_store);
+  // Pass the original LoadStore node as precedent to ensure membar follows it.
+  // Do NOT pass the DecodeN wrapper as it is not a LoadStore node.
+  insert_mem_bar_trailing_load_store(Op_MemBarAcquire, load_store_for_barrier);
 
   assert(type2size[load_store->bottom_type()->basic_type()] == type2size[rtype], "result type should match");
   set_result(load_store);
