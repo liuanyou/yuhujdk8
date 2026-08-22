@@ -416,6 +416,36 @@ void generate_stk_args(YuhuMacroAssembler* masm, int frame_size_in_bytes, Growab
 address YuhuRuntime::generate_static_call_stub(ciMethod* target_method, 
                                                 ciMethod* current_method,
                                                 GrowableArray<BasicType>* stk_basic_types) {
+  // Check stub cache first
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  if (cached != NULL) {
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Using cached static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(cached->entry_point()),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(cached->entry_point()),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
+    return cached->entry_point();
+  }
+
   ResourceMark rm;
   
   const int stub_size = 64;
@@ -538,6 +568,9 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
                         current_method->signature()->as_symbol()->as_utf8());
       }
   }
+
+  // Add to stub cache
+  _stub_cache->add(target_method, current_method, stub);
   
   return stub_addr;
 }
@@ -547,6 +580,38 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
                                                  ciMethod* current_method, 
                                                  int vtable_index,
                                                  GrowableArray<BasicType>* stk_basic_types) {
+  // Check stub cache first
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  if (cached != NULL) {
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Using cached virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                        p2i(cached->entry_point()),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        vtable_index,
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Using cached virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                          p2i(cached->entry_point()),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          vtable_index,
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
+    return cached->entry_point();
+  }
+
   ResourceMark rm;
   
   const int stub_size = 64;
@@ -660,6 +725,9 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
                           current_method->signature()->as_symbol()->as_utf8());
         }
     }
+
+  // Add to stub cache
+  _stub_cache->add(target_method, current_method, stub);
   
   return stub_addr;
 }
@@ -668,6 +736,36 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
 address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method, 
                                                    ciMethod* current_method,
                                                    GrowableArray<BasicType>* stk_basic_types) {
+  // Check stub cache first
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  if (cached != NULL) {
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Using cached interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(cached->entry_point()),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Using cached interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(cached->entry_point()),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
+    return cached->entry_point();
+  }
+
   ResourceMark rm;
   
   const int stub_size = 128;
@@ -825,6 +923,9 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
                           current_method->signature()->as_symbol()->as_utf8());
         }
     }
+
+  // Add to stub cache
+  _stub_cache->add(target_method, current_method, stub);
   
   return stub_addr;
 }
@@ -941,6 +1042,36 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
                                                             ciMethod* current_method,
                                                             GrowableArray<BasicType>* reg_basic_types,
                                                             GrowableArray<BasicType>* stk_basic_types) {
+  // Check stub cache first
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  if (cached != NULL) {
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            FILE *f = fopen(YuhuStackMapFile, "a");
+            fileStream fs(f, true);
+            fs.print_cr("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(cached->entry_point()),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+            fs.flush();
+        } else {
+            tty->print_cr("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(cached->entry_point()),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
+    return cached->entry_point();
+  }
+
   ResourceMark rm;
 
   const int stub_size = 256;
@@ -1108,6 +1239,9 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
       }
   }
 
+  // Add to stub cache
+  _stub_cache->add(target_method, current_method, stub);
+
   return stub_addr;
 }
 
@@ -1142,8 +1276,45 @@ address YuhuRuntime::_safepoint_poll_stub = NULL;
 
 address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
+// Stub cache for sharing YuhuRuntimeStubs
+YuhuRuntimeStubHashtable* YuhuRuntime::_stub_cache = NULL;
+
+// YuhuRuntimeStubHashtable implementation
+YuhuRuntimeStubHashtableEntry* YuhuRuntimeStubHashtable::new_entry(unsigned int hash,
+                                                                    ciMethod* target, ciMethod* current,
+                                                                    YuhuRuntimeStub* stub) {
+  YuhuRuntimeStubHashtableEntry* entry =
+    (YuhuRuntimeStubHashtableEntry*)BasicHashtable<mtCode>::new_entry(hash);
+  entry->set_target_method(target);
+  entry->set_current_method(current);
+  entry->set_literal(stub);
+  return entry;
+}
+
+YuhuRuntimeStub* YuhuRuntimeStubHashtable::find(ciMethod* target, ciMethod* current) {
+  unsigned int hash = compute_hash(target, current);
+  int index = hash_to_index(hash);
+  for (YuhuRuntimeStubHashtableEntry* e = (YuhuRuntimeStubHashtableEntry*)bucket(index);
+       e != NULL;
+       e = (YuhuRuntimeStubHashtableEntry*)e->next()) {
+    if (e->hash() == hash && e->matches(target, current)) {
+      return e->literal();
+    }
+  }
+  return NULL;
+}
+
+void YuhuRuntimeStubHashtable::add(ciMethod* target, ciMethod* current, YuhuRuntimeStub* stub) {
+  unsigned int hash = compute_hash(target, current);
+  int index = hash_to_index(hash);
+  YuhuRuntimeStubHashtableEntry* entry = new_entry(hash, target, current, stub);
+  add_entry(index, entry);
+}
+
 // Initialize all VM call stubs
 void YuhuRuntime::initialize_vm_stubs() {
+  // Initialize stub cache
+  _stub_cache = new YuhuRuntimeStubHashtable(1009);  // prime number for better distribution
   _new_instance_stub = generate_vm_stub("yuhu_new_instance_stub", (address) YuhuRuntime::new_instance);
   _newarray_stub = generate_vm_stub("yuhu_newarray_stub", (address) YuhuRuntime::newarray);
   _anewarray_stub = generate_vm_stub("yuhu_anewarray_stub", (address) YuhuRuntime::anewarray);

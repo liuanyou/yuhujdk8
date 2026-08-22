@@ -28,14 +28,54 @@
 
 #include "memory/allocation.hpp"
 #include "runtime/thread.hpp"
+#include "utilities/hashtable.hpp"
 
 class ciMethod;
+class YuhuRuntimeStub;
 
 extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 extern "C" void go_unwind();
 
+// Hashtable entry for caching YuhuRuntimeStubs keyed by (target_method, current_method)
+class YuhuRuntimeStubHashtableEntry : public HashtableEntry<YuhuRuntimeStub*, mtCode> {
+  ciMethod* _target_method;
+  ciMethod* _current_method;
+
+public:
+  ciMethod* target_method() const   { return _target_method; }
+  ciMethod* current_method() const  { return _current_method; }
+  void set_target_method(ciMethod* m)   { _target_method = m; }
+  void set_current_method(ciMethod* m)  { _current_method = m; }
+
+  bool matches(ciMethod* target, ciMethod* current) {
+    return _target_method == target && _current_method == current;
+  }
+};
+
+// Hashtable for caching YuhuRuntimeStubs to avoid duplicate stub generation
+class YuhuRuntimeStubHashtable : public BasicHashtable<mtCode> {
+public:
+  YuhuRuntimeStubHashtable(int table_size)
+    : BasicHashtable<mtCode>(table_size, sizeof(YuhuRuntimeStubHashtableEntry)) {}
+
+  YuhuRuntimeStubHashtableEntry* new_entry(unsigned int hash,
+                                            ciMethod* target, ciMethod* current,
+                                            YuhuRuntimeStub* stub);
+
+  YuhuRuntimeStub* find(ciMethod* target, ciMethod* current);
+
+  void add(ciMethod* target, ciMethod* current, YuhuRuntimeStub* stub);
+
+  static unsigned int compute_hash(ciMethod* target, ciMethod* current) {
+    return (unsigned int)(intptr_t)target ^ ((unsigned int)(intptr_t)current << 16);
+  }
+};
+
 class YuhuRuntime : public AllStatic {
+  // Stub cache for sharing YuhuRuntimeStubs
+  static YuhuRuntimeStubHashtable* _stub_cache;
+
   // VM call stubs (RuntimeStub wrappers)
  private:
   static address _new_instance_stub;
