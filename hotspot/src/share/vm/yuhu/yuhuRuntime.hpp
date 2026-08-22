@@ -68,7 +68,12 @@ public:
   void add(ciMethod* target, ciMethod* current, YuhuRuntimeStub* stub);
 
   static unsigned int compute_hash(ciMethod* target, ciMethod* current) {
-    return (unsigned int)(intptr_t)target ^ ((unsigned int)(intptr_t)current << 16);
+    // Use all 64 bits of both pointers to avoid collisions on 64-bit systems
+    uintptr_t t = (uintptr_t)target;
+    uintptr_t c = (uintptr_t)current;
+    unsigned int h1 = (unsigned int)(t ^ (t >> 32));
+    unsigned int h2 = (unsigned int)(c ^ (c >> 32));
+    return h1 ^ (h2 * 2654435761u);  // Knuth's multiplicative hash
   }
 };
 
