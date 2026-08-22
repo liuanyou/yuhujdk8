@@ -47,6 +47,7 @@
 //     - instruction space
 //   - data space
 class DeoptimizationBlob;
+class Metadata;
 
 class CodeBlob VALUE_OBJ_CLASS_SPEC {
 
@@ -159,6 +160,11 @@ class CodeBlob VALUE_OBJ_CLASS_SPEC {
 
   // GC support
   virtual bool is_alive() const                  = 0;
+
+  // Iterate over metadata embedded in this CodeBlob.
+  // Default implementation does nothing. Subclasses (e.g., YuhuRuntimeStub)
+  // override to report embedded Klass*, Method*, etc. for GC marking.
+  virtual void metadata_do(void f(Metadata*))    {}
 
   // OopMap for frame
   OopMapSet* oop_maps() const                    { return _oop_maps; }
@@ -335,6 +341,7 @@ class YuhuRuntimeStub : public RuntimeStub {
     friend class VMStructs;
 private:
     int _exception_handler_begin_offset;
+    int _metadata_offset;  // Offset to metadata section (from header_begin)
 
     // Creation support
     YuhuRuntimeStub(
@@ -363,6 +370,18 @@ public:
     bool is_yuhu_runtime_stub() const                   { return true; }
 
     int exception_handler_begin_offset() const { return _exception_handler_begin_offset; }
+
+    // Metadata section accessors (follows nmethod pattern)
+    // For YuhuRuntimeStub, we don't use oops, so metadata starts at data_offset
+    Metadata** metadata_begin() const { return (Metadata**)(header_begin() + _metadata_offset); }
+    Metadata** metadata_end() const   { return (Metadata**)(header_begin() + size()); }
+    int metadata_size() const         { return (address)metadata_end() - (address)metadata_begin(); }
+
+    // Copy metadata from code buffer's oop recorder into the embedded metadata section
+    void copy_metadata(CodeBuffer* cb);
+
+    // Iterate over all metadata embedded in this stub (for GC marking)
+    void metadata_do(void f(Metadata*));
 };
 
 

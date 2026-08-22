@@ -52,6 +52,8 @@ MetadataOnStackMark::MetadataOnStackMark() {
   CompileBroker::mark_on_stack();
   JvmtiCurrentBreakpoints::metadata_do(Metadata::mark_on_stack);
   ThreadService::metadata_do(Metadata::mark_on_stack);
+  // Mark metadata embedded in CodeBlobs (e.g., YuhuRuntimeStubs)
+  CodeCache::alive_blobs_metadata_do(Metadata::mark_on_stack);
 }
 
 MetadataOnStackMark::~MetadataOnStackMark() {

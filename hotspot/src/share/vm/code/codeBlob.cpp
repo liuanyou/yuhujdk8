@@ -382,6 +382,10 @@ YuhuRuntimeStub::YuhuRuntimeStub(
         : RuntimeStub(name, cb, sizeof(YuhuRuntimeStub), size, frame_complete, frame_size, oop_maps, caller_must_gc_arguments)
 {
     _exception_handler_begin_offset = exception_handler_begin_offset;
+    // Metadata section starts after the oop section (which is empty for YuhuRuntimeStub)
+    // Following nmethod pattern: _metadata_offset = _oops_offset + round_to(oop_size, oopSize)
+    // Since we don't use oops, _metadata_offset = data_offset()
+    _metadata_offset = data_offset() + round_to(cb->total_oop_size(), oopSize);
 }
 
 
@@ -401,9 +405,43 @@ YuhuRuntimeStub* YuhuRuntimeStub::new_yuhu_runtime_stub(const char* stub_name,
         stub = new (size) YuhuRuntimeStub(stub_name, cb, size, frame_complete, frame_size, oop_maps, caller_must_gc_arguments, exception_handler_begin_offset);
     }
 
+    // Copy metadata from code buffer's oop recorder into the stub's metadata section
+    stub->copy_metadata(cb);
+
     trace_new_stub(stub, "YuhuRuntimeStub - ", stub_name);
 
     return stub;
+}
+
+void YuhuRuntimeStub::copy_metadata(CodeBuffer* cb) {
+  // Copy metadata from code buffer's oop recorder into the embedded metadata section
+  // This follows nmethod's pattern of storing metadata in a dedicated section within the code blob
+  //
+  // Note: ValueRecorder uses 1-based indexing where index 0 is reserved for NULL.
+  // metadata_count() returns _handles->length() + 1 (includes the virtual NULL at index 0).
+  // metadata_at(0) always returns NULL, actual metadata starts at index 1.
+  // The metadata section size (from total_metadata_size()) is _handles->length() * sizeof(Metadata*),
+  // so we only copy the actual metadata entries (indices 1 to count-1).
+  int count = cb->oop_recorder()->metadata_count();
+  if (count <= 1) {
+    // No actual metadata (only the virtual NULL at index 0)
+    return;
+  }
+  
+  Metadata** dest = metadata_begin();
+  // Start from index 1 (skip NULL at index 0), copy count-1 entries
+  for (int i = 1; i < count; i++) {
+    dest[i - 1] = cb->oop_recorder()->metadata_at(i);
+  }
+}
+
+void YuhuRuntimeStub::metadata_do(void f(Metadata*)) {
+  Metadata** end = metadata_end();
+  for (Metadata** p = metadata_begin(); p < end; p++) {
+    if (*p != NULL) {
+      f(*p);
+    }
+  }
 }
 
 void* RuntimeStub::operator new(size_t s, unsigned size) throw() {

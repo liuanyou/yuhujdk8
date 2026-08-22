@@ -85,6 +85,9 @@ class CodeCache : AllStatic {
   static void nmethods_do(void f(nmethod* nm));     // iterates over all nmethods
   static void alive_nmethods_do(void f(nmethod* nm)); // iterates over all alive nmethods
 
+  // Iterate metadata embedded in all alive CodeBlobs (for GC marking)
+  static void alive_blobs_metadata_do(void f(Metadata*));
+
   // Lookup
   static CodeBlob* find_blob(void* start);
   static nmethod*  find_nmethod(void* start);

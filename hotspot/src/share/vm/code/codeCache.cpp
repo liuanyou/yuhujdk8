@@ -334,6 +334,13 @@ void CodeCache::blobs_do(CodeBlobClosure* f) {
   }
 }
 
+void CodeCache::alive_blobs_metadata_do(void f(Metadata*)) {
+  assert_locked_or_safepoint(CodeCache_lock);
+  FOR_ALL_ALIVE_BLOBS(cb) {
+    cb->metadata_do(f);
+  }
+}
+
 // Walk the list of methods which might contain non-perm oops.
 void CodeCache::scavenge_root_nmethods_do(CodeBlobClosure* f) {
   assert_locked_or_safepoint(CodeCache_lock);
