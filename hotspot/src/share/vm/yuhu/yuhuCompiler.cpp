@@ -46,6 +46,8 @@
 #include "yuhu/yuhuNativeWrapper.hpp"
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "runtime/sharedRuntime.hpp"
+#include "runtime/deoptimization.hpp"
 #include "utilities/debug.hpp"
 
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
@@ -895,19 +897,39 @@ bool YuhuCompiler::need_stack_bang(int frame_size_in_bytes) {
 
 // Measure adapter size for normal (non-OSR) method compilation.
 // Returns the exact byte size needed for the parameter adapter stub.
-int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes) {
-    const int kAdapterBufSize = 64;
+// For instance methods, includes the unverified entry type check size.
+int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes, ciMethod* target) {
+    const int kAdapterBufSize = 128;
     char adapter_buf[kAdapterBufSize];
     CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
 
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
 
-    YuhuLabel label;
+    YuhuLabel verified_entry;
 
-    masm.write_inst_b(label);
+    // Unverified entry: type check for instance methods
+    if (target != NULL && !target->is_static() && target->holder() != NULL) {
+        InstanceKlass* holder_ik = target->holder()->get_instanceKlass();
 
-    masm.pin_label(label);
+        // Load receiver's klass from x1 into x8
+        masm.write_insts_load_klass(YuhuMacroAssembler::x8, YuhuMacroAssembler::x1);
+
+        // Load expected klass (method holder) into x9
+        masm.write_insts_lea(YuhuMacroAssembler::x9, YuhuAddress((address)holder_ik));
+
+        // Compare receiver klass with expected klass
+        masm.write_inst_regs("cmp %s, %s", YuhuMacroAssembler::x8, YuhuMacroAssembler::x9);
+        // If match, branch to verified entry
+        masm.write_inst_b(YuhuMacroAssembler::eq, verified_entry);
+        // If mismatch, far jump to ic miss stub, for caller is c2 only
+        masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::get_ic_miss_stub()));
+    } else {
+        // No type check needed (static method or no target info): just branch to verified entry
+        masm.write_inst_b(verified_entry);
+    }
+
+    masm.pin_label(verified_entry);
 
     // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
     masm.write_inst("nop");
@@ -923,17 +945,45 @@ int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes) {
     return (int)(end - start);
 }
 
-int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes) {
+int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes, ciMethod* target) {
   YuhuMacroAssembler masm(&cb);
   address start = masm.current_pc();
 
-  YuhuLabel label;
+  YuhuLabel verified_entry;
 
-  masm.write_inst_b(label);
+  // Unverified entry: type check for instance methods.
+  // When C2 generates a direct call based on type profiling (without a type check
+  // in the caller), this unverified entry catches receiver type mismatches and
+  // deoptimizes, preventing execution of the wrong method body.
+  if (target != NULL && !target->is_static() && target->holder() != NULL) {
+      InstanceKlass* holder_ik = target->holder()->get_instanceKlass();
 
-  masm.pin_label(label);
+      // Load receiver's klass from x1 into x8
+      masm.write_insts_load_klass(YuhuMacroAssembler::x8, YuhuMacroAssembler::x1);
 
-    *verified_entry_point = masm.current_pc();
+      // Load expected klass (method holder) into x9 with metadata relocation
+      int metadata_index = cb.oop_recorder()->allocate_metadata_index(holder_ik);
+      RelocationHolder rspec = metadata_Relocation::spec(metadata_index);
+      address pc = masm.current_pc();
+      cb.relocate(pc, rspec);
+      masm.write_insts_lea(YuhuMacroAssembler::x9, YuhuAddress((address)holder_ik, relocInfo::metadata_type));
+
+      // Compare receiver klass with expected klass
+      masm.write_inst_regs("cmp %s, %s", YuhuMacroAssembler::x8, YuhuMacroAssembler::x9);
+
+      // If match, branch to verified entry
+      masm.write_inst_b(YuhuMacroAssembler::eq, verified_entry);
+
+      // If mismatch, far jump to ic miss stub, for caller is c2 only
+      masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::get_ic_miss_stub()));
+  } else {
+      // No type check needed (static method or no target info): just branch to verified entry
+      masm.write_inst_b(verified_entry);
+  }
+
+  masm.pin_label(verified_entry);
+
+  *verified_entry_point = masm.current_pc();
 
   // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
   masm.write_inst("nop");
@@ -1215,7 +1265,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   if (!is_osr) {
     // Normal method: build adapter + LLVM code into a combined CodeCache blob.
     // The adapter rearranges parameters from i2c adapter format to Yuhu's expected format.
-    adapter_size = measure_normal_adapter_size(actual_prologue_bytes);
+    adapter_size = measure_normal_adapter_size(actual_prologue_bytes, target);
     assert(adapter_size > 0 && adapter_size < 512, "adapter size sanity");
 
       // Measure exception handler and deopt handler sizes first
@@ -1238,10 +1288,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     address combined_base = combined_cb.insts_begin();
 
+    // Initialize oop recorder BEFORE adapter generation, so the adapter can
+    // record metadata relocations for the unverified entry type check.
+    combined_cb.initialize_oop_recorder(env->oop_recorder());
+
     // Emit adapter into combined buffer with correct addresses.
     // Use direct jump (pass NULL for llvm_label) to avoid patching complexity.
     address verified_entry_point;
-    int emitted_adapter = generate_normal_adapter_into(combined_cb, &verified_entry_point, actual_prologue_bytes);
+    int emitted_adapter = generate_normal_adapter_into(combined_cb, &verified_entry_point, actual_prologue_bytes, target);
     assert(emitted_adapter == adapter_size, "adapter size mismatch");
     assert(verified_entry_point != NULL, "verified entry point must have valid address");
 
@@ -1251,8 +1305,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
       combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
       
-      // Scan for oop markers and generate relocation records
-      combined_cb.initialize_oop_recorder(env->oop_recorder());
+      // oop recorder already initialized above before adapter generation
 
       builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
       // Generate unwind handler (always needed - JVM requires it for exception propagation)
