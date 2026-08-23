@@ -1358,6 +1358,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                          false,
                          false);
 
+    if (target->get_Method()->code() == NULL) {
+        env->record_failure("nmethod creation failed: code() is NULL after register_method");
+        return;
+    }
+
     if (YuhuTraceInstalls) {
         tty->print_cr("Yuhu: Register method %s successfully, nmethod: code_begin=%p, code_end=%p", func_name,
                       target->get_Method()->code()->code_begin(), target->get_Method()->code()->code_end());
