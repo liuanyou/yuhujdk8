@@ -43,28 +43,42 @@ int YuhuDebugInformationRecorder::_tls_index = -1;
 // Constructor
 YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
   : _module(NULL) {
-  _call_site_entries = new GrowableArray<CallSiteEntry*>();
-
-  _stack_map_entries = new GrowableArray<StackMapEntry*>();
-
-  _deopt_bundles = new GrowableArray<DeoptBundle*>();
-
-  _const_symbol_entries = new GrowableArray<ConstSymbolEntry*>();
-
-  _frame_layout_info = new FrameLayoutInfo();
-
-  _exception_table_info_records = new GrowableArray<ExceptionTableInfoRecord*>();
-
-  _handler_block_info_records = new GrowableArray<HandlerBlockInfoRecord*>();
-
+  // All memory (GrowableArrays, elements, nested objects) is allocated from this Arena.
+  // Deleting the Arena frees everything in one shot — zero manual cleanup.
+  _arena = new (mtCompiler) Arena();
+  init_collections();
   _func_size = 0;
   _unified_exit_block_start_pco = 0;
 }
 
+// (Re)initialize all collections from current _arena.
+void YuhuDebugInformationRecorder::init_collections() {
+  _call_site_entries = new (_arena) GrowableArray<CallSiteEntry*>(_arena, 10, 0, (CallSiteEntry*)NULL);
+  _stack_map_entries = new (_arena) GrowableArray<StackMapEntry*>(_arena, 10, 0, (StackMapEntry*)NULL);
+  _deopt_bundles = new (_arena) GrowableArray<DeoptBundle*>(_arena, 10, 0, (DeoptBundle*)NULL);
+  _const_symbol_entries = new (_arena) GrowableArray<ConstSymbolEntry*>(_arena, 10, 0, (ConstSymbolEntry*)NULL);
+  _frame_layout_info = new (_arena) FrameLayoutInfo();
+  _exception_table_info_records = new (_arena) GrowableArray<ExceptionTableInfoRecord*>(_arena, 10, 0, (ExceptionTableInfoRecord*)NULL);
+  _handler_block_info_records = new (_arena) GrowableArray<HandlerBlockInfoRecord*>(_arena, 10, 0, (HandlerBlockInfoRecord*)NULL);
+}
+
+// Reset all data for reuse in next compilation.
+// Delete the Arena (frees ALL memory), create a fresh one, reinitialize collections.
+void YuhuDebugInformationRecorder::reset() {
+  delete _arena;
+  _arena = new (mtCompiler) Arena();
+  init_collections();
+  // Reset scalar fields
+  _mangled_func_name.clear();
+  _func_size = 0;
+  _unified_exit_block_start_pco = 0;
+  _module = NULL;
+}
+
 // Destructor
 YuhuDebugInformationRecorder::~YuhuDebugInformationRecorder() {
-  // GrowableArrays will be cleaned up by ResourceArea or C heap
-  // depending on how this object was allocated
+  // Deleting the Arena frees all memory allocated from it
+  delete _arena;
 }
 
 // Initialize thread-local storage index
@@ -113,14 +127,14 @@ void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
     if (index != -1) {
         return;
     }
-    auto call_site_entry = new CallSiteEntry();
+    auto call_site_entry = new (_arena) CallSiteEntry();
     call_site_entry->virtual_offset = virtual_offset;
     call_site_entry->virtual_address = virtual_address;
     call_site_entry->helper_address = helper_address;
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
     call_site_entry->num_monitors = num_monitors;
-    call_site_entry->machine_code_offsets = new GrowableArray<CallSiteMachineCodeOffsets*>();
+    call_site_entry->machine_code_offsets = new (_arena) GrowableArray<CallSiteMachineCodeOffsets*>(_arena, 10, 0, (CallSiteMachineCodeOffsets*)NULL);
     _call_site_entries->append(call_site_entry);
 }
 
@@ -176,15 +190,15 @@ void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offse
         return *((uint32_t*)token) == entry->instruction_offset;
     });
     if (index == -1) {
-        auto stack_map_entry = new StackMapEntry();
+        auto stack_map_entry = new (_arena) StackMapEntry();
         stack_map_entry->instruction_offset = instruction_offset;
-        stack_map_entry->locations = new GrowableArray<StackMapLocation*>();
+        stack_map_entry->locations = new (_arena) GrowableArray<StackMapLocation*>(_arena, 10, 0, (StackMapLocation*)NULL);
         _stack_map_entries->append(stack_map_entry);
         index = _stack_map_entries->length() - 1;
     }
 
     StackMapEntry* entry = _stack_map_entries->at(index);
-    auto location = new StackMapLocation();
+    auto location = new (_arena) StackMapLocation();
     location->kind = location_kind;
     location->reg_num = location_reg_num;
     location->offset = location_offset;
@@ -201,11 +215,11 @@ void YuhuDebugInformationRecorder::register_deopt_bundle(uint32_t instruction_of
         // update bci
         _deopt_bundles->at(index)->bci = bci;
     } else {
-        auto deopt_bundle = new DeoptBundle();
+        auto deopt_bundle = new (_arena) DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = bci;
-        deopt_bundle->locals = new GrowableArray<uint8_t>();
-        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
+        deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
+        deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
     }
 }
@@ -215,11 +229,11 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t ins
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
     if (index == -1) {
-        auto deopt_bundle = new DeoptBundle();
+        auto deopt_bundle = new (_arena) DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<uint8_t>();
-        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
+        deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
+        deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
@@ -233,11 +247,11 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(u
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
     if (index == -1) {
-        auto deopt_bundle = new DeoptBundle();
+        auto deopt_bundle = new (_arena) DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<uint8_t>();
-        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
+        deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
+        deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
@@ -251,11 +265,11 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
         return *((uint32_t*)token) == bundle->instruction_offset;
     });
     if (index == -1) {
-        auto deopt_bundle = new DeoptBundle();
+        auto deopt_bundle = new (_arena) DeoptBundle();
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = 0;
-        deopt_bundle->locals = new GrowableArray<uint8_t>();
-        deopt_bundle->expression_stacks = new GrowableArray<uint8_t>();
+        deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
+        deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
         index = _deopt_bundles->length() - 1;
     }
@@ -269,7 +283,7 @@ void YuhuDebugInformationRecorder::register_const_symbol(uint64_t addr, uint64_t
         return *((uint32_t*)token) == entry->addr;
     });
     if (index == -1) {
-        auto const_symbol_entry = new ConstSymbolEntry();
+        auto const_symbol_entry = new (_arena) ConstSymbolEntry();
         const_symbol_entry->addr = addr;
         const_symbol_entry->start = start;
         const_symbol_entry->end = end;
@@ -318,7 +332,7 @@ void YuhuDebugInformationRecorder::register_exception_handler_info(int start_bci
     if (index != -1) {
         return;
     }
-    auto exception_table_info_record = new ExceptionTableInfoRecord();
+    auto exception_table_info_record = new (_arena) ExceptionTableInfoRecord();
     exception_table_info_record->start_bci = start_bci;
     exception_table_info_record->limit_bci = limit_bci;
     exception_table_info_record->handler_bci = handler_bci;
@@ -333,7 +347,7 @@ void YuhuDebugInformationRecorder::register_handler_block_info(uint32_t instruct
     if (index != -1) {
         return;
     }
-    auto handler_block_info_record = new HandlerBlockInfoRecord();
+    auto handler_block_info_record = new (_arena) HandlerBlockInfoRecord();
     handler_block_info_record->instruction_offset = instruction_offset;
     handler_block_info_record->start_bci = start_bci;
     handler_block_info_record->limit_bci = limit_bci;

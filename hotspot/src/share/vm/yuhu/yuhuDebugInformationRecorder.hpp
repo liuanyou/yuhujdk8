@@ -122,6 +122,11 @@ extern "C" void gc_safepoint_poll(JavaThread* thread);
 class YuhuDebugInformationRecorder : public ResourceObj {
 private:
 
+  // C_HEAP Arena for all allocations. Deleting this Arena frees all memory
+  // allocated from it (GrowableArray headers, internal data, and elements).
+  // This avoids manual delete calls for each element.
+  Arena* _arena;
+
   // Call site metadata for JITLink correlation
   // Maps virtual_offset → virtual_address → helper_address
   GrowableArray<CallSiteEntry*>* _call_site_entries;
@@ -164,6 +169,12 @@ public:
   static void release();
   void set_module(llvm::Module* mod) { _module = mod; }
 
+  // Reset all data for reuse in next compilation
+  void reset();
+
+  // (Re)initialize all collections from current _arena
+  void init_collections();
+
   // Call site related functions
   void register_call_site(uint64_t virtual_offset,
                           uint64_t virtual_address,
@@ -184,6 +195,7 @@ public:
               tty->print_cr("Yuhu: remove call site entry: index=%d, virtual_offset=%d, call_site_type=%d",
                             i, _call_site_entries->at(i)->virtual_offset, static_cast<uint8_t>(_call_site_entries->at(i)->call_site_type));
           }
+          // No need to manually delete — Arena owns all memory
           _call_site_entries->remove_at(i);
           // scan the same position again
       }
@@ -363,7 +375,7 @@ public:
               return;
           }
       }
-      auto call_site_mco = new CallSiteMachineCodeOffsets();
+      auto call_site_mco = new (_arena) CallSiteMachineCodeOffsets();
       call_site_mco->return_pc_offset = return_pc_offset;
       call_site_mco->blr_offset = blr_offset;
       if (call_target_offset) {

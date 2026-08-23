@@ -1206,6 +1206,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Initialize thread-local debug information recorder
     YuhuDebugInformationRecorder::initialize_tls();
     YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+    // Reset recorder to clear any stale data from previous compilations
+    recorder->reset();
     // Set the LLVM module reference for embedding metadata later
     recorder->set_module(YuhuContext::current().module());
 
