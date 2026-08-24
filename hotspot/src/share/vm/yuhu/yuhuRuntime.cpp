@@ -417,7 +417,7 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
                                                 ciMethod* current_method,
                                                 GrowableArray<BasicType>* stk_basic_types) {
   // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_STATIC_CALL);
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -570,7 +570,7 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, stub);
+  _stub_cache->add(target_method, current_method, YUHUSTUB_STATIC_CALL, stub);
   
   return stub_addr;
 }
@@ -581,7 +581,7 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
                                                  int vtable_index,
                                                  GrowableArray<BasicType>* stk_basic_types) {
   // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_VIRTUAL_CALL);
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -727,7 +727,7 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
     }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, stub);
+  _stub_cache->add(target_method, current_method, YUHUSTUB_VIRTUAL_CALL, stub);
   
   return stub_addr;
 }
@@ -737,7 +737,7 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
                                                    ciMethod* current_method,
                                                    GrowableArray<BasicType>* stk_basic_types) {
   // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INTERFACE_CALL);
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -925,7 +925,7 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
     }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, stub);
+  _stub_cache->add(target_method, current_method, YUHUSTUB_INTERFACE_CALL, stub);
   
   return stub_addr;
 }
@@ -1043,7 +1043,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
                                                             GrowableArray<BasicType>* reg_basic_types,
                                                             GrowableArray<BasicType>* stk_basic_types) {
   // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method);
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_DYNAMIC_CALL);
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -1240,7 +1240,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, stub);
+  _stub_cache->add(target_method, current_method, YUHUSTUB_DYNAMIC_CALL, stub);
 
   return stub_addr;
 }
@@ -1279,35 +1279,90 @@ address YuhuRuntime::_handle_deoptimization_stub = NULL;
 // Stub cache for sharing YuhuRuntimeStubs
 YuhuRuntimeStubHashtable* YuhuRuntime::_stub_cache = NULL;
 
+// ============================================================================
+// YuhuRuntimeStubCacheKey implementation
+// ============================================================================
+
+void YuhuRuntimeStubCacheKey::init_from(ciMethod* m) {
+  klass_name   = m->holder()->name()->get_symbol();
+  method_name  = m->name()->get_symbol();
+  signature    = m->signature()->get_symbol();
+  access_flags = m->flags().as_int();
+}
+
+bool YuhuRuntimeStubCacheKey::equals(const YuhuRuntimeStubCacheKey& other) const {
+  return klass_name   == other.klass_name   &&
+         method_name  == other.method_name  &&
+         signature    == other.signature    &&
+         access_flags == other.access_flags;
+}
+
+unsigned int YuhuRuntimeStubCacheKey::hash() const {
+  unsigned int h = (unsigned int)((uintptr_t)klass_name ^ ((uintptr_t)klass_name >> 32));
+  h = h * 31 + (unsigned int)((uintptr_t)method_name ^ ((uintptr_t)method_name >> 32));
+  h = h * 31 + (unsigned int)((uintptr_t)signature ^ ((uintptr_t)signature >> 32));
+  h = h * 31 + (unsigned int)access_flags;
+  return h;
+}
+
+// ============================================================================
+// YuhuRuntimeStubHashtableEntry implementation
+// ============================================================================
+
+void YuhuRuntimeStubHashtableEntry::init(ciMethod* target, ciMethod* current, YuhuStubCallType call_type) {
+  _target_key.init_from(target);
+  _current_key.init_from(current);
+  _call_type = call_type;
+}
+
+bool YuhuRuntimeStubHashtableEntry::matches(ciMethod* target, ciMethod* current, YuhuStubCallType call_type) {
+  YuhuRuntimeStubCacheKey tk, ck;
+  tk.init_from(target);
+  ck.init_from(current);
+  return _target_key.equals(tk) && _current_key.equals(ck) && _call_type == call_type;
+}
+
+// ============================================================================
 // YuhuRuntimeStubHashtable implementation
+// ============================================================================
+
+unsigned int YuhuRuntimeStubHashtable::compute_hash(ciMethod* target, ciMethod* current, YuhuStubCallType call_type) {
+  YuhuRuntimeStubCacheKey tk, ck;
+  tk.init_from(target);
+  ck.init_from(current);
+  // Combine both keys and call type into a single hash using Knuth's multiplicative hash
+  unsigned int h = tk.hash() ^ (ck.hash() * 2654435761u);
+  return h ^ ((unsigned int)call_type * 31);
+}
+
 YuhuRuntimeStubHashtableEntry* YuhuRuntimeStubHashtable::new_entry(unsigned int hash,
                                                                     ciMethod* target, ciMethod* current,
+                                                                    YuhuStubCallType call_type,
                                                                     YuhuRuntimeStub* stub) {
   YuhuRuntimeStubHashtableEntry* entry =
     (YuhuRuntimeStubHashtableEntry*)BasicHashtable<mtCode>::new_entry(hash);
-  entry->set_target_method(target);
-  entry->set_current_method(current);
+  entry->init(target, current, call_type);
   entry->set_literal(stub);
   return entry;
 }
 
-YuhuRuntimeStub* YuhuRuntimeStubHashtable::find(ciMethod* target, ciMethod* current) {
-  unsigned int hash = compute_hash(target, current);
+YuhuRuntimeStub* YuhuRuntimeStubHashtable::find(ciMethod* target, ciMethod* current, YuhuStubCallType call_type) {
+  unsigned int hash = compute_hash(target, current, call_type);
   int index = hash_to_index(hash);
   for (YuhuRuntimeStubHashtableEntry* e = (YuhuRuntimeStubHashtableEntry*)bucket(index);
        e != NULL;
        e = (YuhuRuntimeStubHashtableEntry*)e->next()) {
-    if (e->hash() == hash && e->matches(target, current)) {
+    if (e->hash() == hash && e->matches(target, current, call_type)) {
       return e->literal();
     }
   }
   return NULL;
 }
 
-void YuhuRuntimeStubHashtable::add(ciMethod* target, ciMethod* current, YuhuRuntimeStub* stub) {
-  unsigned int hash = compute_hash(target, current);
+void YuhuRuntimeStubHashtable::add(ciMethod* target, ciMethod* current, YuhuStubCallType call_type, YuhuRuntimeStub* stub) {
+  unsigned int hash = compute_hash(target, current, call_type);
   int index = hash_to_index(hash);
-  YuhuRuntimeStubHashtableEntry* entry = new_entry(hash, target, current, stub);
+  YuhuRuntimeStubHashtableEntry* entry = new_entry(hash, target, current, call_type, stub);
   add_entry(index, entry);
 }
 

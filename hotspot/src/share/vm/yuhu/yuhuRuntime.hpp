@@ -31,26 +31,53 @@
 #include "utilities/hashtable.hpp"
 
 class ciMethod;
+class Symbol;
 class YuhuRuntimeStub;
 
 extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 extern "C" void go_unwind();
 
-// Hashtable entry for caching YuhuRuntimeStubs keyed by (target_method, current_method)
-class YuhuRuntimeStubHashtableEntry : public HashtableEntry<YuhuRuntimeStub*, mtCode> {
-  ciMethod* _target_method;
-  ciMethod* _current_method;
+// Stable cache key for a method: (klass_name, method_name, signature, access_flags)
+// All Symbol* are interned in HotSpot, so pointer comparison is safe.
+// This avoids collisions from ephemeral ciMethod* or reusable Method* pointers.
+class YuhuRuntimeStubCacheKey : public ResourceObj {
+private:
+  Symbol* klass_name;
+  Symbol* method_name;
+  Symbol* signature;
+  jint    access_flags;
 
 public:
-  ciMethod* target_method() const   { return _target_method; }
-  ciMethod* current_method() const  { return _current_method; }
-  void set_target_method(ciMethod* m)   { _target_method = m; }
-  void set_current_method(ciMethod* m)  { _current_method = m; }
+  void init_from(ciMethod* m);
+  bool equals(const YuhuRuntimeStubCacheKey& other) const;
+  unsigned int hash() const;
+};
 
-  bool matches(ciMethod* target, ciMethod* current) {
-    return _target_method == target && _current_method == current;
-  }
+// Call type for YuhuRuntimeStub cache differentiation
+enum YuhuStubCallType {
+  YUHUSTUB_STATIC_CALL = 0,
+  YUHUSTUB_VIRTUAL_CALL,
+  YUHUSTUB_INTERFACE_CALL,
+  YUHUSTUB_DYNAMIC_CALL
+};
+
+// Hashtable entry for caching YuhuRuntimeStubs keyed by method properties
+// (klass_name, method_name, signature, access_flags) for both target and current methods,
+// plus the call type (static/virtual/interface/dynamic).
+class YuhuRuntimeStubHashtableEntry : public HashtableEntry<YuhuRuntimeStub*, mtCode> {
+  YuhuRuntimeStubCacheKey _target_key;
+  YuhuRuntimeStubCacheKey _current_key;
+  YuhuStubCallType       _call_type;
+
+public:
+  YuhuRuntimeStubCacheKey* target_key()   { return &_target_key; }
+  YuhuRuntimeStubCacheKey* current_key()  { return &_current_key; }
+  YuhuStubCallType call_type() const      { return _call_type; }
+
+  void init(ciMethod* target, ciMethod* current, YuhuStubCallType call_type);
+
+  bool matches(ciMethod* target, ciMethod* current, YuhuStubCallType call_type);
 };
 
 // Hashtable for caching YuhuRuntimeStubs to avoid duplicate stub generation
@@ -61,20 +88,14 @@ public:
 
   YuhuRuntimeStubHashtableEntry* new_entry(unsigned int hash,
                                             ciMethod* target, ciMethod* current,
+                                            YuhuStubCallType call_type,
                                             YuhuRuntimeStub* stub);
 
-  YuhuRuntimeStub* find(ciMethod* target, ciMethod* current);
+  YuhuRuntimeStub* find(ciMethod* target, ciMethod* current, YuhuStubCallType call_type);
 
-  void add(ciMethod* target, ciMethod* current, YuhuRuntimeStub* stub);
+  void add(ciMethod* target, ciMethod* current, YuhuStubCallType call_type, YuhuRuntimeStub* stub);
 
-  static unsigned int compute_hash(ciMethod* target, ciMethod* current) {
-    // Use all 64 bits of both pointers to avoid collisions on 64-bit systems
-    uintptr_t t = (uintptr_t)target;
-    uintptr_t c = (uintptr_t)current;
-    unsigned int h1 = (unsigned int)(t ^ (t >> 32));
-    unsigned int h2 = (unsigned int)(c ^ (c >> 32));
-    return h1 ^ (h2 * 2654435761u);  // Knuth's multiplicative hash
-  }
+  static unsigned int compute_hash(ciMethod* target, ciMethod* current, YuhuStubCallType call_type);
 };
 
 class YuhuRuntime : public AllStatic {
