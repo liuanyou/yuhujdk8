@@ -47,6 +47,7 @@ class ciSymbol : public ciBaseObject {
   friend class ciField;
   friend class ciObjArrayKlass;
   friend class YuhuRuntime;
+  friend class YuhuRuntimeStubCacheKey;
 
 private:
   const vmSymbols::SID _sid;

@@ -45,6 +45,8 @@ private:
   friend class ciMethod;
   friend class ciBytecodeStream;
   friend class ciObjectFactory;
+  friend class YuhuRuntime;
+  friend class YuhuRuntimeStubCacheKey;
 
   ciSignature(ciKlass* accessing_klass, constantPoolHandle cpool, ciSymbol* signature);
   ciSignature(ciKlass* accessing_klass,                           ciSymbol* signature, ciMethodType* method_type);
