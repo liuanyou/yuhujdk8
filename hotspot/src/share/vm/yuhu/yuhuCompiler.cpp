@@ -899,9 +899,7 @@ bool YuhuCompiler::need_stack_bang(int frame_size_in_bytes) {
 // Returns the exact byte size needed for the parameter adapter stub.
 // For instance methods, includes the unverified entry type check size.
 int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes, ciMethod* target) {
-    const int kAdapterBufSize = 128;
-    char adapter_buf[kAdapterBufSize];
-    CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
+    CodeBuffer temp_cb("yuhu_measure_adapter", 128 * K, 32 * K);
 
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
@@ -1361,6 +1359,9 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                          false);
 
     if (target->get_Method()->code() == NULL) {
+        if (YuhuTraceInstalls) {
+            tty->print_cr("Yuhu: Register method %s failed", func_name);
+        }
         env->record_failure("nmethod creation failed: code() is NULL after register_method");
         return;
     }
@@ -1563,8 +1564,7 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
 // Returns the exact byte size needed for the exception handler.
 int YuhuCompiler::measure_exception_handler_size() {
   // Use a temporary buffer on the stack to measure
-  const int kTempBufSize = 64;
-  CodeBuffer temp_cb("measure_exception_handler", kTempBufSize, 1);
+  CodeBuffer temp_cb("yuhu_measure_unwind_handler", 64 * K, 16 * K);
   YuhuMacroAssembler masm(&temp_cb);
   address start = masm.current_pc();
 
@@ -1618,8 +1618,7 @@ int YuhuCompiler::generate_exception_handler(CodeBuffer& cb, int handler_size) {
 // Generate unwind handler for propagating exceptions to callers
 // This is required by JVM for all compiled methods, even those without try-catch
 int YuhuCompiler::measure_unwind_handler_size(int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers) {
-    const int kTempBufSize = 64;
-    CodeBuffer temp_cb("measure_unwind_handler", kTempBufSize, 1);
+    CodeBuffer temp_cb("yuhu_measure_unwind_handler", 64 * K, 16 * K);
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
 
@@ -1726,8 +1725,7 @@ int YuhuCompiler::generate_unwind_handler(CodeBuffer& cb, int frame_size_in_byte
 // Returns the exact byte size needed for the deopt handler.
 int YuhuCompiler::measure_deopt_handler_size() {
   // Use a temporary buffer on the stack to measure
-  const int kTempBufSize = 64;
-  CodeBuffer temp_cb("measure_deopt_handler", kTempBufSize, 1);
+  CodeBuffer temp_cb("yuhu_measure_deopt_handler", 64 * K, 16 * K);
   YuhuMacroAssembler masm(&temp_cb);
   address start = masm.current_pc();
 
