@@ -463,13 +463,14 @@ public:
 
     void generate_native_code(llvm::orc::ResourceTrackerSP RT, YuhuEntry* entry,
                               Function*   function,
-                              const char* name) {
+                              const char* base_name) {
         // No need to set field table - runtime helper uses CP index directly.
+        std::string func_name = function->getName().str();
 
         // Print the LLVM bitcode, if requested
         if (YuhuPrintBitcodeOf != NULL) {
-            if (!fnmatch(YuhuPrintBitcodeOf, name, 0)) {
-                tty->print_cr("=== YUHU DEBUG: LLVM IR for function %s ===", name);
+            if (!fnmatch(YuhuPrintBitcodeOf, base_name, 0)) {
+                tty->print_cr("=== YUHU DEBUG: LLVM IR for function %s ===", func_name.c_str());
                 // LLVM 20: dump() may not be available in all builds
                 // Use print() with llvm::errs() instead
                 llvm::raw_ostream &OS = llvm::errs();
@@ -481,7 +482,7 @@ public:
         }
 
         if (YuhuVerifyFunction != NULL) {
-            if (!fnmatch(YuhuVerifyFunction, name, 0)) {
+            if (!fnmatch(YuhuVerifyFunction, base_name, 0)) {
                 verifyFunction(*function);
             }
         }
@@ -515,7 +516,7 @@ public:
         // Debug 1: Verify Function is in Module
         llvm::Module* func_mod = function->getParent();
         if (func_mod == NULL) {
-            fatal(err_msg("Function %s has no parent Module!", name));
+            fatal(err_msg("Function %s has no parent Module!", func_name.c_str()));
         }
 
         // Debug: Collect all instructions and verify they are in basic blocks
@@ -587,7 +588,7 @@ public:
 
         // Output IR to file for analysis (before verification)
         // This allows using LLVM tools like 'opt -verify' to analyze the IR
-        std::string ir_filename = std::string("/tmp/yuhu_ir_") + std::string(name) + ".ll";
+        std::string ir_filename = std::string("/tmp/yuhu_ir_") + func_name + ".ll";
         if (YuhuDumpIRToFile) {
             // Replace invalid filename characters
             for (size_t i = 0; i < ir_filename.length(); i++) {
@@ -623,7 +624,7 @@ public:
         if (llvm::verifyFunction(*function, &llvm::errs())) {
             tty->print_cr("Yuhu: IR verification failed! See %s for the IR", ir_filename.c_str());
             tty->print_cr("Yuhu: Run 'opt -verify %s' to get detailed error messages", ir_filename.c_str());
-            fatal(err_msg("Function %s failed IR verification!", name));
+            fatal(err_msg("Function %s failed IR verification!", func_name.c_str()));
         }
 
         // ========== End of 锁外调试代码 ==========
@@ -645,7 +646,7 @@ public:
 
 #ifndef NDEBUG
             if (YuhuPrintAsmOf != NULL) {
-                if (!fnmatch(YuhuPrintAsmOf, name, 0)) {
+                if (!fnmatch(YuhuPrintAsmOf, base_name, 0)) {
                     // LLVM 20+ uses lowercase setCurrentDebugType
                     llvm::setCurrentDebugType(X86_ONLY("x86-emitter") NOT_X86("jit"));
                     llvm::DebugFlag = true;
@@ -665,15 +666,13 @@ public:
 
             // Get the module containing this function (func_mod already defined above in lock)
             if (func_mod == NULL) {
-                fatal(err_msg("Function %s has no parent Module!", name));
+                fatal(err_msg("Function %s has no parent Module!", func_name.c_str()));
             }
 
             // For ORC JIT, we need to add the module to JITDylib
             // Since modules are already added at initialization, we just need to lookup the function
             // However, if this is a new function added to an existing module, we may need to re-add the module
             // For now, we'll try lookup first, and if it fails, we'll add the module
-
-            std::string func_name = function->getName().str();
 
             // Debug: Try to get mangled name
             auto MangledName = jit()->mangle(func_name);
@@ -693,7 +692,7 @@ public:
                 // Debug: Check if cloned module contains the function
                 llvm::Function* cloned_func = module_clone->getFunction(func_name);
                 if (cloned_func == NULL) {
-                    fatal(err_msg("Cloned module missing function %s", name));
+                    fatal(err_msg("Cloned module missing function %s", func_name.c_str()));
                 }
 
                 // CRITICAL: Create ThreadSafeContext using the SAME LLVMContext as the original module
@@ -718,7 +717,7 @@ public:
                     llvm::handleAllErrors(std::move(Err), [&](const llvm::ErrorInfoBase &EIB) {
                         ErrMsg = EIB.message();
                     });
-                    fatal(err_msg("Failed to add IR module for function %s: %s", name, ErrMsg.c_str()));
+                    fatal(err_msg("Failed to add IR module for function %s: %s", func_name.c_str(), ErrMsg.c_str()));
                 }
 
                 // oop resolution already done above (before addIRModule).
@@ -730,7 +729,7 @@ public:
                     llvm::handleAllErrors(Sym.takeError(), [&](const llvm::ErrorInfoBase &EIB) {
                         ErrMsg = EIB.message();
                     });
-                    fatal(err_msg("Failed to lookup function %s after adding module: %s", name, ErrMsg.c_str()));
+                    fatal(err_msg("Failed to lookup function %s after adding module: %s", func_name.c_str(), ErrMsg.c_str()));
                 }
             }
 
@@ -740,13 +739,15 @@ public:
         }
 
         if (code == NULL) {
-            fatal(err_msg("ORC JIT lookup returned NULL for %s. Check debug output above for details.", name));
+            fatal(err_msg("ORC JIT lookup returned NULL for %s. Check debug output above for details.", func_name.c_str()));
         }
 
         // For ORC JIT stage 1, we don't have CodeCache integration yet
         // Use code address directly (will be fixed in stage 2)
         size_t code_size = YuhuDebugInformationRecorder::get()->get_func_size();
-        assert(code_size != 0, "func size shouldn't be 0");
+        if (code_size == 0) {
+            assert(code_size != 0, "func size shouldn't be 0");
+        }
         if (YuhuTraceInstalls) {
             tty->print_cr("ORC JIT: Using code address directly (stage 1 - no CodeCache integration yet)");
             tty->print_cr("ORC JIT: code=%p (size will be determined later)", code);
@@ -763,13 +764,13 @@ public:
 
         // Register generated code for profiling, etc
         if (JvmtiExport::should_post_dynamic_code_generated())
-            JvmtiExport::post_dynamic_code_generated(name, code_start, code_limit);
+            JvmtiExport::post_dynamic_code_generated(base_name, code_start, code_limit);
 
         // Print debug information, if requested
         if (YuhuTraceInstalls) {
             tty->print_cr(
                     " [%p-%p): %s (%d bytes code)",
-                    code_start, code_limit, name, code_limit - code_start);
+                    code_start, code_limit, base_name, code_limit - code_start);
         }
     }
 
@@ -830,60 +831,6 @@ void YuhuCompiler::initialize() {
   ShouldNotCallThis();
 }
 
-// Emit OSR adapter into the given CodeBuffer using YuhuMacroAssembler.
-// Arguments expected by LLVM function: (Method*, osr_buf, base_pc, thread)
-// Incoming from interpreter OSR jump: x0 = osr_buf
-// If llvm_label is non-NULL, emit a branch to the label (to be patched later).
-// Otherwise, emit an absolute jump to llvm_entry.
-// NOTE: base_pc parameter is ignored - we use PC-relative address calculation instead.
-static int generate_osr_adapter_into(CodeBuffer& cb,
-                                     Method* method,
-                                     address base_pc,  // Unused - kept for compatibility
-                                     YuhuLabel* llvm_label,
-                                     address llvm_entry) {
-  YuhuMacroAssembler masm(&cb);
-  address start = masm.current_pc();
-
-  // Create a label at the start of the adapter to calculate base_pc
-  // This ensures base_pc points to the actual CodeCache address after register_method
-  YuhuLabel base_pc_label;
-  masm.pin_label(base_pc_label);
-
-  // Mark current PC for later use (avoid using lr).
-  YuhuLabel adapter_label;
-  masm.pin_label(adapter_label);
-  masm.write_inst_adr(YuhuMacroAssembler::x16, adapter_label); // x16 = current PC
-
-  // Save incoming osr_buf
-  masm.write_inst_mov_reg(YuhuMacroAssembler::x17, YuhuMacroAssembler::x0); // x17 = osr_buf
-
-  // Load Method* (literal)
-  masm.write_insts_mov_imm64(YuhuMacroAssembler::x0, (uint64_t)method);
-
-  // Restore osr_buf into x1
-  masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x17);
-
-  // Load base_pc using PC-relative address calculation
-  // This ensures base_pc is correct even after code relocation in nmethod::new_nmethod
-  masm.write_inst_adr(YuhuMacroAssembler::x2, base_pc_label); // x2 = base_pc (adapter start)
-
-  // Load thread into x3
-  masm.write_insts_get_thread(YuhuMacroAssembler::x3);
-
-  // Jump to LLVM entry using PC-relative jump
-  // This ensures the jump address is correct even after code relocation in nmethod::new_nmethod
-  if (llvm_label != NULL) {
-    masm.write_inst_b(*llvm_label);   // Placeholder, patched when label is bound
-  } else {
-    // Use relative jump instead of absolute address
-    // b instruction range is ±128MB, which is sufficient for adapter_size
-    masm.write_inst_b(llvm_entry);
-  }
-
-  address end = masm.current_pc();
-  return (int)(end - start);
-}
-
 bool YuhuCompiler::need_stack_bang(int frame_size_in_bytes) {
     // For Yuhu:
     // 1. stub_function() is always NULL (Yuhu doesn't generate stubs)
@@ -899,7 +846,7 @@ bool YuhuCompiler::need_stack_bang(int frame_size_in_bytes) {
 // Returns the exact byte size needed for the parameter adapter stub.
 // For instance methods, includes the unverified entry type check size.
 int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes, ciMethod* target) {
-    CodeBuffer temp_cb("yuhu_measure_adapter", 128 * K, 32 * K);
+    CodeBuffer temp_cb("yuhu_measure_normal_adapter", 128 * K, 32 * K);
 
     YuhuMacroAssembler masm(&temp_cb);
     address start = masm.current_pc();
@@ -938,6 +885,94 @@ int YuhuCompiler::measure_normal_adapter_size(int frame_size_in_bytes, ciMethod*
 
     // padding instruction in case it doesn't generate stack overflow check instructions
     masm.write_inst("nop");
+
+    address end = masm.current_pc();
+    return (int)(end - start);
+}
+
+int YuhuCompiler::measure_osr_adapter_size(int frame_size_in_bytes, ciTypeFlow* flow, ciMethod* target) {
+    CodeBuffer temp_cb("yuhu_measure_osr_adapter", 128 * K, 32 * K);
+
+    YuhuMacroAssembler masm(&temp_cb);
+    address start = masm.current_pc();
+    YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+
+    YuhuLabel verified_entry;
+
+    // No type check needed, just branch to verified entry
+    // 1. static method
+    // 2. instance method - receiver is in osr buffer, no need to verify receiver
+    masm.write_inst_b(verified_entry);
+
+    masm.pin_label(verified_entry);
+
+    // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
+    masm.write_inst("nop");
+
+    if (need_stack_bang(frame_size_in_bytes)) {
+        masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
+    }
+
+    // padding instruction in case it doesn't generate stack overflow check instructions
+    masm.write_inst("nop");
+
+    masm.write_inst("sub sp, sp, #%d", frame_size_in_bytes);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x9, YuhuMacroAssembler::x0);
+
+    ciTypeFlow::Block* start_block = flow->pre_order_at(flow->start_block_num());
+    for (int i = 0; i < target->max_locals(); ++i) {
+        int local_index = target->max_locals() - i - 1;
+        ciType* type = start_block->local_type_at(local_index);
+        switch (type->basic_type()) {
+            case T_INT:
+                masm.write_inst_ldr(YuhuMacroAssembler::w8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::w8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case T_LONG:
+                break;
+            case T_FLOAT:
+                masm.write_inst_ldr(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case T_DOUBLE:
+                break;
+            case T_OBJECT:
+            case T_ARRAY:
+                masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case ciTypeFlow::StateVector::T_NULL:
+                break;
+            case ciTypeFlow::StateVector::T_BOTTOM:
+                break;
+            case ciTypeFlow::StateVector::T_LONG2:
+                // larger local_index has T_LONG2, and smaller local_index has T_LONG, but actual value is saved in larger local_index
+                assert(start_block->local_type_at(local_index - 1)->basic_type() == T_LONG, "slot with smaller local_index should have T_LONG");
+                masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case ciTypeFlow::StateVector::T_DOUBLE2:
+                // larger local_index has T_DOUBLE2, and smaller local_index has T_DOUBLE, but actual value is saved in larger local_index
+                assert(start_block->local_type_at(local_index - 1)->basic_type() == T_DOUBLE, "slot with smaller local_index should have T_DOUBLE");
+                masm.write_inst_ldr(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            default:
+                ShouldNotReachHere();
+        }
+    }
+
+    for (int i = 0; i < recorder->max_monitors(); ++i) {
+        int monitor_index = recorder->max_monitors() - i - 1;
+        // process monitor header
+        masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, (target->max_locals() + i*2) * wordSize));
+        masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->monitor_header_offset_in_bytes(monitor_index)));
+        // process monitor object
+        masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, (target->max_locals() + i*2 + 1) * wordSize));
+        masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->monitor_object_offset_in_bytes(monitor_index)));
+    }
+
+    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
 
     address end = masm.current_pc();
     return (int)(end - start);
@@ -997,6 +1032,126 @@ int YuhuCompiler::generate_normal_adapter_into(CodeBuffer& cb, address* verified
   return (int)(end - start);
 }
 
+
+/**
+ *
+ * Register	Value	Status
+    x0	OSR buffer pointer (intptr_t*)	The only explicit parameter
+    x28	Thread*	Preserved — leave() and call_VM maintain it
+    x12	Method*	NOT guaranteed — leave() doesn't restore it
+    x1-x27	Undefined/garbage	Interpreter frame is torn down
+
+    interpreter layout has local and monitor area like:
+
+    0x16b580bb0: 0x0000000000000000 0x0000000000000000 - monitor [1] header / monitor [1] object (newest at lower address with large index)
+    0x16b580bc0: 0x0000000000000000 0x0000000000000000 - monitor [0] header / monitor [0] object
+    0x16b580bd0: 0x0000000000000000 0x0000000000442018 -  / local [4] (T_INT)
+    0x16b580be0: 0x0000000000442018 0x000009108840f114 - local [3] (T_INT) / local [2] (T_LONG) (physically 2 has T_LONG and 1 has T_LONG2, virtually it is opposite)
+    0x16b580bf0: 0x0000000000000000 0x0000000002faf080 - local [1] (T_LONG2) / local [0] (T_INT)
+
+   and osr buffer is pointing to last local variable and monitors are after local:
+
+    0x60000153ee08: 0x0000000000442018 0x0000000000442018 - local [4] (T_INT) / local [3] (T_INT)
+    0x60000153ee18: 0x000009108840f114 0x0000000000000000 - local [2] (T_LONG) / local [1] (T_LONG2)
+    0x60000153ee28: 0x0000000002faf080 0x0000000000000000 - local [0] (T_INT) /
+    0x60000153ee38: 0x0000000000000000 0x0000000000000000 - monitor [1] header / monitor [1] object (newest at lower address with large index)
+    0x60000153ee48: 0x0000000000000000 0x0000000000000000 - monitor [0] header / monitor [0] object
+ *
+ * @param cb
+ * @param verified_entry_point
+ * @param frame_size_in_bytes
+ * @param flow
+ * @param target
+ * @return
+ */
+int YuhuCompiler::generate_osr_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes, ciTypeFlow* flow, ciMethod* target) {
+    YuhuMacroAssembler masm(&cb);
+    address start = masm.current_pc();
+    YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+
+    YuhuLabel verified_entry;
+
+    // No type check needed, just branch to verified entry
+    // 1. static method
+    // 2. instance method - receiver is in osr buffer, no need to verify receiver
+    masm.write_inst_b(verified_entry);
+
+    masm.pin_label(verified_entry);
+
+    *verified_entry_point = masm.current_pc();
+
+    // this is verified entry point for instance method, it must be jump/nop instruction when called by NativeJump::patch_verified_entry
+    masm.write_inst("nop");
+
+    if (need_stack_bang(frame_size_in_bytes)) {
+        masm.write_insts_generate_stack_overflow_check(frame_size_in_bytes);
+    }
+
+    // padding instruction in case it doesn't generate stack overflow check instructions
+    masm.write_inst("nop");
+
+    masm.write_inst("sub sp, sp, #%d", frame_size_in_bytes);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x9, YuhuMacroAssembler::x0);
+
+    ciTypeFlow::Block* start_block = flow->pre_order_at(flow->start_block_num());
+    for (int i = 0; i < target->max_locals(); ++i) {
+        int local_index = target->max_locals() - i - 1;
+        ciType* type = start_block->local_type_at(local_index);
+        switch (type->basic_type()) {
+            case T_INT:
+                masm.write_inst_ldr(YuhuMacroAssembler::w8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::w8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case T_LONG:
+                break;
+            case T_FLOAT:
+                masm.write_inst_ldr(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::s16, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case T_DOUBLE:
+                break;
+            case T_OBJECT:
+            case T_ARRAY:
+                masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case ciTypeFlow::StateVector::T_NULL:
+                break;
+            case ciTypeFlow::StateVector::T_BOTTOM:
+                break;
+            case ciTypeFlow::StateVector::T_LONG2:
+                // larger local_index has T_LONG2, and smaller local_index has T_LONG, but actual value is saved in larger local_index
+                assert(start_block->local_type_at(local_index - 1)->basic_type() == T_LONG, "slot with smaller local_index should have T_LONG");
+                masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            case ciTypeFlow::StateVector::T_DOUBLE2:
+                // larger local_index has T_DOUBLE2, and smaller local_index has T_DOUBLE, but actual value is saved in larger local_index
+                assert(start_block->local_type_at(local_index - 1)->basic_type() == T_DOUBLE, "slot with smaller local_index should have T_DOUBLE");
+                masm.write_inst_ldr(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::x9, i * wordSize));
+                masm.write_inst_str(YuhuMacroAssembler::d16, YuhuAddress(YuhuMacroAssembler::sp, recorder->local_offset_in_bytes(local_index)));
+                break;
+            default:
+                ShouldNotReachHere();
+        }
+    }
+
+    for (int i = 0; i < recorder->max_monitors(); ++i) {
+        int monitor_index = recorder->max_monitors() - i - 1;
+        // process monitor header
+        masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, (target->max_locals() + i*2) * wordSize));
+        masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->monitor_header_offset_in_bytes(monitor_index)));
+        // process monitor object
+        masm.write_inst_ldr(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::x9, (target->max_locals() + i*2 + 1) * wordSize));
+        masm.write_inst_str(YuhuMacroAssembler::x8, YuhuAddress(YuhuMacroAssembler::sp, recorder->monitor_object_offset_in_bytes(monitor_index)));
+    }
+
+    masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
+
+    address end = masm.current_pc();
+    return (int)(end - start);
+}
+
 bool YuhuCompiler::contains_incomplete_state_analysis(ciTypeFlow* flow) {
     // Walk through CI blocks
     int limit_bci = flow->code_size();
@@ -1027,19 +1182,13 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   assert(is_initialized(), "should be");
   ResourceMark rm;
   
-  // ========== 临时测试：只测试普通编译 ==========
+  // ========== 临时测试：只测试OSR编译 ==========
   // TODO: 测试完成后删除此代码块
-  if (entry_bci != InvocationEntryBci) {
-    // 跳过 OSR 编译，只测试普通编译
-    // 调用 record_failure 来标记编译失败，这样 compileBroker 就不会
-    // 调用 record_method_not_compilable，从而避免断言失败。
-    // 注意：record_failure 不会标记方法为不可编译，只是记录失败原因。
-    if (YuhuTraceOsrCompilation) {
-        tty->print_cr("Yuhu: SKIPPING OSR compilation for %s (entry_bci=%d) - normal-only test mode",
-                      methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
-                      entry_bci);
-    }
-    env->record_failure("normal-only test mode: skipping OSR compilation");
+  if (entry_bci == InvocationEntryBci) {
+      tty->print_cr("Yuhu: SKIPPING normal compilation for %s (entry_bci=%d) - osr-only test mode",
+                    methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
+                    entry_bci);
+    env->record_failure("osr-only test mode: skipping normal compilation");
     return;
   }
 //  if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
@@ -1078,13 +1227,11 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   const char *base_name = methodname(
     target->holder()->name()->as_utf8(), target->name()->as_utf8());
 
-  // Use base name directly for both OSR and normal entries.
-  // ORC JIT uses JITDylib isolation, so we don't need to distinguish by function name.
-  // Removing the ".osr.<entry_bci>" suffix that was added for MCJIT compatibility.
-  const char *func_name = base_name;
+  // generate unique func name with _v and _t suffix
+  const char *func_name = funcname(base_name);
 
     if (YuhuTraceInstalls) {
-        tty->print_cr("Yuhu: Start compiling method %s", func_name);
+        tty->print_cr("Yuhu: Start compiling method %s", base_name);
     }
 
   // Do the typeflow analysis
@@ -1170,7 +1317,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 //  }
 
     if (YuhuTraceInstalls) {
-        tty->print_cr("Yuhu: Continue compiling method %s", func_name);
+        tty->print_cr("Yuhu: Continue compiling method %s", base_name);
     }
 
   if (YuhuPrintTypeflowOf != NULL) {
@@ -1211,19 +1358,19 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
   Function *function = YuhuFunction::build(env, &builder, flow, func_name);
   if (env->failing()) {
-    tty->print_cr("Yuhu: compile failing during IR build for %s (func_name=%s) entry_bci=%d comp_level=%d",
-                  base_name, func_name, entry_bci, env->comp_level());
+    tty->print_cr("Yuhu: compile failing during IR build for %s (base_name=%s) entry_bci=%d comp_level=%d",
+                  base_name, base_name, entry_bci, env->comp_level());
     YuhuDebugInformationRecorder::release();
     return;
   }
 
     if (YuhuTraceInstalls) {
-        tty->print_cr("Yuhu: Generate native code for method %s", func_name);
+        tty->print_cr("Yuhu: Generate native code for method %s", base_name);
     }
   
   // NEW: Embed call site mappings as metadata before compilation
   // This allows the JITLink plugin to extract virtual address mappings
-  YuhuDebugInformationRecorder::get()->embed_call_site_metadata();
+  recorder->embed_call_site_metadata();
 
   llvm::orc::ResourceTrackerSP RT = _p_impl->jit_without_lock()->getMainJITDylib().createResourceTracker();
 
@@ -1232,7 +1379,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // other way to handle the locking.
   {
     ThreadInVMfromNative tiv(JavaThread::current());
-    _p_impl->generate_native_code(RT, entry, function, func_name);
+    _p_impl->generate_native_code(RT, entry, function, base_name);
 
     address code_start = entry->code_start();
     llvm_code_size = entry->code_limit() - code_start;
@@ -1249,7 +1396,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start, &prologue_registers);
   assert(actual_prologue_bytes > 0, "prologue bytes should be greater than 0");
   int actual_prologue_words = actual_prologue_bytes / wordSize;
-  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, prologue_registers.length() * 2);
+  recorder->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, prologue_registers.length() * 2);
 
   // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = actual_prologue_words;
@@ -1272,7 +1419,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, &prologue_registers);
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
-    int consts_size = YuhuDebugInformationRecorder::get()->total_const_symbol_size();
+    int consts_size = recorder->total_const_symbol_size();
 
     size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
@@ -1340,7 +1487,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
 
     // Register oop map
-    YuhuDebugInformationRecorder::get()->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
+    recorder->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
     // Generate exception handler table
 //    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
     
@@ -1372,91 +1519,111 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     }
   } else {
     // OSR method: build adapter + LLVM code into a combined CodeCache blob.
+      adapter_size = measure_osr_adapter_size(actual_prologue_bytes, flow, target);
+      assert(adapter_size > 0 && adapter_size < 512, "adapter size sanity");
 
-    // First, measure adapter size using a temporary CodeBuffer.
-    const int kAdapterBufSize = 512;
-    char adapter_buf[kAdapterBufSize];
-    CodeBuffer temp_cb((address)adapter_buf, (CodeBuffer::csize_t)kAdapterBufSize);
-    YuhuLabel dummy_label;
-    adapter_size = generate_osr_adapter_into(temp_cb,
-                                             target->get_Method(),
-                                             /*base_pc*/ (address)0,  // placeholder
-                                             &dummy_label,
-                                             /*llvm_entry*/ (address)0);
-    assert(adapter_size > 0 && adapter_size < kAdapterBufSize, "adapter size sanity");
+      // Measure exception handler and deopt handler sizes first
+      int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, &prologue_registers);
+      int exc_handler_size  = measure_exception_handler_size();
+      int deopt_handler_size = measure_deopt_handler_size();
+      int consts_size = recorder->total_const_symbol_size();
 
-    size_t combined_size = adapter_size + llvm_code_size;
+      size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
-    // Allocate new BufferBlob from CodeCache to hold adapter + llvm code.
-    BufferBlob* combined_blob = BufferBlob::create("yuhu-osr-combined", combined_size);
-    if (combined_blob == NULL) {
-      fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined BufferBlob (size=%zu)", combined_size));
-    }
+      // Create CodeBuffer that manages its own BufferBlob internally
+      CodeBuffer combined_cb("yuhu-osr-combined", (int)combined_size + exc_handler_size + deopt_handler_size + consts_size, (int)(combined_size * 0.15));
+      if (combined_cb.blob() == NULL) {
+          fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
+      }
+      if (consts_size > 0) {
+          combined_cb.initialize_consts_size(consts_size);
+      }
+      combined_cb.initialize_stubs_size( exc_handler_size + deopt_handler_size);
 
-    address combined_base = (address)combined_blob->content_begin();
-    CodeBuffer combined_cb(combined_base, (CodeBuffer::csize_t)combined_size);
+      address combined_base = combined_cb.insts_begin();
 
-    // Emit adapter into combined buffer with correct addresses.
-    YuhuLabel llvm_entry_label;
-    int emitted_adapter = generate_osr_adapter_into(combined_cb,
-                                                    target->get_Method(),
-                                                    /*base_pc*/ combined_base,
-                                                    &llvm_entry_label,
-                                                    /*llvm_entry*/ combined_base + adapter_size);
-    assert(emitted_adapter == adapter_size, "adapter size mismatch");
+      // Initialize oop recorder BEFORE adapter generation, so the adapter can
+      // record metadata relocations for the unverified entry type check.
+      combined_cb.initialize_oop_recorder(env->oop_recorder());
 
-    // Copy LLVM code after adapter.
-    memcpy(combined_base + adapter_size, entry->code_start(), llvm_code_size);
+      // Emit adapter into combined buffer with correct addresses.
+      // Use direct jump (pass NULL for llvm_label) to avoid patching complexity.
+      address verified_entry_point;
+      int emitted_adapter = generate_osr_adapter_into(combined_cb, &verified_entry_point, actual_prologue_bytes, flow, target);
+      assert(emitted_adapter == adapter_size, "adapter size mismatch");
+      assert(verified_entry_point != NULL, "verified entry point must have valid address");
 
-    // Extend instruction section to cover adapter + LLVM code, then patch jump.
-    combined_cb.insts()->set_end(combined_base + combined_size);
-    {
-      YuhuMacroAssembler patch_masm(&combined_cb);
-      // Move the pc to LLVM entry for binding
-      combined_cb.insts()->set_end(combined_base + adapter_size);
-      patch_masm.pin_label(llvm_entry_label);
-      // Restore end to full size
+      // Copy LLVM code after adapter.
+      // Only copy effective code (excluding trailing udf #0 padding)
+      memcpy(combined_base + adapter_size, entry->code_start(), effective_code_size);
+
+      combined_cb.insts()->set_end(combined_base + adapter_size + effective_code_size);
+
+      // oop recorder already initialized above before adapter generation
+
+      builder.scan_and_generate_all_relocations(entry->code_start(), effective_code_size, &combined_cb, combined_base, adapter_size);
+      // Generate unwind handler (always needed - JVM requires it for exception propagation)
+      // This is different from exception handler - unwind handler propagates exceptions upward.
+      // frame_size_in_bytes is the complete yuhu frame size in bytes, used to restore SP
+      // before jumping to unwind_exception_id.
+      // Must do after scan_and_generate_all_relocations, otherwise reloc will be created failed for decreased error
+      generate_unwind_handler(combined_cb, frame_size * wordSize, &prologue_registers);
+
+      // Extend instruction section to cover adapter + LLVM code.
       combined_cb.insts()->set_end(combined_base + combined_size);
-    }
 
-    // Update entry points to the combined blob.
-    entry->set_entry_point(combined_base);
-    entry->set_code_limit(combined_base + combined_size);
+      // Generate exception handler stub
+      generate_exception_handler(combined_cb, exc_handler_size);
 
-    // Prepare CodeBuffer for register_method.
-    CodeBuffer final_cb(combined_base, (CodeBuffer::csize_t)combined_size);
-    final_cb.insts()->set_end(combined_base + combined_size);
-    final_cb.initialize_oop_recorder(env->oop_recorder());
+      // Generate deopt handler (always needed)
+      generate_deopt_handler(combined_cb, deopt_handler_size);
 
-    // For OSR nmethods, entry/verified_entry should be identical (static check),
-    // and execution enters via OSR_Entry. Keep both at 0 to satisfy nmethod asserts.
-    offsets.set_value(CodeOffsets::Entry, 0);
-    offsets.set_value(CodeOffsets::Verified_Entry, 0);
-    offsets.set_value(CodeOffsets::OSR_Entry, 0);           // adapter at start
+      if (target->is_static()) {
+          // Static methods: both entry points point to adapter (no class check needed)
+          offsets.set_value(CodeOffsets::Entry, 0);
+          offsets.set_value(CodeOffsets::Verified_Entry, 0);
+          offsets.set_value(CodeOffsets::OSR_Entry, 0);
+      } else {
+          // Non-static methods: Entry points to adapter (for class check),
+          // Verified_Entry points to LLVM code (skip class check)
+          offsets.set_value(CodeOffsets::Entry, 0);
+          offsets.set_value(CodeOffsets::Verified_Entry, (int)(verified_entry_point - combined_base));
+          offsets.set_value(CodeOffsets::OSR_Entry, 0);
+      }
 
-    tty->print_cr("Yuhu: Registering OSR method - combined_base=%p, frame_size=%d words",
-                  combined_base, frame_size);
-    
-    // Generate minimal scope descriptor for deoptimization support
-    DebugInformationRecorder* debug_info = env->debug_info();
-    if (debug_info != NULL) {
-      tty->print_cr("Yuhu: Generating minimal scope descriptor for OSR method");
-//      YuhuDebugInfo::generate_minimal_debug_info(debug_info, target, frame_size);
-    }
-    
-    env->register_method(target,
-                         entry_bci,
-                         &offsets,
-                         0,
-                         &final_cb,
-                         frame_size,  // Pass calculated frame_size in words
-                         &oopmaps,
-                         &handler_table,
-                         &inc_table,
-                         this,
-                         env->comp_level(),
-                         false,
-                         false);
+      offsets.set_value(CodeOffsets::UnwindHandler, adapter_size + effective_code_size);
+      offsets.set_value(CodeOffsets::Exceptions, 0);
+      offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
+
+      // Register oop map
+      recorder->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
+
+      env->register_method(target,
+                           entry_bci,
+                           &offsets,
+                           0,
+                           &combined_cb,
+                           frame_size,  // Pass calculated frame_size in words
+                           &oopmaps,
+                           &handler_table,
+                           &inc_table,
+                           this,
+                           env->comp_level(),
+                           false,
+                           false);
+
+      if (target->get_Method()->code() == NULL) {
+          if (YuhuTraceInstalls) {
+              tty->print_cr("Yuhu: Register osr method %s failed", base_name);
+          }
+          env->record_failure("osr nmethod creation failed: code() is NULL after register_method");
+          return;
+      }
+
+      if (YuhuTraceInstalls) {
+          tty->print_cr("Yuhu: Register osr method %s successfully, nmethod: code_begin=%p, code_end=%p", base_name,
+                        target->get_Method()->code()->code_begin(), target->get_Method()->code()->code_end());
+      }
   }
 
 #if LLVM_VERSION_MAJOR >= 4
@@ -1471,6 +1638,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Release thread-local debug information recorder after compilation is complete
     // This frees the C heap memory and clears the TLS slot
     YuhuDebugInformationRecorder::release();
+
     if (auto Err = RT->remove()) {
         llvm::consumeError(std::move(Err));
     }
@@ -1516,12 +1684,8 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
 
     llvm::orc::ResourceTrackerSP  RT = _p_impl->jit_without_lock()->getMainJITDylib().createResourceTracker();
 
-    // Generate native code
+    // Generate native code (also handles symbol removal and RT->remove())
     _p_impl->generate_native_code(RT, entry, wrapper->function(), name);
-
-    if (auto Err = RT->remove()) {
-        llvm::consumeError(std::move(Err));
-    }
 
     // Return the nmethod for installation in the VM
     return nmethod::new_native_nmethod(target,
@@ -1558,6 +1722,25 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
   }
   *(dst++) = '\0';
   return buf;
+}
+
+const char* YuhuCompiler::funcname(const char *base_name) {
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    std::ostringstream oss;
+    oss << base_name << "_t" << ms;
+    std::string str = oss.str();  // Store string to avoid dangling pointer
+    char *buf = NEW_RESOURCE_ARRAY(char, str.length() + 1);
+
+    char *dst = buf;
+    for (const char *c = str.c_str(); *c; c++) {
+        if (*c == '/')
+            *(dst++) = '.';
+        else
+            *(dst++) = *c;
+    }
+    *dst = '\0';  // Null-terminate
+    return buf;
 }
 
 // Measure exception handler size (without actually generating code).

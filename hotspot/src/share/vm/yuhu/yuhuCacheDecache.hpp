@@ -334,7 +334,7 @@ class YuhuFunctionEntryCacher : public YuhuCacher {
  private:
   llvm::Value* _method;
 
- private:
+ protected:
   llvm::Value* method() const {
     return _method;
   }
@@ -379,34 +379,16 @@ class YuhuNormalEntryCacher : public YuhuFunctionEntryCacher {
 
 class YuhuOSREntryCacher : public YuhuFunctionEntryCacher {
  public:
+  // OSR entry: the adapter copies ALL live locals (including parameters)
+  // from the OSR buffer into Yuhu frame slots.
+  // This cacher reads them back from frame slots — no special parameter handling.
+  // Uses inherited YuhuCacher::process_local_slot for locals.
   YuhuOSREntryCacher(YuhuFunction* function,
-                      llvm::Value*   method,
-                      llvm::Value*   osr_buf)
-    : YuhuFunctionEntryCacher(function, method),
-      _osr_buf(
-        builder()->CreateBitCast(
-          osr_buf,
-          llvm::PointerType::getUnqual(
-            llvm::ArrayType::get(
-              YuhuType::intptr_type(),
-              max_locals() + max_monitors() * 2)))) {}
+                      llvm::Value*   method)
+    : YuhuFunctionEntryCacher(function, method) {}
 
- private:
-  llvm::Value* _osr_buf;
-
- private:
-  llvm::Value* osr_buf() const {
-    return _osr_buf;
-  }
-
-  // Callbacks
  protected:
   void process_monitor(int index, int box_offset, int obj_offset);
-  void process_local_slot(int index, YuhuValue** value, int offset);
-
-  // Helper
- private:
-  llvm::Value* CreateAddressOfOSRBufEntry(int offset, llvm::Type* type);
 };
 
 #endif // SHARE_VM_YUHU_YUHUCACHEDECACHE_HPP

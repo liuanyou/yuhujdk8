@@ -249,13 +249,15 @@ YuhuNormalEntryState::YuhuNormalEntryState(YuhuTopLevelBlock* block,
 }
 
 YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
-                                       Value*              method,
-                                       Value*              osr_buf)
+                                       Value*              method)
   : YuhuState(block) {
   assert(block->stack_depth_at_entry() == 0, "entry block shouldn't have stack");
   set_num_monitors(block->ciblock()->monitor_count());
 
   // Local variables
+  // Unlike YuhuNormalEntryState, OSR entry can have live non-parameter locals
+  // (e.g., loop counters, accumulators computed before the loop).
+  // The OSR adapter stores ALL live locals into the Yuhu frame slots.
   for (int i = 0; i < max_locals(); i++) {
     ciType *type = block->local_type_at_entry(i);
     set_local_type(i, type);  // Track slot type
@@ -268,7 +270,8 @@ YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
     case T_DOUBLE:
     case T_OBJECT:
     case T_ARRAY:
-      value = YuhuValue::create_generic(type, NULL, false);
+      // Both parameter and non-parameter locals can be live at OSR entry
+      value = YuhuValue::create_generic(type, NULL, i == 0 && !is_static());
       break;
 
     case ciTypeFlow::StateVector::T_NULL:
@@ -287,7 +290,9 @@ YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
     }
     set_local(i, value);
   }
-  YuhuOSREntryCacher(block->function(), method, osr_buf).scan(this);
+  // The OSR adapter stores all live locals into Yuhu frame slots.
+  // YuhuOSREntryCacher reads them back from the frame slots.
+  YuhuOSREntryCacher(block->function(), method).scan(this);
 }
 
 YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)

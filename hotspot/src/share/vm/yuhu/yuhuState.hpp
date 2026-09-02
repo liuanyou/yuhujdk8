@@ -181,11 +181,13 @@ class YuhuNormalEntryState : public YuhuState {
 
 // YuhuOSREntryState objects are used to create the state
 // that the method will be entered with for an OSR invocation.
+// Unlike YuhuNormalEntryState, this accepts ALL live locals (both
+// parameters and non-parameters). The OSR adapter stores values into
+// the Yuhu frame slots; this state reads them back.
 class YuhuOSREntryState : public YuhuState {
  public:
   YuhuOSREntryState(YuhuTopLevelBlock* block,
-                     llvm::Value*        method,
-                     llvm::Value*        osr_buf);
+                     llvm::Value*        method);
 };
 
 // YuhuPHIState objects are used to manage the entry state

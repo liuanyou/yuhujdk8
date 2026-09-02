@@ -159,6 +159,24 @@ private:
 
   uint64_t _unified_exit_block_start_pco;
 
+  void check_frame_layout_info() const {
+      assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
+             _frame_layout_info->num_of_prologue_registers != -1 &&
+             _frame_layout_info->header_words != -1 &&
+             _frame_layout_info->monitor_words != -1 &&
+             _frame_layout_info->stack_words != -1 &&
+             _frame_layout_info->locals_words != -1 &&
+             _frame_layout_info->extended_frame_words != -1 &&
+             _frame_layout_info->extended_frame_reg_num != -1 &&
+             _frame_layout_info->extended_frame_kind != -1 &&
+             _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
+      // Usually it should be fp register, sometimes it uses sp register,
+      // but don't know when, assume it is always fp register
+      assert(_frame_layout_info->extended_frame_reg_num == 29 &&
+             _frame_layout_info->extended_frame_offset < 0 &&
+             _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+  }
+
 public:
   YuhuDebugInformationRecorder();
   ~YuhuDebugInformationRecorder();
@@ -406,6 +424,74 @@ public:
   void register_exception_handler_info(int start_bci, int limit_bci, int handler_bci, bool is_catch_all);
 
   void register_handler_block_info(uint32_t instruction_offset, uint32_t start_bci, uint32_t limit_bci, uint32_t num_exceptions, uint32_t num_successors);
+
+  int max_monitors() const {
+      check_frame_layout_info();
+
+      int max_monitors = _frame_layout_info->monitor_words / 2;
+
+      return max_monitors;
+  }
+
+  /**
+   * for T_LONG/T_DOUBLE type, local_index+1 has actual value and local_index has padding value.
+   *
+   * @param local_index
+   * @return
+   */
+    int local_offset_in_bytes(int local_index) const {
+        check_frame_layout_info();
+
+        // 2 words is for x29,x30 in prologue
+        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
+                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+
+        assert(spill_words >= 0, "spill_words has invalid value");
+
+        assert(local_index < _frame_layout_info->locals_words, "local index is invalid value");
+
+        int offset_in_bytes = (spill_words + _frame_layout_info->stack_words + _frame_layout_info->monitor_words +
+                                     _frame_layout_info->header_words + _frame_layout_info->locals_words - 1 - local_index) * wordSize;
+        return offset_in_bytes;
+    }
+
+    int monitor_header_offset_in_bytes(int monitor_index) const {
+        check_frame_layout_info();
+
+        // 2 words is for x29,x30 in prologue
+        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
+                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+
+        assert(spill_words >= 0, "spill_words has invalid value");
+
+        int max_monitors = _frame_layout_info->monitor_words / 2;
+
+        assert(monitor_index < max_monitors, "monitor index is invalid value");
+
+        int monitor_object_offset_in_bytes =
+                (spill_words + _frame_layout_info->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
+
+        return monitor_object_offset_in_bytes - wordSize;
+    }
+
+    int monitor_object_offset_in_bytes(int monitor_index) const {
+        check_frame_layout_info();
+
+        // 2 words is for x29,x30 in prologue
+        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
+                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+
+        assert(spill_words >= 0, "spill_words has invalid value");
+
+        int max_monitors = _frame_layout_info->monitor_words / 2;
+
+        assert(monitor_index < max_monitors, "monitor index is invalid value");
+
+        int monitor_object_offset_in_bytes =
+                (spill_words + _frame_layout_info->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
+
+        return monitor_object_offset_in_bytes;
+    }
 
   void set_mangled_func_name(std::string mangled_func_name) {
       _mangled_func_name = mangled_func_name;

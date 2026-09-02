@@ -409,21 +409,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
         0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - prologue x20 / x19
         0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
      */
-    assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
-           _frame_layout_info->num_of_prologue_registers != -1 &&
-           _frame_layout_info->header_words != -1 &&
-           _frame_layout_info->monitor_words != -1 &&
-           _frame_layout_info->stack_words != -1 &&
-           _frame_layout_info->locals_words != -1 &&
-           _frame_layout_info->extended_frame_words != -1 &&
-           _frame_layout_info->extended_frame_reg_num != -1 &&
-           _frame_layout_info->extended_frame_kind != -1 &&
-           _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
-    // Usually it should be fp register, sometimes it uses sp register,
-    // but don't know when, assume it is always fp register
-    assert(_frame_layout_info->extended_frame_reg_num == 29 &&
-           _frame_layout_info->extended_frame_offset < 0 &&
-           _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+    check_frame_layout_info();
 
     // 2 words is for x29,x30 in prologue
     int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2

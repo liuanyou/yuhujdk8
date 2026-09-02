@@ -82,11 +82,13 @@ class YuhuCompiler : public AbstractCompiler {
 
   static bool need_stack_bang(int frame_size_in_bytes);
   static int measure_normal_adapter_size(int frame_size_in_bytes, ciMethod* target = NULL);
+  static int measure_osr_adapter_size(int frame_size_in_bytes, ciTypeFlow* flow, ciMethod* target = NULL);
   static int measure_exception_handler_size();
   static int measure_deopt_handler_size();
   static int measure_unwind_handler_size(int frame_size_in_bytes, GrowableArray<PrologueStpRegistersInfo*>* prologue_registers);
 
   int generate_normal_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes, ciMethod* target = NULL);
+  int generate_osr_adapter_into(CodeBuffer& cb, address* verified_entry_point, int frame_size_in_bytes, ciTypeFlow* flow, ciMethod* target = NULL);
   // Exception and deoptimization handler generation
   int generate_exception_handler(CodeBuffer& cb, int handler_size);
   int generate_deopt_handler(CodeBuffer& cb, int handler_size);
@@ -130,6 +132,7 @@ class YuhuCompiler : public AbstractCompiler {
   // Helpers
  private:
   static const char* methodname(const char* klass, const char* method);
+  static const char* funcname(const char* base_name);
 //  void generate_native_code(YuhuEntry*     entry,
 //                            llvm::Function* function,
 //                            const char*     name);

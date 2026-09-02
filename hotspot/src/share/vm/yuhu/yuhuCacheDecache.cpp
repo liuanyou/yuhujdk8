@@ -353,24 +353,6 @@ void YuhuCacher::process_stack_slot(int          index,
   }
 }
 
-void YuhuOSREntryCacher::process_monitor(int index,
-                                          int box_offset,
-                                          int obj_offset) {
-  // Copy the monitor from the OSR buffer to the frame
-  int src_offset = max_locals() + index * 2;
-  // LLVM 20+ requires explicit type parameter for CreateLoad
-  builder()->CreateStore(
-    builder()->CreateLoad(
-      YuhuType::intptr_type(),
-      CreateAddressOfOSRBufEntry(src_offset, YuhuType::intptr_type())),
-    stack()->slot_addr(box_offset, YuhuType::intptr_type()));
-  builder()->CreateStore(
-    builder()->CreateLoad(
-      YuhuType::oop_addrspace1_type(), // FIXED - monitor object is allocated in heap
-      CreateAddressOfOSRBufEntry(src_offset + 1, YuhuType::oop_addrspace1_type())), // FIXED - monitor object is allocated in heap
-    stack()->slot_addr(obj_offset, YuhuType::oop_addrspace1_type())); // FIXED - type should match
-}
-
 void YuhuCacher::process_oop_tmp_slot(Value** value, int offset) {
   // Cache the temporary oop
   if (*value)
@@ -415,35 +397,11 @@ void YuhuCacher::process_local_slot(int          index,
   }
 }
 
-Value* YuhuOSREntryCacher::CreateAddressOfOSRBufEntry(int         offset,
-                                                       llvm::Type* type) {
-  // LLVM 20+ uses opaque pointer types, so we can't get element type from PointerType
-  // Instead, we use CreateGEP with explicit index calculation
-  // The OSR buffer is a byte array, so we use jbyte_type() as the element type
-  Value *result = builder()->CreateGEP(YuhuType::jbyte_type(), osr_buf(), 
-                                       LLVMValue::intptr_constant(offset));
-  if (type != YuhuType::intptr_type())
-    result = builder()->CreateBitCast(result, PointerType::getUnqual(type));
-  return result;
-}
-
-void YuhuOSREntryCacher::process_local_slot(int          index,
-                                             YuhuValue** addr,
-                                             int          offset) {
-  YuhuValue *value = *addr;
-
-  // Read the value from the OSR buffer if necessary
-  if (local_slot_needs_read(index, value)) {
-    *addr = YuhuValue::create_generic(
-      value->type(),
-      // LLVM 20+ requires explicit type parameter for CreateLoad
-      builder()->CreateLoad(
-        YuhuType::to_stackType(value->basic_type()),
-        CreateAddressOfOSRBufEntry(
-          adjusted_offset(value, max_locals() - 1 - index),
-          YuhuType::to_stackType(value->basic_type()))),
-      value->zero_checked());
-  }
+void YuhuOSREntryCacher::process_monitor(int index,
+                                          int box_offset,
+                                          int obj_offset) {
+  // The OSR adapter stores monitors directly into Yuhu frame slots.
+  // No action needed here — frame slots are already populated.
 }
 
 void YuhuDecacher::write_value_to_frame(llvm::Type* type,

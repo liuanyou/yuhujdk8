@@ -108,17 +108,13 @@ class YuhuFunction : public YuhuTargetInvariants {
     return flow()->is_osr_flow();
   }
   // Generate function signature dynamically based on Java method parameters
-  // For normal entry: (Java method parameters...) -> int
-  // For static methods: (void* null, Java method parameters...) -> int
-  // For OSR entry: keep old signature for now
+  // Both normal and OSR entry use the same signature:
+  //   Instance: (dummy_x0, this, params...) -> return_type
+  //   Static:   (dummy_x0, params...) -> return_type
+  // The OSR adapter is responsible for extracting locals from the OSR buffer
+  // and placing them into the same registers as normal entry.
   llvm::FunctionType* entry_point_type() const {
-    if (is_osr()) {
-      // OSR entry: keep old signature for now (will be handled in phase 6)
-      return YuhuType::osr_entry_point_type();
-    } else {
-      // Normal entry: generate signature based on Java method parameters
-      return generate_normal_entry_point_type();
-    }
+    return generate_normal_entry_point_type();
   }
   
  private:
