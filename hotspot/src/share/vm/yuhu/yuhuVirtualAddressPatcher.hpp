@@ -232,13 +232,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
         return imm << 12;
     };
 
-    /**
-     * check if it is adrp instruction sequences.
-     *
-     * @param instr
-     * @return
-     */
-    static bool is_adrp_got_pattern(uint32_t* instr) {
+    static bool is_adrp_with_ldr_pattern(uint32_t* instr) {
         // Check instruction encoding (little-endian):
         // adrp   x8, 3
         // ldr    x8, [x8, #0x718]
@@ -247,15 +241,9 @@ class YuhuVirtualAddressScanner : public AllStatic {
             return true;
         }
         return false;
-    };
+    }
 
-    /**
-     * check if it is jump table pattern which is using adrp + add instructions.
-     *
-     * @param instr
-     * @return
-     */
-    static bool is_adrp_jump_table_pattern(uint32_t* instr) {
+    static bool is_adrp_with_add_pattern(uint32_t* instr) {
         // Check instruction encoding (little-endian):
         // adrp   x11, 3
         // add    x11, x11, #0x0
@@ -264,6 +252,26 @@ class YuhuVirtualAddressScanner : public AllStatic {
             return true;
         }
         return false;
+    }
+
+    /**
+     * check if it is adrp instruction sequences.
+     *
+     * @param instr
+     * @return
+     */
+    static bool is_adrp_got_pattern(uint32_t* instr) {
+        return is_adrp_with_ldr_pattern(instr);
+    };
+
+    /**
+     * check if it is direct jump table pattern which is using adrp + add instructions.
+     *
+     * @param instr
+     * @return
+     */
+    static bool is_adrp_jump_table_pattern(uint32_t* instr) {
+        return is_adrp_with_add_pattern(instr);
     };
 
     /**

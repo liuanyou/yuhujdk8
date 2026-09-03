@@ -1569,46 +1569,51 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             uint64_t function_address = *(uint64_t*)target_address;
 
-            uint64_t llvm_blr_offset = YuhuDebugInformationRecorder::get()->get_call_site_blr_offset_by_helper_address_and_call_target_offset(function_address,
-                                                                                                                                              i * 4);
-            assert(llvm_blr_offset != 0, "should be valid offset");
-
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_adrp_got_pattern(instr), "should be adrp got instructions");
 
-            // Create relocation record
             if (function_address == (uint64_t)&handle_deoptimization) {
+                uint64_t llvm_blr_offset = YuhuDebugInformationRecorder::get()->get_call_site_blr_offset_by_helper_address_and_call_target_offset(function_address, i * 4);
+                assert(llvm_blr_offset != 0, "should be valid offset");
+
                 // patch with handle deoptimization stub address
                 bool new_adrp_patched = patch_new_adrp(instr, (uint64_t) YuhuRuntime::handle_deoptimization_stub());
-                assert(new_adrp_patched, "should patch successfully");
+                assert(new_adrp_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(instr), "should patch successfully");
                 // maybe do something special for deopt, not for now
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = i * 4 + adapter_size;
                 reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
-            } else {
-                // this case doesn't exist for now, because right now we only use adrp for deoptimization call,
-                // so just add it for code completeness
-                // Before patch :
-                //
-                // adrp   x8, <GOT_page>           # Points to GOT
-                // ldr    x8, [x8, #<offset>]      # Loads function address from GOT
-                // blr    x8                       # Branches to function
 
-                // After patch :
-                //
-                // adrp   x8, <function_page>      # Points to function's page
-                // add    x8, x8, #<page_offset>   # Add offset within page
-                // blr    x8                       # Branches to function
-                bool new_adrp_patched = patch_new_adrp(instr, function_address);
-                assert(new_adrp_patched, "should patch successfully");
+                processed_llvm_blr_offsets.append(llvm_blr_offset);
+            } else {
+                // it should be indirect jump table
+                ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(function_address);
+                assert(const_symbol_entry != NULL, "Const symbol should exist");
+
+                address new_table_addr;
+                int idx = copied_const_srcs.find(const_symbol_entry->start);
+                if (idx >= 0) {
+                    new_table_addr = (address)copied_const_dsts.at(idx);
+                } else {
+                    new_table_addr = cb->consts()->end();
+                    size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
+                    memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
+                    cb->consts()->set_end(new_table_addr + symbol_size);
+                    copied_const_srcs.append(const_symbol_entry->start);
+                    copied_const_dsts.append((uint64_t)new_table_addr);
+                }
+
+                bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_table_addr);
+                assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(instr), "should patch successfully");
 
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = i * 4 + adapter_size;
-                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
+                reloc_entry.target = (uint64_t)new_table_addr;
                 reloc_entries.append(reloc_entry);
             }
-            processed_llvm_blr_offsets.append(llvm_blr_offset);
+
             adrp_count++;
         } else if (YuhuVirtualAddressScanner::is_blr_pattern(llvm_instr) && !processed_llvm_blr_offsets.contains(i * 4)) {
             // In case it is the special deoptimization poll case that it only has blr instruction but shares adrp instructions with previous deoptimization call
@@ -1651,13 +1656,15 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(instr), "should be adrp jump table instructions");
             bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_table_addr);
-            assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(instr), "should patch successfully");
+            assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(instr), "should patch successfully");
 
             RelocEntry reloc_entry{};
             reloc_entry.offset = i * 4 + adapter_size;
             reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
             reloc_entry.target = (uint64_t)new_table_addr;
             reloc_entries.append(reloc_entry);
+
+            adrp_count++;
         }
     }
 
