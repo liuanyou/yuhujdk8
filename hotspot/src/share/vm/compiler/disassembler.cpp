@@ -152,7 +152,9 @@ bool Disassembler::load_library() {
   }
 
   // Success.
-  tty->print_cr("Loaded disassembler from %s", buf);
+  if (PrintAssembly) {
+      tty->print_cr("Loaded disassembler from %s", buf);
+  }
   return true;
 }
 
