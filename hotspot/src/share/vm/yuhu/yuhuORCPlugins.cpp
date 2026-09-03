@@ -416,7 +416,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                     uint32_t imm12 = (instr[1] >> 10) & 0xFFF;
                     uint64_t target_address = target_page + imm12;
-                    assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(target_address) != NULL, "Jump table should exist");
+                    assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(target_address) != NULL, "Jump table should exist");
                 } else if (YuhuVirtualAddressScanner::is_adrp_got_pattern((uint32_t *) (CodeData + offset))) {
                     uint32_t* instr = (uint32_t *) (CodeData + offset);
                     // Locate target page
@@ -433,7 +433,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                     if (function_address != (uint64_t)&handle_deoptimization) {
                         // if it is not deopt call, then it must be indirect jump table
-                        assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(function_address) != NULL, "Should be indirect jump table");
+                        assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(function_address) != NULL, "Should be indirect jump table");
                     }
                 } else if (YuhuVirtualAddressScanner::is_unknown_adrp_pattern((uint32_t *) (CodeData + offset))) {
                     ShouldNotReachHere();

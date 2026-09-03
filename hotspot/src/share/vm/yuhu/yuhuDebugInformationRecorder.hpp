@@ -360,6 +360,16 @@ public:
       return _const_symbol_entries->at(index);
   }
 
+  ConstSymbolEntry* get_const_symbol_by_range_addr(uint64_t addr) const {
+      if (!addr) return NULL;
+      int index = _const_symbol_entries->find(&addr, [](void* token, ConstSymbolEntry* entry) -> bool {
+          uint64_t range_addr = *((uint64_t*)token);
+          return  range_addr >= entry->start && range_addr <= entry->end;
+      });
+      if (index == -1) return NULL;
+      return _const_symbol_entries->at(index);
+  }
+
   size_t total_const_symbol_size() const {
       size_t total = 0;
       for (int i = 0; i < _const_symbol_entries->length(); ++i) {

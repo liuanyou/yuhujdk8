@@ -1588,7 +1588,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 processed_llvm_blr_offsets.append(llvm_blr_offset);
             } else {
                 // it should be indirect jump table
-                ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(function_address);
+                ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(function_address);
                 assert(const_symbol_entry != NULL, "Const symbol should exist");
 
                 address new_table_addr;
@@ -1604,13 +1604,15 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                     copied_const_dsts.append((uint64_t)new_table_addr);
                 }
 
-                bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_table_addr);
+                // get new function address with offset
+                address new_function_address = (function_address - const_symbol_entry->start) + new_table_addr;
+                bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_function_address);
                 assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(instr), "should patch successfully");
 
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = i * 4 + adapter_size;
                 reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
-                reloc_entry.target = (uint64_t)new_table_addr;
+                reloc_entry.target = (uint64_t)new_function_address;
                 reloc_entries.append(reloc_entry);
             }
 
@@ -1637,7 +1639,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t imm12 = (llvm_instr[1] >> 10) & 0xFFF;
             uint64_t target_address = target_page + imm12;
 
-            ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_addr(target_address);
+            ConstSymbolEntry* const_symbol_entry = YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(target_address);
             assert(const_symbol_entry != NULL, "Const symbol should exist");
 
             address new_table_addr;
@@ -1655,13 +1657,16 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
             uint32_t* instr = (uint32_t*)(code_start + i * 4 + adapter_size);
             assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(instr), "should be adrp jump table instructions");
-            bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_table_addr);
+
+            // get new function address with offset
+            address new_target_address = (target_address - const_symbol_entry->start) + new_table_addr;
+            bool new_jump_table_patched = patch_new_adrp(instr, (uint64_t)new_target_address);
             assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(instr), "should patch successfully");
 
             RelocEntry reloc_entry{};
             reloc_entry.offset = i * 4 + adapter_size;
             reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
-            reloc_entry.target = (uint64_t)new_table_addr;
+            reloc_entry.target = (uint64_t)new_target_address;
             reloc_entries.append(reloc_entry);
 
             adrp_count++;
