@@ -1181,15 +1181,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                                    int       entry_bci) {
   assert(is_initialized(), "should be");
   ResourceMark rm;
-  
-  // ========== 临时测试：只测试OSR编译 ==========
-  // TODO: 测试完成后删除此代码块
-  if (entry_bci == InvocationEntryBci) {
-      tty->print_cr("Yuhu: SKIPPING normal compilation for %s (entry_bci=%d) - osr-only test mode",
-                    methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
-                    entry_bci);
-    env->record_failure("osr-only test mode: skipping normal compilation");
-    return;
+
+  if (YuhuCompileOsrOnly) {
+      if (entry_bci == InvocationEntryBci) {
+          tty->print_cr("Yuhu: SKIPPING normal compilation for %s (entry_bci=%d) - osr-only test mode",
+                        methodname(target->holder()->name()->as_utf8(), target->name()->as_utf8()),
+                        entry_bci);
+          env->record_failure("osr-only test mode: skipping normal compilation");
+          return;
+      }
   }
 //  if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
 //    && strcmp(target->name()->as_utf8(), "encodeArrayLoop") == 0
@@ -1212,17 +1212,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 //        env->record_failure("normal-only test mode: skipping implWrite compilation");
 //        return;
 //    }
-    if (strcmp(target->holder()->name()->as_utf8(), "com/example/DeoptTest") == 0
-        && strcmp(target->name()->as_utf8(), "thrower") == 0
-        && strcmp(target->signature()->as_symbol()->as_utf8(), "(I)V") == 0) {
-        assert(true, "just checking");
-    }
-    if (strcmp(target->holder()->name()->as_utf8(), "com/example/DeoptTest") == 0
-        && strcmp(target->name()->as_utf8(), "callerWithHandler") == 0
-        && strcmp(target->signature()->as_symbol()->as_utf8(), "(I)V") == 0) {
-        assert(true, "just checking");
-    }
-  // ========== 临时测试代码结束 ==========
   
   const char *base_name = methodname(
     target->holder()->name()->as_utf8(), target->name()->as_utf8());
