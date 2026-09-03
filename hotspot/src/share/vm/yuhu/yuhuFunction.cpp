@@ -372,8 +372,8 @@ void YuhuFunction::initialize(const char *name) {
     entry_state = new YuhuNormalEntryState(start_block, method);
   }
 
-  // Lock if necessary
-  if (is_synchronized()) {
+  // Lock if necessary (skip for OSR - lock already held from interpreter)
+  if (is_synchronized() && !is_osr()) {
     YuhuTopLevelBlock *locker =
       new YuhuTopLevelBlock(this, start_block->ciblock());
     locker->add_incoming(entry_state);
