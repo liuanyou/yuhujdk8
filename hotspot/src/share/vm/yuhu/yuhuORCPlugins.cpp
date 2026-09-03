@@ -240,7 +240,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             uint64_t BaseAddr = Block->getAddress().getValue();
             size_t Size = Block->getSize();
 
-            if (Size < 32) continue;  // Need at least 8 instructions for dual placeholders, 4 for last java pc and 4 for call target
+            if (Size < 32) continue;  // Need at least 8 instructions for dual placeholders, 5 for last java pc and 3 for call target
 
             if (!(BaseAddr >= found_func->getRange().Start.getValue() && (BaseAddr + Block->getSize()) <= found_func->getRange().End.getValue())) {
                 // Skip if block doesn't fall into the function code range
@@ -264,7 +264,7 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                     bool found = YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
                             CodeData,
                             offset,
-                            offset + 200 <= Size ? 200 : Size - offset,
+                            Size,
                             match);
 
                     if (YuhuTraceMachineCode) {
@@ -282,33 +282,18 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         // vm call or java call has call_target_va
                         // Validate 1-1-1 relationship
                         assert(match.last_java_pc_va != 0 && match.call_target_va != 0, "both placeholder and call target should exist");
-                        if (match.last_java_pc_va == 0 || match.call_target_va == 0) {
-                            if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Missing placeholders at offset "
-                                       << format_hex(offset, 8) << "\n";
-                            }
-                            continue;
-                        }
 
                         // Extract virtual_offset and validate
                         uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
                         uint64_t ct_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_call_target(match.call_target_va);
 
                         assert(ljpc_offset == ct_offset, "placeholder virtual offset should be the same as call target offset");
-                        if (ljpc_offset != ct_offset) {
-                            if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Mismatched virtual_offsets at offset "
-                                       << format_hex(offset, 8) << "\n";
-                                errs() << "  last_Java_pc offset: " << ljpc_offset << "\n";
-                                errs() << "  call_target offset: " << ct_offset << "\n";
-                            }
-                            continue;
-                        }
 
                         uint64_t virtual_offset = ljpc_offset;
 
                         // Calculate actual offsets for patching
                         // The return address is the instruction AFTER the bl
+                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
                         uint64_t return_pc_offset = match.call_target_blr_offset + 4;
 
                         // Look up the actual helper address from virtual_offset mapping
@@ -343,30 +328,18 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         }
                     } else if (found && match.call_target_type == CallTargetType::deopt) {
                         assert(match.last_java_pc_va != 0, "placeholder should exist");
-                        if (match.last_java_pc_va == 0) {
-                            if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Missing placeholders at offset "
-                                       << format_hex(offset, 8) << "\n";
-                            }
-                            continue;
-                        }
-
                         uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
                         uint64_t virtual_offset = ljpc_offset;
+
                         // Calculate actual offsets for patching
                         // The return address is the instruction AFTER the bl
+                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
                         uint64_t return_pc_offset = match.call_target_blr_offset + 4;
 
                         // Look up the actual helper address from virtual_offset mapping
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
                         assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
-                        if (helper_addr != (uint64_t)&handle_deoptimization) {
-                            if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Not deopt call for virtual_offset "
-                                       << virtual_offset << "\n";
-                            }
-                            continue;
-                        }
+
                         // update return_pc_offset by virtual_offsets
                         YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets((int) virtual_offset,
                                                                                                    block_offset + return_pc_offset,
@@ -390,13 +363,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
 
                         uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
                         assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
-                        if (helper_addr != (uint64_t)&handle_deoptimization) {
-                            if (YuhuTraceMachineCode) {
-                                errs() << "[CallSite Extractor] ERROR: Not deoptimization call for virtual_offset "
-                                       << virtual_offset << "\n";
-                            }
-                            continue;
-                        }
+
+                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
                         uint64_t return_pc_offset = match.call_target_blr_offset + 4;
                         YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets((int) virtual_offset,
                                                                                                    block_offset + return_pc_offset,

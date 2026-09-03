@@ -81,7 +81,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
     static bool scan_forwards_for_call_targets(
             const uint8_t* code_buffer,
             uint64_t statepoint_call_offset,
-            uint64_t max_scan_distance,
+            size_t code_buffer_size,
             VirtualAddressMatch& out_match
     );
   
@@ -190,14 +190,14 @@ class YuhuVirtualAddressScanner : public AllStatic {
         return target;
     };
 
-    static void scan_from_b_target(uint32_t* instr, uint32_t inst, const uint8_t* code_buffer, VirtualAddressMatch* out_match, bool* found_blr) {
+    static void scan_from_b_target(uint32_t* instr, uint32_t inst, const uint8_t* code_buffer, size_t code_buffer_size, VirtualAddressMatch* out_match, bool* found_blr) {
         uint64_t target_address = decode_b_target((uint64_t) instr, inst);
 
         // Calculate offset within CodeData
         uint64_t target_offset = target_address - (uint64_t)code_buffer;
 
-        // scan another 25 instructions to find blr instruction
-        for (uint64_t b_offset = 0; b_offset + 4 <= 100; b_offset += 4) {
+        // scan rest of instructions to find blr instruction
+        for (uint64_t b_offset = 0; b_offset + 4 <= (code_buffer_size - target_offset); b_offset += 4) {
             uint32_t* b_instr = (uint32_t*)(code_buffer + target_offset + b_offset);
             uint32_t b_inst = b_instr[0];
             if (is_blr_pattern(b_instr)) {
@@ -206,7 +206,7 @@ class YuhuVirtualAddressScanner : public AllStatic {
                 *found_blr = true;
                 break;
             } else if ((b_inst & B_MASK) == B_PATTERN) {
-                scan_from_b_target(b_instr, b_inst, code_buffer, out_match, found_blr);
+                scan_from_b_target(b_instr, b_inst, code_buffer, code_buffer_size, out_match, found_blr);
                 break;
             }
         }

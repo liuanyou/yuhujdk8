@@ -32,11 +32,11 @@ extern "C" void handle_deoptimization();
 bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
         const uint8_t* code_buffer,
         uint64_t statepoint_call_offset,
-        uint64_t max_scan_distance,
+        size_t code_buffer_size,
         VirtualAddressMatch& out_match
 ) {
     uint64_t scan_start = statepoint_call_offset;
-    uint64_t scan_end = statepoint_call_offset + max_scan_distance;
+    uint64_t scan_end = code_buffer_size;
 
     // Initialize match structure
     out_match.last_java_pc_va = 0;
@@ -147,7 +147,7 @@ bool YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
             out_match.call_target_blr_offset = offset;
             found_blr = true;
         } else if (found_ljpc && !found_blr && (inst & B_MASK) == B_PATTERN) {
-            scan_from_b_target(instr, inst, code_buffer, &out_match, &found_blr);
+            scan_from_b_target(instr, inst, code_buffer, code_buffer_size, &out_match, &found_blr);
             // If blr is not found, just stop
             if (!found_blr) {
                 break;
