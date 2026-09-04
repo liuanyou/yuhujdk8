@@ -54,36 +54,62 @@ extern "C" void gc_safepoint_poll(JavaThread* thread);
 extern "C" void handle_deoptimization();
 extern "C" void go_unwind();
 
+// File-based logging for debugging
+static FILE* yuhu_trap_log = NULL;
+static void yuhu_trap_log_init() {
+    if (yuhu_trap_log == NULL) {
+        yuhu_trap_log = fopen("/tmp/yuhu_trap.log", "a");
+        if (yuhu_trap_log) {
+            fprintf(yuhu_trap_log, "=== YuhuTrap log started ===\n");
+            fflush(yuhu_trap_log);
+        }
+    }
+}
+#define YUHU_TRAP_LOG(fmt, ...) \
+    do { \
+        yuhu_trap_log_init(); \
+        if (yuhu_trap_log) { \
+            fprintf(yuhu_trap_log, "[YuhuTrap] " fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_trap_log); \
+        } \
+    } while(0)
+
 void YuhuTopLevelBlock::scan_for_traps() {
-    // Adopt trap information directly from ciTypeFlow's analysis.
-    // ciTypeFlow has already scanned the bytecode and identified all traps,
-    // including the exact BCI and constant pool index for each trap.
+    YUHU_TRAP_LOG("scan_for_traps START: block bci_%d (start=%d limit=%d) has_trap=%d",
+                  index(), start(), limit(), ciblock()->has_trap());
+
+    // Save ciTypeFlow trap info — we'll decide which trap to use after manual scan
+    bool has_ciflow_trap = false;
+    int ciflow_trap_request = 0;
+    int ciflow_trap_bci = -1;
+
     if (ciblock()->has_trap()) {
         int trap_index = ciblock()->trap_index();
-        int trap_request;
 
         if (trap_index < 0) {
-            // ciTypeFlow already encoded reason/action (negative value)
-            trap_request = trap_index;
+            ciflow_trap_request = trap_index;
         } else {
-            // CP index only — use Reason_unloaded with default action
-            trap_request = Deoptimization::make_trap_request(
+            ciflow_trap_request = Deoptimization::make_trap_request(
                     Deoptimization::Reason_unloaded,
                     Deoptimization::Action_reinterpret,
                     trap_index);
         }
+        ciflow_trap_bci = ciblock()->trap_bci();
+        has_ciflow_trap = true;
 
-        set_trap(trap_request, ciblock()->trap_bci());
-        return;
+        YUHU_TRAP_LOG("scan_for_traps: ciTypeFlow trap at bci=%d trap_index=%d (will compare with manual scan)",
+                      ciflow_trap_bci, trap_index);
     }
 
-    // few scenarios are missed by ciTypeFlow, scan traps once
+    // Always run the manual scan — ciTypeFlow may miss some traps
+    // (e.g., unlinked klass on invokevirtual when ciTypeFlow only caught a later trap)
     int limit_bci = limit();
 
-    // Scan the bytecode for traps that are always hit
     iter()->reset_to_bci(start());
     while (iter()->next_bci() < limit_bci) {
         iter()->next();
+
+        YUHU_TRAP_LOG("scan_for_traps: manual scan bci=%d bc=%s", bci(), Bytecodes::name(bc()));
 
         switch (bc()) {
             case Bytecodes::_invokestatic:
@@ -94,13 +120,13 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 ciSignature *sig;
                 ciMethod *dest_method = iter()->get_method(will_link, &sig);
                 assert(will_link, "typeflow responsibility");
-                // We can't compile calls to method handle intrinsics, because we use
-                // the interpreter entry points and they expect the top frame to be an
-                // interpreter frame. We need to implement the intrinsics for Yuhu.
                 if (dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form()) {
                     if (YuhuPerformanceWarnings) {
                         warning("JSR292 optimization not yet implemented in Yuhu");
                     }
+                    // Manual scan found trap at this bci — use it if earlier than ciTypeFlow's
+                    YUHU_TRAP_LOG("scan_for_traps: manual scan found method_handle_intrinsic trap at bci=%d (ciflow_trap_bci=%d)",
+                                  bci(), ciflow_trap_bci);
                     set_trap(
                             Deoptimization::make_trap_request(
                                     Deoptimization::Reason_unhandled,
@@ -108,6 +134,8 @@ void YuhuTopLevelBlock::scan_for_traps() {
                     return;
                 }
                 if (!dest_method->holder()->is_linked()) {
+                    YUHU_TRAP_LOG("scan_for_traps: manual scan found unlinked holder at bci=%d (ciflow_trap_bci=%d)",
+                                  bci(), ciflow_trap_bci);
                     set_trap(
                             Deoptimization::make_trap_request(
                                     Deoptimization::Reason_uninitialized,
@@ -119,6 +147,8 @@ void YuhuTopLevelBlock::scan_for_traps() {
                     ciInstanceKlass *klass = ciEnv::get_instance_klass_for_declared_method_holder(
                             iter()->get_declared_method_holder());
                     if (!klass->is_linked()) {
+                        YUHU_TRAP_LOG("scan_for_traps: manual scan found unlinked klass at bci=%d klass=%s (ciflow_trap_bci=%d)",
+                                      bci(), klass->name()->as_utf8(), ciflow_trap_bci);
                         set_trap(
                                 Deoptimization::make_trap_request(
                                         Deoptimization::Reason_uninitialized,
@@ -133,6 +163,8 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 if (YuhuPerformanceWarnings) {
                     warning("JSR292 optimization not yet implemented in Yuhu");
                 }
+                YUHU_TRAP_LOG("scan_for_traps: manual scan found invokedynamic/invokehandle trap at bci=%d (ciflow_trap_bci=%d)",
+                              bci(), ciflow_trap_bci);
                 set_trap(
                         Deoptimization::make_trap_request(
                                 Deoptimization::Reason_unhandled,
@@ -140,6 +172,13 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 return;
             }
         }
+    }
+
+    // Manual scan found nothing — use ciTypeFlow's trap if it had one
+    if (has_ciflow_trap) {
+        YUHU_TRAP_LOG("scan_for_traps: manual scan found nothing, using ciTypeFlow trap at bci=%d",
+                      ciflow_trap_bci);
+        set_trap(ciflow_trap_request, ciflow_trap_bci);
     }
 }
 
@@ -209,7 +248,13 @@ void YuhuTopLevelBlock::enter(YuhuTopLevelBlock* predecessor,
   if (!entered()) {
     _entered = true;
 
+    YUHU_TRAP_LOG("enter: scanning block bci_%d (start=%d limit=%d) for traps",
+                  index(), start(), limit());
     scan_for_traps();
+    if (has_trap()) {
+      YUHU_TRAP_LOG("enter: block bci_%d has trap at bci=%d, stopping recursion",
+                    index(), trap_bci());
+    }
     if (!has_trap()) {
       for (int i = 0; i < num_successors(); i++) {
         successor(i)->enter(this, false);
@@ -1391,6 +1436,14 @@ void YuhuTopLevelBlock::do_call() {
   ciSignature* sig;
   ciMethod *dest_method = iter()->get_method(will_link, &sig);
 
+  YUHU_TRAP_LOG("do_call ENTER: bci=%d bc=%s dest=%s.%s will_link=%d target=%s.%s",
+                bci(), Bytecodes::name(bc()),
+                dest_method->holder()->name()->as_utf8(),
+                dest_method->name()->as_utf8(),
+                will_link,
+                target()->holder()->name()->as_utf8(),
+                target()->name()->as_utf8());
+
   assert(will_link, "typeflow responsibility");
   assert(dest_method->is_static() == is_static, "must match bc");
 
@@ -1637,6 +1690,17 @@ void YuhuTopLevelBlock::do_call() {
   address compiled_entry_address = 0;
   if (call_is_virtual) {
     if (is_virtual || is_forced_virtual) {
+      YUHU_TRAP_LOG("do_call: bci=%d bc=%s klass=%s is_linked=%d is_forced_virtual=%d target=%s.%s",
+                    bci(), Bytecodes::name(bc()),
+                    klass->name()->as_utf8(),
+                    klass->is_linked(),
+                    is_forced_virtual,
+                    target()->holder()->name()->as_utf8(),
+                    target()->name()->as_utf8());
+      if (!klass->is_linked()) {
+        YUHU_TRAP_LOG("ERROR: klass not linked! has_trap=%d trap_bci=%d current_bci=%d",
+                      has_trap(), has_trap() ? trap_bci() : -1, bci());
+      }
       assert(klass->is_linked(), "scan_for_traps responsibility");
       int vtable_index = call_method->resolve_vtable_index(
         target()->holder(), klass);

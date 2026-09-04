@@ -37,6 +37,26 @@
 
 using namespace llvm;
 
+// File-based logging for debugging
+static FILE* yuhu_trap_log_block = NULL;
+static void yuhu_trap_log_block_init() {
+    if (yuhu_trap_log_block == NULL) {
+        yuhu_trap_log_block = fopen("/tmp/yuhu_trap.log", "a");
+        if (yuhu_trap_log_block) {
+            fprintf(yuhu_trap_log_block, "=== YuhuTrap log (yuhuBlock) started ===\n");
+            fflush(yuhu_trap_log_block);
+        }
+    }
+}
+#define YUHU_TRAP_LOG(fmt, ...) \
+    do { \
+        yuhu_trap_log_block_init(); \
+        if (yuhu_trap_log_block) { \
+            fprintf(yuhu_trap_log_block, "[YuhuTrap] " fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_trap_log_block); \
+        } \
+    } while(0)
+
 void YuhuBlock::parse_bytecode(int start, int limit) {
   YuhuValue *a, *b, *c, *d;
   int i;
@@ -55,6 +75,8 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
       tty->print_cr("%4d: %s", bci(), Bytecodes::name(bc()));
 
     if (has_trap() && trap_bci() == bci()) {
+      YUHU_TRAP_LOG("parse_bytecode: triggering trap at bci=%d bc=%s",
+                    bci(), Bytecodes::name(bc()));
       do_trap(trap_request());
       return;
     }
