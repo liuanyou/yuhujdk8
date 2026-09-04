@@ -103,10 +103,13 @@ void YuhuTopLevelBlock::scan_for_traps() {
 
     // Always run the manual scan — ciTypeFlow may miss some traps
     // (e.g., unlinked klass on invokevirtual when ciTypeFlow only caught a later trap)
+    // But only scan bytecodes BEFORE the ciTypeFlow trap BCI — bytecodes at/after
+    // the ciTypeFlow trap were not verified by ciTypeFlow and may have will_link=false
     int limit_bci = limit();
+    int scan_limit = has_ciflow_trap ? MIN(limit_bci, ciflow_trap_bci) : limit_bci;
 
     iter()->reset_to_bci(start());
-    while (iter()->next_bci() < limit_bci) {
+    while (iter()->next_bci() < scan_limit) {
         iter()->next();
 
         YUHU_TRAP_LOG("scan_for_traps: manual scan bci=%d bc=%s", bci(), Bytecodes::name(bc()));
