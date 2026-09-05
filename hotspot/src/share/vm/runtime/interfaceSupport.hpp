@@ -575,6 +575,7 @@ extern "C" {                                                         \
 extern "C" {                                                         \
   result_type JNICALL header {                                       \
     JavaThread* thread = (JavaThread*)ThreadLocalStorage::thread();  \
+    Thread::WXWriteFromExecSetter __wx_write;                        \
     ThreadInVMfromNative __tiv(thread);                              \
     debug_only(VMNativeEntryWrapper __vew;)                          \
     VM_ENTRY_BASE(result_type, header, thread)
