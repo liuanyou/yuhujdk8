@@ -51,6 +51,22 @@
 
 using namespace llvm;
 
+// File-based logging for debugging
+static FILE* yuhu_stack_map_log = NULL;
+static void yuhu_stack_map_log_init() {
+    if (yuhu_stack_map_log == NULL) {
+        yuhu_stack_map_log = fopen(YuhuStackMapFile, "a");
+    }
+}
+#define YUHU_STACK_MAP_LOG(fmt, ...) \
+    do { \
+        yuhu_stack_map_log_init(); \
+        if (yuhu_stack_map_log) { \
+            fprintf(yuhu_stack_map_log, fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_stack_map_log); \
+        } \
+    } while(0)
+
 JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, Klass* k_oop))
   // Option A: JIT passes resolved Klass* directly (embedded as a
   // metadata-relocated constant in the nmethod). No frame walk needed.
@@ -421,17 +437,14 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Using cached static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                        p2i(cached->entry_point()),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                               p2i(cached->entry_point()),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                           p2i(cached->entry_point()),
@@ -546,17 +559,14 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
-          FILE *f = fopen(YuhuStackMapFile, "a");
-          fileStream fs(f, true);
-          fs.print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                        p2i(stub_addr),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-          fs.flush();
+          YUHU_STACK_MAP_LOG("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                             p2i(stub_addr),
+                             target_method->holder()->name()->as_utf8(),
+                             target_method->name()->as_utf8(),
+                             target_method->signature()->as_symbol()->as_utf8(),
+                             current_method->holder()->name()->as_utf8(),
+                             current_method->name()->as_utf8(),
+                             current_method->signature()->as_symbol()->as_utf8());
       } else {
           tty->print_cr("Yuhu: Generated static call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                         p2i(stub_addr),
@@ -585,18 +595,15 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Using cached virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
-                        p2i(cached->entry_point()),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        vtable_index,
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                               p2i(cached->entry_point()),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               vtable_index,
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Using cached virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
                           p2i(cached->entry_point()),
@@ -701,18 +708,15 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
 
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
-                          p2i(stub_addr),
-                          target_method->holder()->name()->as_utf8(),
-                          target_method->name()->as_utf8(),
-                          target_method->signature()->as_symbol()->as_utf8(),
-                          vtable_index,
-                          current_method->holder()->name()->as_utf8(),
-                          current_method->name()->as_utf8(),
-                          current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
+                               p2i(stub_addr),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               vtable_index,
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Generated virtual call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s (vtable_index=%d) from current method %s.%s signature %s",
                           p2i(stub_addr),
@@ -741,17 +745,14 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Using cached interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                        p2i(cached->entry_point()),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                               p2i(cached->entry_point()),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Using cached interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                           p2i(cached->entry_point()),
@@ -901,17 +902,14 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
 
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                          p2i(stub_addr),
-                          target_method->holder()->name()->as_utf8(),
-                          target_method->name()->as_utf8(),
-                          target_method->signature()->as_symbol()->as_utf8(),
-                          current_method->holder()->name()->as_utf8(),
-                          current_method->name()->as_utf8(),
-                          current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                               p2i(stub_addr),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Generated interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                           p2i(stub_addr),
@@ -1047,17 +1045,14 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            FILE *f = fopen(YuhuStackMapFile, "a");
-            fileStream fs(f, true);
-            fs.print_cr("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                        p2i(cached->entry_point()),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-            fs.flush();
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                               p2i(cached->entry_point()),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
         } else {
             tty->print_cr("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                           p2i(cached->entry_point()),
@@ -1216,17 +1211,14 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
 
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
-          FILE *f = fopen(YuhuStackMapFile, "a");
-          fileStream fs(f, true);
-          fs.print_cr("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
-                        p2i(stub_addr),
-                        target_method->holder()->name()->as_utf8(),
-                        target_method->name()->as_utf8(),
-                        target_method->signature()->as_symbol()->as_utf8(),
-                        current_method->holder()->name()->as_utf8(),
-                        current_method->name()->as_utf8(),
-                        current_method->signature()->as_symbol()->as_utf8());
-          fs.flush();
+          YUHU_STACK_MAP_LOG("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                             p2i(stub_addr),
+                             target_method->holder()->name()->as_utf8(),
+                             target_method->name()->as_utf8(),
+                             target_method->signature()->as_symbol()->as_utf8(),
+                             current_method->holder()->name()->as_utf8(),
+                             current_method->name()->as_utf8(),
+                             current_method->signature()->as_symbol()->as_utf8());
       } else {
           tty->print_cr("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                         p2i(stub_addr),

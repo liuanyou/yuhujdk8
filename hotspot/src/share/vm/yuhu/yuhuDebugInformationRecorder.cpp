@@ -37,6 +37,22 @@
 
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
 
+// File-based logging for debugging
+static FILE* yuhu_stack_map_log = NULL;
+static void yuhu_stack_map_log_init() {
+    if (yuhu_stack_map_log == NULL) {
+        yuhu_stack_map_log = fopen(YuhuStackMapFile, "a");
+    }
+}
+#define YUHU_STACK_MAP_LOG(fmt, ...) \
+    do { \
+        yuhu_stack_map_log_init(); \
+        if (yuhu_stack_map_log) { \
+            fprintf(yuhu_stack_map_log, fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_stack_map_log); \
+        } \
+    } while(0)
+
 // Initialize static TLS index
 int YuhuDebugInformationRecorder::_tls_index = -1;
 
@@ -501,10 +517,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                     int monitor_object_offset_in_bytes =
                             (spill_words + _frame_layout_info->stack_words + (max_monitors - j - 1) * 2 + 1) * wordSize;
                     if (YuhuTraceOffset && YuhuStackMapFile != NULL) {
-                        FILE *f = fopen(YuhuStackMapFile, "a");
-                        fileStream fs(f, true);
-                        fs.print_cr("[StackMap] monitor_object_offset_in_bytes: %d", monitor_object_offset_in_bytes);
-                        fs.flush();
+                        YUHU_STACK_MAP_LOG("[StackMap] monitor_object_offset_in_bytes: %d", monitor_object_offset_in_bytes);
                     }
                     oopmap->set_oop(YuhuStack::slot2reg(monitor_object_offset_in_bytes >> LogBytesPerWord));
                 }

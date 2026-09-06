@@ -33,6 +33,22 @@
 
 using namespace llvm;
 
+// File-based logging for debugging
+static FILE* yuhu_stack_map_log = NULL;
+static void yuhu_stack_map_log_init() {
+    if (yuhu_stack_map_log == NULL) {
+        yuhu_stack_map_log = fopen(YuhuStackMapFile, "a");
+    }
+}
+#define YUHU_STACK_MAP_LOG(fmt, ...) \
+    do { \
+        yuhu_stack_map_log_init(); \
+        if (yuhu_stack_map_log) { \
+            fprintf(yuhu_stack_map_log, fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_stack_map_log); \
+        } \
+    } while(0)
+
 void YuhuStack::initialize(Value* method, ciMethod* target) {
   int locals_words  = max_locals();
   // For AArch64, header_words includes all frame header metadata:
@@ -54,14 +70,11 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
     ResourceMark rm;
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
-          FILE *f = fopen(YuhuStackMapFile, "a");
-          fileStream fs(f, true);
-          fs.print_cr("Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
-                      target->holder()->name()->as_utf8(),
-                      target->name()->as_utf8(),
-                      target->signature()->as_symbol()->as_utf8(),
-                      header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
-          fs.flush();
+          YUHU_STACK_MAP_LOG("Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
+                             target->holder()->name()->as_utf8(),
+                             target->name()->as_utf8(),
+                             target->signature()->as_symbol()->as_utf8(),
+                             header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
       } else {
           tty->print_cr(
                   "Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
