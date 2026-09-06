@@ -1034,6 +1034,41 @@ void ciEnv::register_method(ciMethod* target,
                         comp_level,
                         method_name);
         }
+
+          {
+              ResourceMark rm;
+              // Open file
+              if (strcmp(compiler->name(), "yuhu") == 0) {
+                  if (YuhuNewCodeLogFile != NULL) {
+                      FILE *f = fopen(YuhuNewCodeLogFile, "a");
+                      fileStream fs(f, true);
+
+                      const char *klassName = method->method_holder()->name()->as_utf8();
+                      const char *methodName = method()->name()->as_utf8();
+                      const char *signature = method()->signature()->as_utf8();
+                      fs.print_cr("new klassName %s methodName %s signature %s", klassName, methodName, signature);
+
+                      fs.print_cr("code: ");
+                      Disassembler::decode(nm->code_begin(), nm->code_end(), &fs);
+                      fs.flush();
+                  }
+              } else {
+                  if (C1C2NewCodeLogFile != NULL) {
+                      FILE *f = fopen(C1C2NewCodeLogFile, "a");
+                      fileStream fs(f, true);
+
+                      const char *klassName = method->method_holder()->name()->as_utf8();
+                      const char *methodName = method()->name()->as_utf8();
+                      const char *signature = method()->signature()->as_utf8();
+                      fs.print_cr("new klassName %s methodName %s signature %s", klassName, methodName, signature);
+
+                      fs.print_cr("code: ");
+                      Disassembler::decode(nm->code_begin(), nm->code_end(), &fs);
+                      fs.flush();
+                  }
+              }
+          }
+
         // Allow the code to be executed
         method->set_code(method, nm);
       } else {
@@ -1046,6 +1081,42 @@ void ciEnv::register_method(ciMethod* target,
                         method_name,
                         entry_bci);
         }
+
+          {
+              ResourceMark rm;
+              // Open file
+              if (strcmp(compiler->name(), "yuhu") == 0) {
+                  if (YuhuOsrCodeLogFile != NULL) {
+                      FILE *f = fopen(YuhuOsrCodeLogFile, "a");
+                      fileStream fs(f, true);
+
+                      const char *klassName = method->method_holder()->name()->as_utf8();
+                      const char *methodName = method()->name()->as_utf8();
+                      const char *signature = method()->signature()->as_utf8();
+                      fs.print_cr("new klassName %s methodName %s signature %s", klassName, methodName, signature);
+
+                      fs.print_cr("code: ");
+                      Disassembler::decode(nm->code_begin(), nm->code_end(), &fs);
+                      fs.flush();
+                  }
+              } else {
+                  if (C1C2OsrCodeLogFile != NULL) {
+                      FILE *f = fopen(C1C2OsrCodeLogFile, "a");
+                      fileStream fs(f, true);
+
+                      const char *klassName = method->method_holder()->name()->as_utf8();
+                      const char *methodName = method()->name()->as_utf8();
+                      const char *signature = method()->signature()->as_utf8();
+                      fs.print_cr("new klassName %s methodName %s signature %s @ %d", klassName, methodName, signature,
+                                  entry_bci);
+
+                      fs.print_cr("code: ");
+                      Disassembler::decode(nm->code_begin(), nm->code_end(), &fs);
+                      fs.flush();
+                  }
+              }
+          }
+
         method->method_holder()->add_osr_nmethod(nm);
       }
     }

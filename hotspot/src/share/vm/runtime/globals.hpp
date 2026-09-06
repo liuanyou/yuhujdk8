@@ -3595,6 +3595,18 @@ class CommandLineFlags {
   product(bool, YuhuUseComplexityBased, true,                             \
           "Use complexity-based selection for Yuhu compiler")              \
                                                                             \
+  diagnostic(ccstr, C1C2NewCodeLogFile, NULL,                               \
+          "Log file path to dump c1/c2 new code")                           \
+                                                                            \
+  diagnostic(ccstr, C1C2OsrCodeLogFile, NULL,                               \
+          "Log file path to dump c1/c2 osr code")                           \
+                                                                            \
+  diagnostic(ccstr, YuhuNewCodeLogFile, NULL,                               \
+          "Log file path to dump Yuhu new code")                           \
+                                                                            \
+  diagnostic(ccstr, YuhuOsrCodeLogFile, NULL,                               \
+          "Log file path to dump Yuhu osr code")                           \
+                                                                            \
   product(bool, PrintTieredEvents, false,                                   \
           "Print tiered events notifications")                              \
                                                                             \
