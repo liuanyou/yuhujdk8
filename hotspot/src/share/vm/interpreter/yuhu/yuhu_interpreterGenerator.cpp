@@ -58,7 +58,7 @@ void YuhuInterpreterGenerator::generate_all() {
         }
     }
 
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    { CodeletMark cm(_masm, "earlyret entry points");
 //        Interpreter::_earlyret_entry =
 //                EntryPoint(

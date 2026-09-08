@@ -712,8 +712,7 @@ void YuhuTemplateTable::aastore() {
 
     // Have a NULL in r0, r3=array, r2=index.  Store NULL at ary[idx]
     __ pin_label(is_null);
-    // TODO
-//    __ profile_null_seen(r2);
+    __ write_insts_profile_null_seen(__ x2);
 
     // Store a NULL
     do_oop_store(_masm, element_address, __ noreg, _bs->kind(), true);
@@ -1283,8 +1282,7 @@ void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
     // ensure that we see the changed dispatch table.
     __ write_inst("dmb ishld");
 
-    // TODO
-//    __ profile_taken_branch(r0, r1);
+    __ write_insts_profile_taken_branch(__ x0, __ x1);
     const ByteSize be_offset = MethodCounters::backedge_counter_offset() +
                                InvocationCounter::counter_offset();
     const ByteSize inv_offset = MethodCounters::invocation_counter_offset() +
@@ -1328,107 +1326,107 @@ void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
 
     assert(UseLoopCounter || !UseOnStackReplacement,
            "on-stack-replacement requires loop counters");
-    // TODO
-//    Label backedge_counter_overflow;
-//    Label profile_method;
-//    Label dispatch;
-//    if (UseLoopCounter) {
-//        // increment backedge counter for backward branches
-//        // r0: MDO
-//        // w1: MDO bumped taken-count
-//        // r2: target offset
-//        __ cmp(r2, zr);
-//        __ br(Assembler::GT, dispatch); // count only if backward branch
-//
-//        // ECN: FIXME: This code smells
-//        // check if MethodCounters exists
-//        Label has_counters;
-//        __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
-//        __ cbnz(rscratch1, has_counters);
-//        __ push(r0);
-//        __ push(r1);
-//        __ push(r2);
-//        __ call_VM(noreg, CAST_FROM_FN_PTR(address,
-//                                           InterpreterRuntime::build_method_counters), rmethod);
-//        __ pop(r2);
-//        __ pop(r1);
-//        __ pop(r0);
-//        __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
-//        __ cbz(rscratch1, dispatch); // No MethodCounters allocated, OutOfMemory
-//        __ bind(has_counters);
-//
-//        if (TieredCompilation) {
-//            Label no_mdo;
-//            int increment = InvocationCounter::count_increment;
-//            int mask = ((1 << Tier0BackedgeNotifyFreqLog) - 1) << InvocationCounter::count_shift;
-//            if (ProfileInterpreter) {
-//                // Are we profiling?
-//                __ ldr(r1, Address(rmethod, in_bytes(Method::method_data_offset())));
-//                __ cbz(r1, no_mdo);
-//                // Increment the MDO backedge counter
-//                const Address mdo_backedge_counter(r1, in_bytes(MethodData::backedge_counter_offset()) +
-//                                                       in_bytes(InvocationCounter::counter_offset()));
-//                __ increment_mask_and_jump(mdo_backedge_counter, increment, mask,
-//                                           r0, rscratch2, false, Assembler::EQ, &backedge_counter_overflow);
-//                __ b(dispatch);
-//            }
-//            __ bind(no_mdo);
-//            // Increment backedge counter in MethodCounters*
-//            __ ldr(rscratch1, Address(rmethod, Method::method_counters_offset()));
-//            __ increment_mask_and_jump(Address(rscratch1, be_offset), increment, mask,
-//                                       r0, rscratch2, false, Assembler::EQ, &backedge_counter_overflow);
-//        } else {
-//            // increment counter
-//            __ ldr(rscratch2, Address(rmethod, Method::method_counters_offset()));
-//            __ ldrw(r0, Address(rscratch2, be_offset));        // load backedge counter
-//            __ addw(rscratch1, r0, InvocationCounter::count_increment); // increment counter
-//            __ strw(rscratch1, Address(rscratch2, be_offset));        // store counter
-//
-//            __ ldrw(r0, Address(rscratch2, inv_offset));    // load invocation counter
-//            __ andw(r0, r0, (unsigned)InvocationCounter::count_mask_value); // and the status bits
-//            __ addw(r0, r0, rscratch1);        // add both counters
-//
-//            if (ProfileInterpreter) {
-//                // Test to see if we should create a method data oop
-//                __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterProfileLimit));
-//                __ ldrw(rscratch1, rscratch1);
-//                __ cmpw(r0, rscratch1);
-//                __ br(Assembler::LT, dispatch);
-//
-//                // if no method data exists, go to profile method
-//                __ test_method_data_pointer(r0, profile_method);
-//
-//                if (UseOnStackReplacement) {
-//                    // check for overflow against w1 which is the MDO taken count
-//                    __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
-//                    __ ldrw(rscratch1, rscratch1);
-//                    __ cmpw(r1, rscratch1);
-//                    __ br(Assembler::LO, dispatch); // Intel == Assembler::below
-//
-//                    // When ProfileInterpreter is on, the backedge_count comes
-//                    // from the MethodData*, which value does not get reset on
-//                    // the call to frequency_counter_overflow().  To avoid
-//                    // excessive calls to the overflow routine while the method is
-//                    // being compiled, add a second test to make sure the overflow
-//                    // function is called only once every overflow_frequency.
-//                    const int overflow_frequency = 1024;
-//                    __ andsw(r1, r1, overflow_frequency - 1);
-//                    __ br(Assembler::EQ, backedge_counter_overflow);
-//
-//                }
-//            } else {
-//                if (UseOnStackReplacement) {
-//                    // check for overflow against w0, which is the sum of the
-//                    // counters
-//                    __ lea(rscratch1, ExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
-//                    __ ldrw(rscratch1, rscratch1);
-//                    __ cmpw(r0, rscratch1);
-//                    __ br(Assembler::HS, backedge_counter_overflow); // Intel == Assembler::aboveEqual
-//                }
-//            }
-//        }
-//    }
-//    __ bind(dispatch);
+
+    YuhuLabel backedge_counter_overflow;
+    YuhuLabel profile_method;
+    YuhuLabel dispatch;
+    if (UseLoopCounter) {
+        // increment backedge counter for backward branches
+        // r0: MDO
+        // w1: MDO bumped taken-count
+        // r2: target offset
+        __ write_inst("cmp x2, xzr");
+        __ write_inst_b(__ gt, dispatch); // count only if backward branch
+
+        // ECN: FIXME: This code smells
+        // check if MethodCounters exists
+        YuhuLabel has_counters;
+        __ write_inst_ldr(__ x8, YuhuAddress(__ x12, Method::method_counters_offset()));
+        __ write_inst_cbnz(__ x8, has_counters);
+        __ write_inst_push(__ x0);
+        __ write_inst_push(__ x1);
+        __ write_inst_push(__ x2);
+        __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address,
+                                           InterpreterRuntime::build_method_counters), __ x12);
+        __ write_inst_pop(__ x2);
+        __ write_inst_pop(__ x1);
+        __ write_inst_pop(__ x0);
+        __ write_inst_ldr(__ x8, YuhuAddress(__ x12, Method::method_counters_offset()));
+        __ write_inst_cbz(__ x8, dispatch); // No MethodCounters allocated, OutOfMemory
+        __ pin_label(has_counters);
+
+        if (TieredCompilation) {
+            YuhuLabel no_mdo;
+            int increment = InvocationCounter::count_increment;
+            int mask = ((1 << Tier0BackedgeNotifyFreqLog) - 1) << InvocationCounter::count_shift;
+            if (ProfileInterpreter) {
+                // Are we profiling?
+                __ write_inst_ldr(__ x1, YuhuAddress(__ x12, in_bytes(Method::method_data_offset())));
+                __ write_inst_cbz(__ x1, no_mdo);
+                // Increment the MDO backedge counter
+                const YuhuAddress mdo_backedge_counter(__ x1, in_bytes(MethodData::backedge_counter_offset()) +
+                                                       in_bytes(InvocationCounter::counter_offset()));
+                __ write_insts_increment_mask_and_jump(mdo_backedge_counter, increment, mask,
+                                           __ x0, __ x9, false, __ eq, &backedge_counter_overflow);
+                __ write_inst_b(dispatch);
+            }
+            __ pin_label(no_mdo);
+            // Increment backedge counter in MethodCounters*
+            __ write_inst_ldr(__ x8, YuhuAddress(__ x12, Method::method_counters_offset()));
+            __ write_insts_increment_mask_and_jump(YuhuAddress(__ x8, be_offset), increment, mask,
+                                       __ x0, __ x9, false, __ eq, &backedge_counter_overflow);
+        } else {
+            // increment counter
+            __ write_inst_ldr(__ x9, YuhuAddress(__ x12, Method::method_counters_offset()));
+            __ write_inst_ldr(__ w0, YuhuAddress(__ x9, be_offset));        // load backedge counter
+            __ write_inst("add %s, %s, #%d", __ w8, __ w0, InvocationCounter::count_increment); // increment counter
+            __ write_inst_str(__ w8, YuhuAddress(__ x9, be_offset));        // store counter
+
+            __ write_inst_ldr(__ w0, YuhuAddress(__ x9, inv_offset));    // load invocation counter
+            __ write_inst("and %s, %s, #%d", __ w0, __ w0, (unsigned)InvocationCounter::count_mask_value); // and the status bits
+            __ write_inst("add w0, w0, w8");        // add both counters
+
+            if (ProfileInterpreter) {
+                // Test to see if we should create a method data oop
+                __ write_insts_lea(__ x8, YuhuExternalAddress((address) &InvocationCounter::InterpreterProfileLimit));
+                __ write_inst_ldr(__ w8, __ x8);
+                __ write_inst("cmp w0, w8");
+                __ write_inst_b(__ lt, dispatch);
+
+                // if no method data exists, go to profile method
+                __ write_insts_test_method_data_pointer(__ x0, profile_method);
+
+                if (UseOnStackReplacement) {
+                    // check for overflow against w1 which is the MDO taken count
+                    __ write_insts_lea(__ x8, YuhuExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
+                    __ write_inst_ldr(__ w8, __ x8);
+                    __ write_inst("cmp w8, w8");
+                    __ write_inst_b(__ lo, dispatch); // Intel == Assembler::below
+
+                    // When ProfileInterpreter is on, the backedge_count comes
+                    // from the MethodData*, which value does not get reset on
+                    // the call to frequency_counter_overflow().  To avoid
+                    // excessive calls to the overflow routine while the method is
+                    // being compiled, add a second test to make sure the overflow
+                    // function is called only once every overflow_frequency.
+                    const int overflow_frequency = 1024;
+                    __ write_inst("ands %s, %s, #%d", __ w1, __ w1, overflow_frequency - 1);
+                    __ write_inst_b(__ eq, backedge_counter_overflow);
+
+                }
+            } else {
+                if (UseOnStackReplacement) {
+                    // check for overflow against w0, which is the sum of the
+                    // counters
+                    __ write_insts_lea(__ x8, YuhuExternalAddress((address) &InvocationCounter::InterpreterBackwardBranchLimit));
+                    __ write_inst_ldr(__ w8, __ x8);
+                    __ write_inst("cmp w0, w8");
+                    __ write_inst_b(__ hs, backedge_counter_overflow); // Intel == Assembler::aboveEqual
+                }
+            }
+        }
+    }
+    __ pin_label(dispatch);
 
     // Pre-load the next target bytecode into rscratch1
     __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, 0));
@@ -1438,70 +1436,69 @@ void YuhuTemplateTable::branch(bool is_jsr, bool is_wide)
     // rbcp: target bcp
     __ write_insts_dispatch_only(vtos);
 
-    // TODO
-//    if (UseLoopCounter) {
-//        if (ProfileInterpreter) {
-//            // Out-of-line code to allocate method data oop.
-//            __ bind(profile_method);
-//            __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
-//            __ load_unsigned_byte(r1, Address(rbcp, 0));  // restore target bytecode
-//            __ set_method_data_pointer_for_bcp();
-//            __ b(dispatch);
-//        }
-//
-//        if (TieredCompilation || UseOnStackReplacement) {
-//            // invocation counter overflow
-//            __ bind(backedge_counter_overflow);
-//            __ neg(r2, r2);
-//            __ add(r2, r2, rbcp);     // branch bcp
-//            // IcoResult frequency_counter_overflow([JavaThread*], address branch_bcp)
-//            __ call_VM(noreg,
-//                       CAST_FROM_FN_PTR(address,
-//                                        InterpreterRuntime::frequency_counter_overflow),
-//                       r2);
-//            if (!UseOnStackReplacement)
-//                __ b(dispatch);
-//        }
-//
-//        if (UseOnStackReplacement) {
-//            __ load_unsigned_byte(r1, Address(rbcp, 0));  // restore target bytecode
-//
-//            // r0: osr nmethod (osr ok) or NULL (osr not possible)
-//            // w1: target bytecode
-//            // r2: scratch
-//            __ cbz(r0, dispatch);     // test result -- no osr if null
-//            // nmethod may have been invalidated (VM may block upon call_VM return)
-//            __ ldrw(r2, Address(r0, nmethod::entry_bci_offset()));
-//            // InvalidOSREntryBci == -2 which overflows cmpw as unsigned
-//            // use cmnw against -InvalidOSREntryBci which does the same thing
-//            __ cmn(r2, -InvalidOSREntryBci);
-//            __ br(Assembler::EQ, dispatch);
-//
-//            // We have the address of an on stack replacement routine in r0
-//            // We need to prepare to execute the OSR method. First we must
-//            // migrate the locals and monitors off of the stack.
-//
-//            __ mov(r19, r0);                             // save the nmethod
-//
-//            call_VM(noreg, CAST_FROM_FN_PTR(address, SharedRuntime::OSR_migration_begin));
-//
-//            // r0 is OSR buffer, move it to expected parameter location
-//            __ mov(j_rarg0, r0);
-//
-//            // remove activation
-//            // get sender esp
-//            __ ldr(esp,
-//                   Address(rfp, frame::interpreter_frame_sender_sp_offset * wordSize));
-//            // remove frame anchor
-//            __ leave();
-//            // Ensure compiled code always sees stack at proper alignment
-//            __ andr(sp, esp, -16);
-//
-//            // and begin the OSR nmethod
-//            __ ldr(rscratch1, Address(r19, nmethod::osr_entry_point_offset()));
-//            __ br(rscratch1);
-//        }
-//    }
+    if (UseLoopCounter) {
+        if (ProfileInterpreter) {
+            // Out-of-line code to allocate method data oop.
+            __ pin_label(profile_method);
+            __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
+            __ write_insts_load_unsigned_byte(__ w1, YuhuAddress(__ x22, 0));  // restore target bytecode
+            __ write_insts_set_method_data_pointer_for_bcp();
+            __ write_inst_b(dispatch);
+        }
+
+        if (TieredCompilation || UseOnStackReplacement) {
+            // invocation counter overflow
+            __ pin_label(backedge_counter_overflow);
+            __ write_inst("neg x2, x2");
+            __ write_inst("add x2, x2, x22");     // branch bcp
+            // IcoResult frequency_counter_overflow([JavaThread*], address branch_bcp)
+            __ write_insts_final_call_VM(__ noreg,
+                       CAST_FROM_FN_PTR(address,
+                                        InterpreterRuntime::frequency_counter_overflow),
+                       __ x2);
+            if (!UseOnStackReplacement)
+                __ write_inst_b(dispatch);
+        }
+
+        if (UseOnStackReplacement) {
+            __ write_insts_load_unsigned_byte(__ w1, YuhuAddress(__ x22, 0));  // restore target bytecode
+
+            // r0: osr nmethod (osr ok) or NULL (osr not possible)
+            // w1: target bytecode
+            // r2: scratch
+            __ write_inst_cbz(__ x0, dispatch);     // test result -- no osr if null
+            // nmethod may have been invalidated (VM may block upon call_VM return)
+            __ write_inst_ldr(__ w2, YuhuAddress(__ x0, nmethod::entry_bci_offset()));
+            // InvalidOSREntryBci == -2 which overflows cmpw as unsigned
+            // use cmnw against -InvalidOSREntryBci which does the same thing
+            __ write_inst("cmn x2, #%d", -InvalidOSREntryBci);
+            __ write_inst_b(__ eq, dispatch);
+
+            // We have the address of an on stack replacement routine in r0
+            // We need to prepare to execute the OSR method. First we must
+            // migrate the locals and monitors off of the stack.
+
+            __ write_inst_mov_reg(__ x19, __ x0);                             // save the nmethod
+
+            __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, SharedRuntime::OSR_migration_begin));
+
+            // r0 is OSR buffer, move it to expected parameter location
+            __ write_inst_mov_reg(__ x1, __ x0);
+
+            // remove activation
+            // get sender esp
+            __ write_inst_ldr(__ x20,
+                   YuhuAddress(__ x29, frame::interpreter_frame_sender_sp_offset * wordSize));
+            // remove frame anchor
+            __ write_insts_leave();
+            // Ensure compiled code always sees stack at proper alignment
+            __ write_inst("and %s, %s, #%d", __ sp, __ x20, -16);
+
+            // and begin the OSR nmethod
+            __ write_inst_ldr(__ x8, YuhuAddress(__ x19, nmethod::osr_entry_point_offset()));
+            __ write_inst_br(__ x8);
+        }
+    }
 }
 
 void YuhuTemplateTable::if_0cmp(Condition cc)
@@ -1520,8 +1517,7 @@ void YuhuTemplateTable::if_0cmp(Condition cc)
 
     branch(false, false);
     __ pin_label(not_taken);
-    // TODO
-//    __ profile_not_taken_branch(r0);
+    __ write_insts_profile_not_taken_branch(__ x0);
 }
 
 void YuhuTemplateTable::if_icmp(Condition cc)
@@ -1534,8 +1530,7 @@ void YuhuTemplateTable::if_icmp(Condition cc)
     __ write_inst_b(j_not(cc), not_taken);
     branch(false, false);
     __ pin_label(not_taken);
-    // TODO
-//    __ profile_not_taken_branch(r0);
+    __ write_insts_profile_not_taken_branch(__ x0);
 }
 
 void YuhuTemplateTable::if_acmp(Condition cc)
@@ -1548,8 +1543,7 @@ void YuhuTemplateTable::if_acmp(Condition cc)
     __ write_inst_b(j_not(cc), not_taken);
     branch(false, false);
     __ pin_label(not_taken);
-    // TODO
-//    __ profile_not_taken_branch(r0);
+    __ write_insts_profile_not_taken_branch(__ x0);
 }
 
 void YuhuTemplateTable::ret() {
@@ -1562,8 +1556,7 @@ void YuhuTemplateTable::ret() {
 
     locals_index(__ x1);
     __ write_inst_ldr(__ x1, aaddress(__ x1)); // get return bci, compute return bcp
-    // TODO
-//    __ profile_ret(r1, r2);
+    __ write_insts_profile_ret(__ x1, __ x2);
     __ write_inst_ldr(__ x22, YuhuAddress(__ x12, Method::const_offset()));
     __ write_insts_lea(__ x22, YuhuAddress(__ x22, __ x1));
     __ write_inst("add x22, x22, #%d", in_bytes(ConstMethod::codes_offset()));
@@ -1590,8 +1583,7 @@ void YuhuTemplateTable::tableswitch() {
     __ write_inst("sub w0, w0, w2");
     __ write_insts_lea(__ x3, YuhuAddress(__ x1, __ w0, YuhuAddress::uxtw(2)));
     __ write_inst_ldr(__ w3, YuhuAddress(__ x3, 3 * BytesPerInt));
-    // TODO
-//    __ profile_switch_case(r0, r1, r2);
+    __ write_insts_profile_switch_case(__ x0, __ x1, __ x2);
     // continue execution
     __ pin_label(continue_execution);
     __ write_inst("rev32 x3, x3");
@@ -1600,8 +1592,7 @@ void YuhuTemplateTable::tableswitch() {
     __ write_insts_dispatch_only(vtos);
     // handle default
     __ pin_label(default_case);
-    // TODO
-//    __ profile_switch_default(r0);
+    __ write_insts_profile_switch_default(__ x0);
     __ write_inst_ldr(__ w3, YuhuAddress(__ x1, 0));
     __ write_inst_b(continue_execution);
 }
@@ -1660,7 +1651,7 @@ void YuhuTemplateTable::getfield_or_static(int byte_no, bool is_static)
     const YuhuMacroAssembler::YuhuRegister bc    = __ x4; // uses same reg as obj, so don't mix them
 
     resolve_cache_and_index(byte_no, cache, index, sizeof(u2));
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    jvmti_post_field_access(cache, index, is_static, false);
     load_field_cp_cache_entry(obj, cache, index, off, raw_flags, is_static);
 
@@ -1832,7 +1823,7 @@ void YuhuTemplateTable::putfield_or_static(int byte_no, bool is_static) {
     const YuhuMacroAssembler::YuhuRegister bc    = __ x4;
 
     resolve_cache_and_index(byte_no, cache, index, sizeof(u2));
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    jvmti_post_field_mod(cache, index, is_static);
     load_field_cp_cache_entry(obj, cache, index, off, flags, is_static);
 
@@ -2048,7 +2039,7 @@ void YuhuTemplateTable::prepare_invoke(int byte_no,
     // setup registers & access constant pool cache
     if (recv  == __ noreg)  recv  = __ x2;
     if (flags == __ noreg)  flags = __ x3;
-//    assert_different_registers(method, index, recv, flags);
+    __ do_assert_different_registers(method, index, recv, flags);
 
     // save 'interpreter return address'
     __ write_insts_save_bcp();
@@ -2102,7 +2093,7 @@ void YuhuTemplateTable::invokevirtual_helper(YuhuMacroAssembler::YuhuRegister in
                                              YuhuMacroAssembler::YuhuRegister flags)
 {
     // Uses temporary registers r0, r3
-//    assert_different_registers(index, recv, r0, r3);
+    __ do_assert_different_registers(index, recv, __ x0, __ x3);
     // Test for an invoke of a final method
     YuhuLabel notFinal;
     __ write_inst_tbz(flags, ConstantPoolCacheEntry::is_vfinal_shift, notFinal);
@@ -2118,9 +2109,8 @@ void YuhuTemplateTable::invokevirtual_helper(YuhuMacroAssembler::YuhuRegister in
     __ write_insts_null_check(recv);
 
     // profile this call
-    // TODO
-//    __ profile_final_call(r0);
-//    __ profile_arguments_type(r0, method, r4, true);
+    __ write_insts_profile_final_call(__ x0);
+    __ write_insts_profile_arguments_type(__ x0, method, __ x4, true);
 
     __ write_insts_jump_from_interpreted(method, __ x0);
 
@@ -2131,13 +2121,11 @@ void YuhuTemplateTable::invokevirtual_helper(YuhuMacroAssembler::YuhuRegister in
     __ write_insts_load_klass(__ x0, recv);
 
     // profile this call
-    // TODO
-//    __ profile_virtual_call(r0, rlocals, r3);
+    __ write_insts_profile_virtual_call(__ x0, __ x24, __ x3);
 
     // get target methodOop & entry point
     __ write_insts_lookup_virtual_method(__ x0, method, index);
-    // TODO
-//    __ profile_arguments_type(r3, method, r4, true);
+    __ write_insts_profile_arguments_type(__ x3, method, __ x4, true);
     // FIXME -- this looks completely redundant. is it?
     // __ ldr(r3, Address(method, Method::interpreter_entry_offset()));
     __ write_insts_jump_from_interpreted(method, __ x3);
@@ -2169,9 +2157,8 @@ void YuhuTemplateTable::invokespecial(int byte_no)
     __ write_insts_verify_oop(__ x2, "broken oop");
     __ write_insts_null_check(__ x2);
     // do the call
-    // TODO
-//    __ profile_call(r0);
-//    __ profile_arguments_type(r0, rmethod, rbcp, false);
+    __ write_insts_profile_call(__ x0);
+    __ write_insts_profile_arguments_type(__ x0, __ x12, __ x22, false);
     __ write_insts_jump_from_interpreted(__ x12, __ x0);
 }
 
@@ -2182,9 +2169,8 @@ void YuhuTemplateTable::invokestatic(int byte_no)
 
     prepare_invoke(byte_no, __ x12);  // get f1 Method*
     // do the call
-    // TODO
-//    __ profile_call(r0);
-//    __ profile_arguments_type(r0, rmethod, r4, false);
+    __ write_insts_profile_call(__ x0);
+    __ write_insts_profile_arguments_type(__ x0, __ x12, __ x4, false);
     __ write_insts_jump_from_interpreted(__ x12, __ x0);
 }
 
@@ -2227,8 +2213,7 @@ void YuhuTemplateTable::invokeinterface(int byte_no) {
             /*return_method=*/false);
 
     // profile this call
-    // TODO
-//    __ profile_virtual_call(r3, r13, r19);
+    __ write_insts_profile_virtual_call(__ x3, __ x13, __ x19);
 
     // Get declaring interface class from method, and itable index
     __ write_inst_ldr(__ x0, YuhuAddress(__ x12, Method::const_offset()));
@@ -2252,8 +2237,7 @@ void YuhuTemplateTable::invokeinterface(int byte_no) {
     //       method.
     __ write_inst_cbz(__ x12, no_such_method);
 
-    // TODO
-//    __ profile_arguments_type(r3, rmethod, r13, true);
+    __ write_insts_profile_arguments_type(__ x3, __ x12, __ x13, true);
 
     // do the call
     // r2: receiver
@@ -2308,9 +2292,8 @@ void YuhuTemplateTable::invokedynamic(int byte_no) {
 
     // %%% should make a type profile for any invokedynamic that takes a ref argument
     // profile this call
-    // TODO
-//    __ profile_call(rbcp);
-//    __ profile_arguments_type(r3, rmethod, r13, false);
+    __ write_insts_profile_call(__ x22);
+    __ write_insts_profile_arguments_type(__ x3, __ x12, __ x13, false);
 
     __ write_insts_verify_oop(__ x0, "broken oop");
 
@@ -2520,8 +2503,7 @@ void YuhuTemplateTable::checkcast()
     if (ProfileInterpreter) {
         __ write_inst_b(done);
         __ pin_label(is_null);
-        // TODO
-//        __ profile_null_seen(r2);
+        __ write_insts_profile_null_seen(__ x2);
     } else {
         __ pin_label(is_null);   // same as 'done'
     }
@@ -2575,8 +2557,7 @@ void YuhuTemplateTable::instanceof() {
     if (ProfileInterpreter) {
         __ write_inst_b(done);
         __ pin_label(is_null);
-        // TODO
-//        __ profile_null_seen(r2);
+        __ write_insts_profile_null_seen(__ x2);
     } else {
         __ pin_label(is_null);   // same as 'done'
     }
@@ -2770,8 +2751,7 @@ void YuhuTemplateTable::if_nullcmp(Condition cc)
         __ write_inst_cbz(__ x0, not_taken);
     branch(false, false);
     __ pin_label(not_taken);
-    // TODO
-//    __ profile_not_taken_branch(r0);
+    __ write_insts_profile_not_taken_branch(__ x0);
 }
 
 void YuhuTemplateTable::locals_index_wide(YuhuMacroAssembler::YuhuRegister reg) {
@@ -2875,8 +2855,7 @@ void YuhuTemplateTable::wide_ret() {
     transition(vtos, vtos);
     locals_index_wide(__ x1);
     __ write_inst_ldr(__ x1, aaddress(__ x1)); // get return bci, compute return bcp
-    // TODO
-//    __ profile_ret(r1, r2);
+    __ write_insts_profile_ret(__ x1, __ x2);
     __ write_inst_ldr(__ x22, YuhuAddress(__ x12, Method::const_offset()));
     __ write_insts_lea(__ x22, YuhuAddress(__ x22, __ x1));
     __ write_inst("add x22, x22, #%d", in_bytes(ConstMethod::codes_offset()));
@@ -2912,7 +2891,7 @@ void YuhuTemplateTable::fast_accessfield(TosState state)
 {
     transition(atos, state);
     // Do the JVMTI work here to avoid disturbing the register state below
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    if (JvmtiExport::can_post_field_access()) {
 //        // Check to see if a field access watch has been set before we
 //        // take the time to call into the VM.
@@ -3008,7 +2987,7 @@ void YuhuTemplateTable::fast_storefield(TosState state)
 
     ByteSize base = ConstantPoolCache::base_offset();
 
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    jvmti_post_fast_field_mod();
 
     // access constant pool cache
@@ -3198,16 +3177,14 @@ void YuhuTemplateTable::fast_linearswitch() {
     __ write_inst("subs x1, x1, #1");
     __ write_inst_b(__ pl, loop);
     // default case
-    // TODO
-//    __ profile_switch_default(r0);
+    __ write_insts_profile_switch_default(__ x0);
     __ write_inst_ldr(__ w3, YuhuAddress(__ x19, 0));
     __ write_inst_b(continue_execution);
     // entry found -> get offset
     __ pin_label(found);
     __ write_insts_lea(__ x8, YuhuAddress(__ x19, __ x1, YuhuAddress::lsl(3)));
     __ write_inst_ldr(__ w3, YuhuAddress(__ x8, 3 * BytesPerInt));
-    // TODO
-//    __ profile_switch_case(r1, r0, r19);
+    __ write_insts_profile_switch_case(__ x1, __ x0, __ x19);
     // continue execution
     __ pin_label(continue_execution);
     __ write_inst("rev32 x3, x3");
@@ -3307,8 +3284,7 @@ void YuhuTemplateTable::fast_binaryswitch() {
     // entry found -> j = offset
     __ write_inst_regs("add %s, %s, %s, uxtx #3", j, array, i);
     __ write_inst_ldr(__ w_reg(j), YuhuAddress(j, BytesPerInt));
-    // TODO
-//    __ profile_switch_case(i, key, array);
+    __ write_insts_profile_switch_case(i, key, array);
     __ write_inst_regs("rev32 %s, %s", j, j);
     __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, __ w_reg(j), YuhuAddress::sxtw(0)));
     __ write_insts_lea(__ x22, YuhuAddress(__ x22, __ w_reg(j), YuhuAddress::sxtw(0)));
@@ -3316,8 +3292,7 @@ void YuhuTemplateTable::fast_binaryswitch() {
 
     // default case -> j = default offset
     __ pin_label(default_case);
-    // TODO
-//    __ profile_switch_default(i);
+    __ write_insts_profile_switch_default(i);
     __ write_inst_ldr(__ w_reg(j), YuhuAddress(array, -2 * BytesPerInt));
     __ write_inst_regs("rev32 %s, %s", j, j);
     __ write_insts_load_unsigned_byte(__ w8, YuhuAddress(__ x22, __ w_reg(j), YuhuAddress::sxtw(0)));
@@ -3337,7 +3312,7 @@ void YuhuTemplateTable::fast_aldc(bool wide)
 
     // We are resolved if the resolved reference cache entry contains a
     // non-null object (String, MethodType, etc.)
-//    assert_different_registers(result, tmp);
+    __ do_assert_different_registers(result, tmp);
     __ write_insts_get_cache_index_at_bcp(tmp, 1, index_size);
     __ write_insts_load_resolved_reference_at_index(result, tmp);
     __ write_inst_cbnz(result, resolved);
@@ -3374,9 +3349,8 @@ void YuhuTemplateTable::invokehandle(int byte_no) {
 
     // r13 is safe to use here as a scratch reg because it is about to
     // be clobbered by jump_from_interpreted().
-    // TODO
-//    __ profile_final_call(r13);
-//    __ profile_arguments_type(r13, rmethod, r4, true);
+    __ write_insts_profile_final_call(__ x13);
+    __ write_insts_profile_arguments_type(__ x13, __ x12, __ x4, true);
 
     __ write_insts_jump_from_interpreted(__ x12, __ x0);
 }
@@ -3568,7 +3542,7 @@ void YuhuTemplateTable::resolve_cache_and_index(int byte_no,
                                             YuhuMacroAssembler::YuhuRegister index,
                                             size_t index_size) {
     const YuhuMacroAssembler::YuhuRegister temp = __ x19;
-//    assert_different_registers(Rcache, index, temp);
+    __ do_assert_different_registers(Rcache, index, temp);
 
     YuhuLabel resolved;
     assert(byte_no == f1_byte || byte_no == f2_byte, "byte_no out of range");
@@ -3621,10 +3595,10 @@ void YuhuTemplateTable::load_invoke_cp_cache_entry(int byte_no,
     // setup registers
     const YuhuMacroAssembler::YuhuRegister cache = __ x9;
     const YuhuMacroAssembler::YuhuRegister index = __ x4;
-//    assert_different_registers(method, flags);
-//    assert_different_registers(method, cache, index);
-//    assert_different_registers(itable_index, flags);
-//    assert_different_registers(itable_index, cache, index);
+    __ do_assert_different_registers(method, flags);
+    __ do_assert_different_registers(method, cache, index);
+    __ do_assert_different_registers(itable_index, flags);
+    __ do_assert_different_registers(itable_index, cache, index);
     // determine constant pool cache field offsets
     assert(is_invokevirtual == (byte_no == f2_byte), "is_invokevirtual flag redundant");
     const int method_offset = in_bytes(
@@ -3654,7 +3628,7 @@ void YuhuTemplateTable::load_field_cp_cache_entry(YuhuMacroAssembler::YuhuRegist
                                                   YuhuMacroAssembler::YuhuRegister off,
                                                   YuhuMacroAssembler::YuhuRegister flags,
                                               bool is_static = false) {
-//    assert_different_registers(cache, index, flags, off);
+    __ do_assert_different_registers(cache, index, flags, off);
 
     ByteSize cp_base_offset = ConstantPoolCache::base_offset();
     // Field offset

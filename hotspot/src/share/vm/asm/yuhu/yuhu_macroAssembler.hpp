@@ -109,7 +109,7 @@ public:
     };
     // condition kind for b.cond instruction
     enum YuhuCond {
-        gt, ne, al, ls, hi, le, eq, hs, lo, lt, ge, pl
+        gt, ne, al, ls, hi, le, eq, hs, cs=hs, lo, cc=lo, lt, ge, pl
     };
     enum YuhuOperation {
         lsl, uxtb, uxth, uxtw, uxtx, sxtb, sxth, sxtw, sxtx
@@ -257,6 +257,90 @@ public:
         ShouldNotReachHere();
         YuhuRegisterOrFloatRegister reg;
         return reg;
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b) {
+        assert(
+                a != b,
+                err_msg_res("registers must be different: a=%s, b=%s",
+                            reg_name(a), reg_name(b))
+        );
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b,
+                    YuhuRegister c) {
+        assert(
+                a != b && a != c
+                && b != c,
+                err_msg_res("registers must be different: a=%s, b=%s, c=%s",
+                            reg_name(a), reg_name(b), reg_name(c))
+        );
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b,
+                    YuhuRegister c,
+                    YuhuRegister d) {
+        assert(
+                a != b && a != c && a != d
+                && b != c && b != d
+                && c != d,
+                err_msg_res("registers must be different: a=%s, b=%s, c=%s, d=%s",
+                            reg_name(a), reg_name(b), reg_name(c), reg_name(d))
+        );
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b,
+                    YuhuRegister c,
+                    YuhuRegister d,
+                    YuhuRegister e) {
+        assert(
+                a != b && a != c && a != d && a != e
+                && b != c && b != d && b != e
+                && c != d && c != e
+                && d != e,
+                err_msg_res("registers must be different: a=%s, b=%s, c=%s, d=%s, e=%s",
+                            reg_name(a), reg_name(b), reg_name(c), reg_name(d), reg_name(e))
+        );
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b,
+                    YuhuRegister c,
+                    YuhuRegister d,
+                    YuhuRegister e,
+                    YuhuRegister f) {
+        assert(
+                a != b && a != c && a != d && a != e && a != f
+                && b != c && b != d && b != e && b != f
+                && c != d && c != e && c != f
+                && d != e && d != f
+                && e != f,
+                err_msg_res("registers must be different: a=%s, b=%s, c=%s, d=%s, e=%s, f=%s",
+                            reg_name(a), reg_name(b), reg_name(c), reg_name(d), reg_name(e), reg_name(f))
+        );
+    }
+    inline void do_assert_different_registers(
+                    YuhuRegister a,
+                    YuhuRegister b,
+                    YuhuRegister c,
+                    YuhuRegister d,
+                    YuhuRegister e,
+                    YuhuRegister f,
+                    YuhuRegister g) {
+        assert(
+                a != b && a != c && a != d && a != e && a != f && a != g
+                && b != c && b != d && b != e && b != f && b != g
+                && c != d && c != e && c != f && c != g
+                && d != e && d != f && d != g
+                && e != f && e != g
+                && f != g,
+                err_msg_res("registers must be different: a=%s, b=%s, c=%s, d=%s, e=%s, f=%s, g=%s",
+                            reg_name(a), reg_name(b), reg_name(c), reg_name(d), reg_name(e), reg_name(f), reg_name(g))
+        );
     }
 public:
     YuhuMacroAssembler(CodeBuffer* code);
@@ -440,7 +524,7 @@ public:
         return write_inst("msr fpsr, xzr");
     }
 
-    address write_insts_round_to(YuhuRegister reg, int modulus);
+    address write_insts_orptr(YuhuAddress adr, YuhuRegisterOrConstant src);
 
     address write_insts_load_unsigned_short(YuhuRegister dst, YuhuAddress src);
     address write_insts_load_unsigned_byte(YuhuRegister dst, YuhuAddress src);
@@ -768,6 +852,48 @@ public:
     address write_insts_remove_frame(int framesize);
 
     address write_insts_remove_frame(int framesize, YuhuRegisterOrFloatRegister* prologued_registers, int num_registers);
+
+    address write_insts_set_mdp_data_at(YuhuRegister mdp_in, int constant, YuhuRegister value);
+    address write_insts_increment_mdp_data_at(YuhuRegister mdp_in, int constant, bool decrement = false);
+    address write_insts_increment_mdp_data_at(YuhuRegister mdp_in, YuhuRegister reg, int constant, bool decrement = false);
+
+    address write_insts_update_mdp_by_constant(YuhuRegister mdp_in, int constant);
+
+    address write_insts_increment_mask_and_jump(YuhuAddress counter_addr,
+                                                 int increment, int mask,
+                                                 YuhuRegister scratch, YuhuRegister scratch2,
+                                                 bool preloaded,
+                                                 YuhuCond cond, YuhuLabel* where);
+
+    address write_insts_get_method_counters(YuhuRegister method, YuhuRegister mcs, YuhuLabel& skip);
+
+    address write_insts_test_method_data_pointer(YuhuRegister mdp, YuhuLabel& zero_continue);
+    address write_insts_test_mdp_data_at(YuhuRegister mdp_in, int offset, YuhuRegister value, YuhuRegister test_value_out, YuhuLabel& not_equal_continue);
+    address write_insts_set_method_data_pointer_for_bcp();
+    address write_insts_set_mdp_flag_at(YuhuRegister mdp_in, int flag_byte_constant);
+    address write_insts_update_mdp_by_offset(YuhuRegister mdp_in, int offset_of_disp);
+    address write_insts_update_mdp_by_offset(YuhuRegister mdp_in, YuhuRegister reg, int offset_of_disp);
+    address write_insts_update_mdp_for_ret(YuhuRegister return_bci);
+
+    address write_insts_profile_typecheck(YuhuRegister mdp, YuhuRegister klass, YuhuRegister scratch);
+    address write_insts_record_klass_in_profile(YuhuRegister receiver, YuhuRegister mdp, YuhuRegister reg2, bool is_virtual_call);
+    address write_insts_record_klass_in_profile_helper(YuhuRegister receiver, YuhuRegister mdp, YuhuRegister reg2, int start_row, YuhuLabel& done, bool is_virtual_call);
+    address write_insts_profile_typecheck_failed(YuhuRegister mdp);
+
+    address write_insts_profile_null_seen(YuhuRegister mdp);
+    address write_insts_profile_taken_branch(YuhuRegister mdp, YuhuRegister bumped_count);
+    address write_insts_profile_not_taken_branch(YuhuRegister mdp);
+    address write_insts_profile_ret(YuhuRegister return_bci, YuhuRegister mdp);
+    address write_insts_profile_switch_case(YuhuRegister index, YuhuRegister mdp, YuhuRegister reg2);
+    address write_insts_profile_switch_default(YuhuRegister mdp);
+    address write_insts_profile_final_call(YuhuRegister mdp);
+
+    YuhuAddress compute_argument_address(YuhuRegisterOrConstant arg_slot, int extra_slot_offset = 0);
+
+    address write_insts_profile_obj_type(YuhuRegister obj, const YuhuAddress& mdo_addr);
+    address write_insts_profile_arguments_type(YuhuRegister mdp, YuhuRegister callee, YuhuRegister tmp, bool is_virtual);
+    address write_insts_profile_virtual_call(YuhuRegister receiver, YuhuRegister mdp, YuhuRegister reg2, bool receiver_can_be_null = false);
+    address write_insts_profile_call(YuhuRegister mdp);
 };
 
 class YuhuLabel VALUE_OBJ_CLASS_SPEC {
@@ -1028,7 +1154,7 @@ public:
 
     YuhuMacroAssembler::YuhuRegister base() const {
         guarantee((_mode == base_plus_offset | _mode == base_plus_offset_reg
-                   | _mode == post),
+                   | _mode == post | _mode == pre),
                   "wrong mode");
         return _base;
     }

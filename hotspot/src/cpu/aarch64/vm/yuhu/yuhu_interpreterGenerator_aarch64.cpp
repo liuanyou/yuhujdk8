@@ -85,7 +85,7 @@ address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int s
 }
 
 void YuhuInterpreterGenerator::generate_and_dispatch(YuhuTemplate* t, TosState tos_out) {
-    // TODO
+    // TODO - skip it for now, it is for debugging/diagnostic tools
 //    if (PrintBytecodeHistogram)                                    histogram_bytecode(t);
 //#ifndef PRODUCT
 //    // debugging code
@@ -102,7 +102,7 @@ void YuhuInterpreterGenerator::generate_and_dispatch(YuhuTemplate* t, TosState t
         // compute bytecode size
         assert(step > 0, "just checkin'");
         // setup stuff for dispatching next bytecode
-        // TODO
+        // TODO - skip it for now, it is for verifying method data
 //        if (ProfileInterpreter && VerifyDataPointer
 //            && MethodData::bytecode_has_profile(t->bytecode())) {
 //            __ verify_method_data_pointer();
@@ -269,13 +269,12 @@ address YuhuInterpreterGenerator::generate_method_entry(
 }
 
 address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
-    // TODO
-//    // determine code generation flags
-//    bool inc_counter  = UseCompiler || CountCompiledCalls;
-//
-//    // rscratch1: sender sp
+    // determine code generation flags
+    bool inc_counter  = UseCompiler || CountCompiledCalls;
+
+    // rscratch1: sender sp
     address entry_point = __ current_pc();
-//
+
 //    const Address constMethod(rmethod, Method::const_offset());
 //    const Address access_flags(rmethod, Method::access_flags_offset());
 //    const Address size_of_parameters(r3,
@@ -353,22 +352,21 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
     __ write_inst("mov x9, #1");
     __ write_inst("strb w9, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
 
-    // TODO
-//    // increment invocation count & check for overflow
-//    Label invocation_counter_overflow;
-//    Label profile_method;
-//    Label profile_method_continue;
-//    if (inc_counter) {
-//        generate_counter_incr(&invocation_counter_overflow,
-//                              &profile_method,
-//                              &profile_method_continue);
-//        if (ProfileInterpreter) {
-//            __ bind(profile_method_continue);
-//        }
-//    }
-//
-//    Label continue_after_compile;
-//    __ bind(continue_after_compile);
+    // increment invocation count & check for overflow
+    YuhuLabel invocation_counter_overflow;
+    YuhuLabel profile_method;
+    YuhuLabel profile_method_continue;
+    if (inc_counter) {
+        generate_counter_incr(&invocation_counter_overflow,
+                              &profile_method,
+                              &profile_method_continue);
+        if (ProfileInterpreter) {
+            __ pin_label(profile_method_continue);
+        }
+    }
+
+    YuhuLabel continue_after_compile;
+    __ pin_label(continue_after_compile);
 
     bang_stack_shadow_pages(false);
 
@@ -409,37 +407,57 @@ address YuhuInterpreterGenerator::generate_normal_entry(bool synchronized) {
   }
 #endif
 
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    // jvmti support
 //    __ notify_method_entry();
 
 
     __ write_insts_dispatch_next(vtos);
 
-    // TODO
-//    // invocation counter overflow
-//    if (inc_counter) {
-//        if (ProfileInterpreter) {
-//            // We have decided to profile this method in the interpreter
-//            __ bind(profile_method);
-//            __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
-//            __ set_method_data_pointer_for_bcp();
-//            // don't think we need this
-//            __ get_method(r1);
-//            __ b(profile_method_continue);
-//        }
-//        // Handle overflow of counter and compile method
-//        __ bind(invocation_counter_overflow);
-//        generate_counter_overflow(&continue_after_compile);
-//    }
+    // invocation counter overflow
+    if (inc_counter) {
+        if (ProfileInterpreter) {
+            // We have decided to profile this method in the interpreter
+            __ pin_label(profile_method);
+            __ write_insts_final_call_VM(__ noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::profile_method));
+            __ write_insts_set_method_data_pointer_for_bcp();
+            // don't think we need this
+            __ write_insts_get_method(__ x1);
+            __ write_inst_b(profile_method_continue);
+        }
+        // Handle overflow of counter and compile method
+        __ pin_label(invocation_counter_overflow);
+        generate_counter_overflow(&continue_after_compile);
+    }
 
     return entry_point;
 }
 
+void YuhuInterpreterGenerator::generate_counter_overflow(YuhuLabel* do_continue) {
+
+    // Asm interpreter on entry
+    // On return (i.e. jump to entry_point) [ back to invocation of interpreter ]
+    // Everything as it was on entry
+
+    // InterpreterRuntime::frequency_counter_overflow takes two
+    // arguments, the first (thread) is passed by call_VM, the second
+    // indicates if the counter overflow occurs at a backwards branch
+    // (NULL bcp).  We pass zero for it.  The call returns the address
+    // of the verified entry point for the method or NULL if the
+    // compilation did not complete (either went background or bailed
+    // out).
+    __ write_insts_mov_imm32(__ x1, 0);
+    __ write_insts_final_call_VM(__ noreg,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::frequency_counter_overflow),
+               __ x1);
+
+    __ write_inst_b(*do_continue);
+}
+
 address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
-    // TODO
-//    // determine code generation flags
-//    bool inc_counter  = UseCompiler || CountCompiledCalls;
+    // determine code generation flags
+    bool inc_counter  = UseCompiler || CountCompiledCalls;
 
     // r1: Method*
     // rscratch1: sender sp
@@ -505,12 +523,11 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     __ write_insts_mov_imm64(__ x9, true);
     __ write_inst("strb w9, [x28, #%d]", in_bytes(JavaThread::do_not_unlock_if_synchronized_offset()));
 
-    // TODO
-//    // increment invocation count & check for overflow
-//    Label invocation_counter_overflow;
-//    if (inc_counter) {
-//        generate_counter_incr(&invocation_counter_overflow, NULL, NULL);
-//    }
+    // increment invocation count & check for overflow
+    YuhuLabel invocation_counter_overflow;
+    if (inc_counter) {
+        generate_counter_incr(&invocation_counter_overflow, NULL, NULL);
+    }
 
     YuhuLabel continue_after_compile;
     __ pin_label(continue_after_compile);
@@ -553,7 +570,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     }
 #endif
 
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    // jvmti support
 //    __ notify_method_entry();
 
@@ -724,8 +741,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
         __ write_inst_blr(__ x9);
         __ write_inst("isb");
         __ write_insts_get_method(__ x12);
-        // TODO
-//        __ reinit_heapbase();
+        __ write_insts_reinit_heapbase();
         __ pin_label(Continue);
     }
 
@@ -858,7 +874,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     //       the exception handler code notifies the runtime of method exits
     //       too. If this happens before, method entry/exit notifications are
     //       not properly paired (was bug - gri 11/22/99).
-    // TODO
+    // TODO - skip it for now, it is for JVMTI
 //    __ notify_method_exit(vtos, InterpreterMacroAssembler::NotifyJVMTI);
 
     // restore potential result in r0:d0, call result handler to
@@ -880,12 +896,11 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     __ write_inst("ret");
 
-    // TODO
-//    if (inc_counter) {
-//        // Handle overflow of counter and compile method
-//        __ bind(invocation_counter_overflow);
-//        generate_counter_overflow(&continue_after_compile);
-//    }
+    if (inc_counter) {
+        // Handle overflow of counter and compile method
+        __ pin_label(invocation_counter_overflow);
+        generate_counter_overflow(&continue_after_compile);
+    }
 
     return entry_point;
 }
@@ -1248,17 +1263,16 @@ void YuhuInterpreterGenerator::generate_fixed_frame(bool native_call) {
         __ write_inst("stp x20, x22, [sp, #%d]!", -10 * wordSize);
     }
 
-    // TODO
-//    if (ProfileInterpreter) {
-//        Label method_data_continue;
-//        __ ldr(rscratch1, Address(rmethod, Method::method_data_offset()));
-//        __ cbz(rscratch1, method_data_continue);
-//        __ lea(rscratch1, Address(rscratch1, in_bytes(MethodData::data_offset())));
-//        __ bind(method_data_continue);
-//        __ stp(rscratch1, rmethod, Address(sp, 4 * wordSize));  // save Method* and mdp (method data pointer)
-//    } else {
+    if (ProfileInterpreter) {
+        YuhuLabel method_data_continue;
+        __ write_inst_ldr(__ x8, YuhuAddress(__ x12, Method::method_data_offset()));
+        __ write_inst_cbz(__ x8, method_data_continue);
+        __ write_insts_lea(__ x8, YuhuAddress(__ x8, in_bytes(MethodData::data_offset())));
+        __ pin_label(method_data_continue);
+        __ write_inst_stp(__ x8, __ x12, YuhuAddress(__ sp, 4 * wordSize));  // save Method* and mdp (method data pointer)
+    } else {
         __ write_inst("stp xzr, x12, [sp, #%d]", 4 * wordSize); // save Method* (no mdp)
-//    }
+    }
 
     __ write_inst("ldr x26, [x12, #%d]", in_bytes(Method::const_offset()));
     __ write_inst("ldr x26, [x26, #%d]", in_bytes(ConstMethod::constants_offset()));
@@ -1369,6 +1383,95 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
     __ pin_label(after_frame_check);
 }
 
+// increment invocation count & check for overflow
+//
+// Note: checking for negative value instead of overflow
+//       so we have a 'sticky' overflow test
+//
+// rmethod: method
+//
+void YuhuInterpreterGenerator::generate_counter_incr(
+        YuhuLabel* overflow,
+        YuhuLabel* profile_method,
+        YuhuLabel* profile_method_continue) {
+    YuhuLabel done;
+    // Note: In tiered we increment either counters in Method* or in MDO depending if we're profiling or not.
+    if (TieredCompilation) {
+        int increment = InvocationCounter::count_increment;
+        int mask = ((1 << Tier0InvokeNotifyFreqLog)  - 1) << InvocationCounter::count_shift;
+        YuhuLabel no_mdo;
+        if (ProfileInterpreter) {
+            // Are we profiling?
+            __ write_inst_ldr(__ x0, YuhuAddress(__ x12, Method::method_data_offset()));
+            __ write_inst_cbz(__ x0, no_mdo);
+            // Increment counter in the MDO
+            const YuhuAddress mdo_invocation_counter(__ x0, in_bytes(MethodData::invocation_counter_offset()) +
+                                                     in_bytes(InvocationCounter::counter_offset()));
+            __ write_insts_increment_mask_and_jump(mdo_invocation_counter, increment, mask, __ x8, __ x9, false, __ eq, overflow);
+            __ write_inst_b(done);
+        }
+        __ pin_label(no_mdo);
+        // Increment counter in MethodCounters
+        const YuhuAddress invocation_counter(__ x9,
+                                         MethodCounters::invocation_counter_offset() +
+                                         InvocationCounter::counter_offset());
+        __ write_insts_get_method_counters(__ x12, __ x9, done);
+        __ write_insts_increment_mask_and_jump(invocation_counter, increment, mask, __ x8, __ x9, false, __ eq, overflow);
+        __ pin_label(done);
+    } else {
+        const YuhuAddress backedge_counter(__ x9,
+                                       MethodCounters::backedge_counter_offset() +
+                                       InvocationCounter::counter_offset());
+        const YuhuAddress invocation_counter(__ x9,
+                                         MethodCounters::invocation_counter_offset() +
+                                         InvocationCounter::counter_offset());
+
+        __ write_insts_get_method_counters(__ x12, __ x9, done);
+
+        if (ProfileInterpreter) { // %%% Merge this into MethodData*
+            __ write_inst_ldr(__ w1, YuhuAddress(__ x9, MethodCounters::interpreter_invocation_counter_offset()));
+            __ write_inst("add %s, %s, #%d", __ x1, __ x1, 1);
+            __ write_inst_str(__ w1, YuhuAddress(__ x9, MethodCounters::interpreter_invocation_counter_offset()));
+        }
+        // Update standard invocation counters
+        __ write_inst_ldr(__ w1, invocation_counter);
+        __ write_inst_ldr(__ w0, backedge_counter);
+
+        __ write_inst("add %s, %s, #%d", __ w1, __ w1, InvocationCounter::count_increment);
+        __ write_inst("and %s, %s, #%d", __ w0, __ w0, InvocationCounter::count_mask_value);
+
+        __ write_inst_str(__ w1, invocation_counter);
+        __ write_inst("add w0, w0, w1");                // add both counters
+
+        // profile_method is non-null only for interpreted method so
+        // profile_method != NULL == !native_call
+
+        if (ProfileInterpreter && profile_method != NULL) {
+            // Test to see if we should create a method data oop
+            uint64_t offset;
+            __ write_insts_adrp(__ x9, YuhuExternalAddress((address)&InvocationCounter::InterpreterProfileLimit),
+                    offset);
+            __ write_inst_ldr(__ w9, YuhuAddress(__ x9, offset));
+            __ write_inst("cmp x0, x9");
+            __ write_inst_b(__ lt, *profile_method_continue);
+
+            // if no method data exists, go to profile_method
+            __ write_insts_test_method_data_pointer(__ x9, *profile_method);
+        }
+
+        {
+            uint64_t offset;
+            __ write_insts_adrp(__ x9,
+                    YuhuExternalAddress((address)&InvocationCounter::InterpreterInvocationLimit),
+                    offset);
+            __ write_inst_ldr(__ w9, YuhuAddress(__ x9, offset));
+            __ write_inst("cmp w0, w9");
+            __ write_inst_b(__ hs, *overflow);
+        }
+        __ pin_label(done);
+    }
+}
+
 void YuhuInterpreterGenerator::bang_stack_shadow_pages(bool native_call) {
     // Bang each page in the shadow zone. We can't assume it's been done for
     // an interpreter frame with greater than a page of locals, so each page
@@ -1382,6 +1485,8 @@ void YuhuInterpreterGenerator::bang_stack_shadow_pages(bool native_call) {
         }
     }
 }
+
+
 
 void YuhuInterpreterGenerator::lock_method(void) {
     // synchronize method
@@ -1495,8 +1600,7 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
     __ write_insts_restore_bcp();    // rbcp points to call/send
     __ write_insts_restore_locals();
     __ write_insts_restore_constant_pool_cache();
-    // TODO
-//    __ reinit_heapbase();  // restore rheapbase as heapbase.
+    __ write_insts_reinit_heapbase();  // restore rheapbase as heapbase.
     __ write_insts_get_dispatch();
 
     // Entry point for exceptions thrown within interpreter code
@@ -1623,10 +1727,9 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
 
     // The method data pointer was incremented already during
     // call profiling. We have to restore the mdp for the current bcp.
-    // TODO
-//    if (ProfileInterpreter) {
-//        __ set_method_data_pointer_for_bcp();
-//    }
+    if (ProfileInterpreter) {
+        __ write_insts_set_method_data_pointer_for_bcp();
+    }
 
     // Clear the popframe condition flag
     __ write_inst("str wzr, [x28, #%d]", in_bytes(JavaThread::popframe_condition_offset()));

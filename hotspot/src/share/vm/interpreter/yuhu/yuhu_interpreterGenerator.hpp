@@ -52,6 +52,9 @@ protected:
 
     void bang_stack_shadow_pages(bool native_call);
 
+    void generate_counter_incr(YuhuLabel* overflow, YuhuLabel* profile_method, YuhuLabel* profile_method_continue);
+    void generate_counter_overflow(YuhuLabel* do_continue);
+
     void initialize_method_handle_entries();
 public:
     YuhuInterpreterGenerator();
