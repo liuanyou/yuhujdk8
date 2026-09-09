@@ -493,7 +493,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
   llvm::Value* get_direct_callee(ciMethod* method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
   llvm::Value* get_virtual_callee(YuhuValue* receiver, ciMethod* call_method, int vtable_index, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
   llvm::Value* get_interface_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
-  llvm::Value* get_dynamic_resolution_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* reg_basic_types, GrowableArray<BasicType>* stk_basic_types);
+  llvm::Value* get_indeterminate_interface_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* reg_basic_types, GrowableArray<BasicType>* stk_basic_types);
 
   void do_call();
 

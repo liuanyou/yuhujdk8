@@ -1036,16 +1036,16 @@ void load_reg_args(YuhuMacroAssembler* masm, int stk_args_size_in_bytes, Growabl
         0x16f7ea590: 0x0000000000000003 0x00000000dead0048 - xzr / x19
         0x16f7ea5a0: 0x000000016f7ea5c0 0x00000001308185ec - prologue x29 / x30
  */
-address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_method,
+address YuhuRuntime::generate_indeterminate_interface_call_stub(ciMethod* target_method,
                                                             ciMethod* current_method,
                                                             GrowableArray<BasicType>* reg_basic_types,
                                                             GrowableArray<BasicType>* stk_basic_types) {
   // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_DYNAMIC_CALL);
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL);
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
-            YUHU_STACK_MAP_LOG("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached indeterminate interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                                p2i(cached->entry_point()),
                                target_method->holder()->name()->as_utf8(),
                                target_method->name()->as_utf8(),
@@ -1054,7 +1054,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
                                current_method->name()->as_utf8(),
                                current_method->signature()->as_symbol()->as_utf8());
         } else {
-            tty->print_cr("Yuhu: Using cached dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+            tty->print_cr("Yuhu: Using cached indeterminate interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                           p2i(cached->entry_point()),
                           target_method->holder()->name()->as_utf8(),
                           target_method->name()->as_utf8(),
@@ -1070,7 +1070,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
   ResourceMark rm;
 
   const int stub_size = 256;
-  CodeBuffer cb("yuhu_dynamic_resolution_call_stub", stub_size, stub_size);
+  CodeBuffer cb("yuhu_indeterminate_interface_call_stub", stub_size, stub_size);
   YuhuMacroAssembler masm(&cb);
 
   address begin = masm.current_pc();
@@ -1198,7 +1198,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
   int frame_size_in_words = frame_size_in_bytes / wordSize;
 
   YuhuRuntimeStub* stub = YuhuRuntimeStub::new_yuhu_runtime_stub(
-      "yuhu_dynamic_resolution_call_stub",
+      "yuhu_indeterminate_interface_call_stub",
       &cb,
       CodeOffsets::frame_never_safe,
       frame_size_in_words,
@@ -1211,7 +1211,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
 
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
-          YUHU_STACK_MAP_LOG("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+          YUHU_STACK_MAP_LOG("Yuhu: Generated indeterminate interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                              p2i(stub_addr),
                              target_method->holder()->name()->as_utf8(),
                              target_method->name()->as_utf8(),
@@ -1220,7 +1220,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
                              current_method->name()->as_utf8(),
                              current_method->signature()->as_symbol()->as_utf8());
       } else {
-          tty->print_cr("Yuhu: Generated dynamic resolution call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+          tty->print_cr("Yuhu: Generated indeterminate interface call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
                         p2i(stub_addr),
                         target_method->holder()->name()->as_utf8(),
                         target_method->name()->as_utf8(),
@@ -1232,7 +1232,7 @@ address YuhuRuntime::generate_dynamic_resolution_call_stub(ciMethod* target_meth
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_DYNAMIC_CALL, stub);
+  _stub_cache->add(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL, stub);
 
   return stub_addr;
 }

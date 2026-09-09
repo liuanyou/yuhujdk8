@@ -1363,7 +1363,7 @@ Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
     "interface_callee_stub");
 }
 
-Value* YuhuTopLevelBlock::get_dynamic_resolution_callee(YuhuValue *receiver,
+Value* YuhuTopLevelBlock::get_indeterminate_interface_callee(YuhuValue *receiver,
                                                          ciMethod*   call_method,
                                                          address* out_stub_addr,
                                                          GrowableArray<BasicType>* reg_basic_types,
@@ -1371,7 +1371,7 @@ Value* YuhuTopLevelBlock::get_dynamic_resolution_callee(YuhuValue *receiver,
   // Generate a dynamic resolution stub for interface methods with itable_index() < 0.
   // These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
   // The stub calls LinkResolver at runtime to resolve the target method dynamically.
-  address stub_addr = YuhuRuntime::generate_dynamic_resolution_call_stub(
+  address stub_addr = YuhuRuntime::generate_indeterminate_interface_call_stub(
     call_method, target(), reg_basic_types, stk_basic_types);
   if (out_stub_addr != NULL) {
       *out_stub_addr = stub_addr;
@@ -1381,7 +1381,7 @@ Value* YuhuTopLevelBlock::get_dynamic_resolution_callee(YuhuValue *receiver,
   return builder()->CreateIntToPtr(
     LLVMValue::intptr_constant((intptr_t)stub_addr),
     YuhuType::intptr_type(),
-    "dynamic_resolution_callee_stub");
+    "indeterminate_interface_callee_stub");
 }
 
 void YuhuTopLevelBlock::do_call() {
@@ -1655,7 +1655,7 @@ void YuhuTopLevelBlock::do_call() {
         // Method has no itable index (e.g. Object methods re-declared in interface
         // like equals/hashCode/toString). These require dynamic resolution via
         // LinkResolver at runtime since compile-time indices are insufficient.
-        callee = get_dynamic_resolution_callee(receiver, call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
+        callee = get_indeterminate_interface_callee(receiver, call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
       }
     }
   }

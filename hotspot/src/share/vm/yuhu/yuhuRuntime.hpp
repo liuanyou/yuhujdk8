@@ -59,7 +59,7 @@ enum YuhuStubCallType {
   YUHUSTUB_STATIC_CALL = 0,
   YUHUSTUB_VIRTUAL_CALL,
   YUHUSTUB_INTERFACE_CALL,
-  YUHUSTUB_DYNAMIC_CALL
+  YUHUSTUB_INDETERMINATE_INTERFACE_CALL
 };
 
 // Hashtable entry for caching YuhuRuntimeStubs keyed by method properties
@@ -179,7 +179,7 @@ class YuhuRuntime : public AllStatic {
   // Generate dynamic resolution call stub for interface methods with itable_index() < 0.
   // These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
   // The stub calls resolve_interface_call to dynamically resolve the target method at runtime.
-  static address generate_dynamic_resolution_call_stub(ciMethod* target_method,
+  static address generate_indeterminate_interface_call_stub(ciMethod* target_method,
                                                         ciMethod* current_method,
                                                         GrowableArray<BasicType>* reg_basic_types,
                                                         GrowableArray<BasicType>* stk_basic_types);
