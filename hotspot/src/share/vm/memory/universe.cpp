@@ -1000,7 +1000,11 @@ bool universe_post_init() {
   Universe::_fully_initialized = true;
   EXCEPTION_MARK;
   { ResourceMark rm;
-    Interpreter::initialize();      // needed for interpreter entry points
+      if (UseYuhuInt) {
+          YuhuInterpreter::initialize();
+      } else {
+          Interpreter::initialize();      // needed for interpreter entry points
+      }
     if (!UseSharedSpaces) {
       HandleMark hm(THREAD);
       KlassHandle ok_h(THREAD, SystemDictionary::Object_klass());

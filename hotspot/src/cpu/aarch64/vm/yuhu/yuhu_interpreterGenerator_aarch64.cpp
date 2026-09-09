@@ -582,7 +582,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
     __ write_inst("ldr %s, [x12, #%d]", t, in_bytes(Method::const_offset()));
     __ write_inst("ldrh %s, [%s, #%d]", __ w_reg(t), t, in_bytes(ConstMethod::size_of_parameters_offset()));
 
-    __ write_inst("sub x8, x20, %s, uxtx #%d", t, Interpreter::logStackElementSize);
+    __ write_inst("sub x8, x20, %s, uxtx #%d", t, YuhuInterpreter::logStackElementSize);
     __ write_inst("and sp, x8, #-16");
     __ write_inst_mov_reg(__ x20, __ x8);
 
@@ -762,7 +762,7 @@ address YuhuInterpreterGenerator::generate_native_entry(bool synchronized) {
 
     {
         YuhuLabel no_oop, not_weak, store_result;
-        __ write_inst_adr(t, AbstractInterpreter::result_handler(T_OBJECT));
+        __ write_inst_adr(t, YuhuInterpreter::result_handler(T_OBJECT));
         __ write_inst_regs("cmp %s, %s", t, result_handler);
         __ write_inst_b(__ ne, no_oop);
         // Unbox oop result, e.g. JNIHandles::resolve result.
@@ -1019,7 +1019,7 @@ address YuhuInterpreterGenerator::generate_math_entry(YuhuInterpreter::MethodKin
             entry_point = __ current_pc();
             __ write_inst("mov x19, lr");
             continuation = __ x19;
-            __ write_inst("ldr d0, [x20, #%d]", 2 * Interpreter::stackElementSize);
+            __ write_inst("ldr d0, [x20, #%d]", 2 * YuhuInterpreter::stackElementSize);
             __ write_inst("ldr d1, [x20]");
             __ write_inst("mov sp, x13");
             generate_transcendental_entry(kind, 2);
@@ -1321,7 +1321,7 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
     // field of this instruction may overflow.  SUBS can cope with this
     // because it is a macro that will expand to some number of MOV
     // instructions and a register operation.
-    __ write_inst("subs x8, x3, #%d", (page_size - overhead_size) / Interpreter::stackElementSize);
+    __ write_inst("subs x8, x3, #%d", (page_size - overhead_size) / YuhuInterpreter::stackElementSize);
     __ write_inst_b(__ ls, after_frame_check);
 
     // compute rsp as if this were going to be the last frame on
@@ -1332,7 +1332,7 @@ void YuhuInterpreterGenerator::generate_stack_overflow_check(void) {
 
     // locals + overhead, in bytes
     __ write_insts_mov_imm64(__ x0, overhead_size);
-    __ write_inst("add x0, x0, x3, lsl #%d", Interpreter::logStackElementSize); // 2 slots per parameter.
+    __ write_inst("add x0, x0, x3, lsl #%d", YuhuInterpreter::logStackElementSize); // 2 slots per parameter.
 
     __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::stack_base_offset()));
     __ write_inst("ldr x9, [x28, #%d]", in_bytes(Thread::stack_size_offset()));
@@ -1514,7 +1514,7 @@ void YuhuInterpreterGenerator::lock_method(void) {
         __ write_inst("ldr w0, [x12, #%d]", in_bytes(Method::access_flags_offset()));
         __ write_inst("tst x0, #%d", JVM_ACC_STATIC);
         // get receiver (assume this is frequent case)
-        __ write_inst("ldr x0, [x24, #%d]", Interpreter::local_offset_in_bytes(0));
+        __ write_inst("ldr x0, [x24, #%d]", YuhuInterpreter::local_offset_in_bytes(0));
         __ write_inst_b(__ eq, done);
         __ write_inst("ldr x0, [x12, #%d]", in_bytes(Method::const_offset()));
         __ write_inst("ldr x0, [x0, #%d]", in_bytes(ConstMethod::constants_offset()));
@@ -1566,6 +1566,68 @@ address YuhuInterpreterGenerator::generate_result_handler_for(
         default       : ShouldNotReachHere();
     }
     __ write_inst("ret");  // return from result handler
+    return entry;
+}
+
+address YuhuInterpreterGenerator::generate_slow_signature_handler() {
+    address entry = __ current_pc();
+
+    __ write_inst("and %s, %s, #%d", __ x20, __ x20, -16);
+    __ write_inst_mov_reg(__ x3, __ x20);
+    // rmethod
+    // rlocals
+    // c_rarg3: first stack arg - wordSize
+
+    // adjust sp
+    __ write_inst("sub %s, %s, #%d", __ sp, __ x3, 18 * wordSize);
+    __ write_inst_str(__ lr, YuhuAddress(YuhuPre(__ sp, -2 * wordSize)));
+    __ write_insts_final_call_VM(__ noreg,
+               CAST_FROM_FN_PTR(address,
+                                InterpreterRuntime::slow_signature_handler),
+               __ x12, __ x24, __ x3);
+
+    // r0: result handler
+
+    // Stack layout:
+    // rsp: return address           <- sp
+    //      1 garbage
+    //      8 integer args (if static first is unused)
+    //      1 float/double identifiers
+    //      8 double args
+    //        stack args              <- esp
+    //        garbage
+    //        expression stack bottom
+    //        bcp (NULL)
+    //        ...
+
+    // Restore LR
+    __ write_inst_ldr(__ lr, YuhuAddress(YuhuPost(__ sp, 2 * wordSize)));
+
+    // Do FP first so we can use c_rarg3 as temp
+    __ write_inst_ldr(__ w3, YuhuAddress(__ sp, 9 * wordSize)); // float/double identifiers
+
+    for (int i = 0; i < Argument::n_float_register_parameters_c; i++) {
+        YuhuLabel d, done;
+
+        __ write_inst_tbnz(__ x3, i, d);
+        __ write_inst_ldr(__ as_register(i, 1, 0b00).as_float_register(), YuhuAddress(__ sp, (10 + i) * wordSize));
+        __ write_inst_b(done);
+        __ pin_label(d);
+        __ write_inst_ldr(__ as_register(i, 1, 0b01).as_float_register(), YuhuAddress(__ sp, (10 + i) * wordSize));
+        __ pin_label(done);
+    }
+
+    // c_rarg0 contains the result from the call of
+    // InterpreterRuntime::slow_signature_handler so we don't touch it
+    // here.  It will be loaded with the JNIEnv* later.
+    __ write_inst_ldr(__ x1, YuhuAddress(__ sp, 1 * wordSize));
+    for (int i = __ encoding(__ x2); i <= __ encoding(__ x7); i += 2) {
+        __ write_inst_ldp(__ as_register(i, 0, 0b10).as_general_register(), __ as_register(i+1, 0, 0b10).as_general_register(), YuhuAddress(__ sp, i * wordSize));
+    }
+
+    __ write_inst("add %s, %s, #%d", __ sp, __ sp, 18 * wordSize);
+    __ write_inst("ret lr");
+
     return entry;
 }
 
@@ -1684,7 +1746,7 @@ void YuhuInterpreterGenerator::generate_throw_exception() {
         __ write_inst("ldr x0, [x0, #%d]", in_bytes(Method::const_offset()));
         __ write_inst("ldrh w0, [x0, #%d]", in_bytes(ConstMethod::
                                                      size_of_parameters_offset()));
-        __ write_inst("lsl x0, x0, #%d", Interpreter::logStackElementSize);
+        __ write_inst("lsl x0, x0, #%d", YuhuInterpreter::logStackElementSize);
         __ write_insts_restore_locals(); // XXX do we need this?
         __ write_inst("sub x24, x24, x0");
         __ write_inst("add x24, x24, #%d", wordSize);
@@ -1849,7 +1911,7 @@ address YuhuInterpreterGenerator::generate_exception_handler_common(
                    __ x1, __ x2);
     }
     // throw exception
-    __ write_inst_b(address(Interpreter::throw_exception_entry()));
+    __ write_inst_b(address(YuhuInterpreter::throw_exception_entry()));
     return entry;
 }
 

@@ -498,7 +498,7 @@ static void gen_i2c_adapter(MacroAssembler *masm,
   // caller, but with an uncorrected stack, causing delayed havoc.
 
   if (VerifyAdapterCalls &&
-      (Interpreter::code() != NULL || StubRoutines::code1() != NULL)) {
+      ((UseYuhuInt ? YuhuInterpreter::code() : Interpreter::code()) != NULL || StubRoutines::code1() != NULL)) {
 #if 0
     // So, let's test for cascading c2i/i2c adapters right now.
     //  assert(Interpreter::contains($return_addr) ||
@@ -506,9 +506,9 @@ static void gen_i2c_adapter(MacroAssembler *masm,
     //         "i2c adapter must return to an interpreter frame");
     __ block_comment("verify_i2c { ");
     Label L_ok;
-    if (Interpreter::code() != NULL)
+    if ((UseYuhuInt ? YuhuInterpreter::code() : Interpreter::code()) != NULL)
       range_check(masm, rax, r11,
-                  Interpreter::code()->code_start(), Interpreter::code()->code_end(),
+                  UseYuhuInt ? YuhuInterpreter::code()->code_start() : Interpreter::code()->code_start(), UseYuhuInt ? YuhuInterpreter::code()->code_end() : Interpreter::code()->code_end(),
                   L_ok);
     if (StubRoutines::code1() != NULL)
       range_check(masm, rax, r11,

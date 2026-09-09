@@ -20,6 +20,9 @@ static const BasicType types[YuhuInterpreter::number_of_result_handlers] = {
 };
 
 void YuhuInterpreterGenerator::generate_all() {
+    { YuhuCodeletMark cm(_masm, "yuhu slow signature handler");
+        YuhuInterpreter::_slow_signature_handler = generate_slow_signature_handler();
+    }
     {
         YuhuCodeletMark cm(_masm, "yuhu error exits");
         _unimplemented_bytecode    = generate_error_exit("yuhu unimplemented bytecode");

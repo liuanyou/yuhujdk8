@@ -121,7 +121,7 @@ bool CompilationPolicy::can_be_compiled(methodHandle m, int comp_level) {
   // production because the invocation counter can't be incremented
   // but we shouldn't expose the system to this problem in testing
   // modes.
-  if (!AbstractInterpreter::can_be_compiled(m)) {
+  if (!(UseYuhuInt ? YuhuInterpreter::can_be_compiled(m) : AbstractInterpreter::can_be_compiled(m))) {
     return false;
   }
   if (comp_level == CompLevel_all) {

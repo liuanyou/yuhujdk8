@@ -572,16 +572,27 @@ void frame::print_value_on(outputStream* st, JavaThread *thread) const {
     StubCodeDesc* desc = StubCodeDesc::desc_for(pc());
     st->print("~Stub::%s", desc->name());
     NOT_PRODUCT(begin = desc->begin(); end = desc->end();)
-  } else if (Interpreter::contains(pc())) {
+  } else if (UseYuhuInt ? YuhuInterpreter::contains(pc()) : Interpreter::contains(pc())) {
     st->print_cr(")");
     st->print("(");
-    InterpreterCodelet* desc = Interpreter::codelet_containing(pc());
-    if (desc != NULL) {
-      st->print("~");
-      desc->print_on(st);
-      NOT_PRODUCT(begin = desc->code_begin(); end = desc->code_end();)
+    if (UseYuhuInt) {
+        YuhuInterpreterCodelet *desc = YuhuInterpreter::codelet_containing(pc());
+        if (desc != NULL) {
+            st->print("~");
+            desc->print_on(st);
+            NOT_PRODUCT(begin = desc->code_begin(); end = desc->code_end();)
+        } else {
+            st->print("~yuhu interpreter");
+        }
     } else {
-      st->print("~interpreter");
+        InterpreterCodelet *desc = Interpreter::codelet_containing(pc());
+        if (desc != NULL) {
+            st->print("~");
+            desc->print_on(st);
+            NOT_PRODUCT(begin = desc->code_begin(); end = desc->code_end();)
+        } else {
+            st->print("~interpreter");
+        }
     }
   }
   st->print_cr(")");
@@ -706,7 +717,7 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
 
 void frame::print_on_error(outputStream* st, char* buf, int buflen, bool verbose) const {
   if (_cb != NULL) {
-    if (Interpreter::contains(pc())) {
+    if (UseYuhuInt ? YuhuInterpreter::contains(pc()) : Interpreter::contains(pc())) {
       Method* m = this->interpreter_frame_method();
       if (m != NULL) {
         m->name_and_sig_as_C_string(buf, buflen);
@@ -1183,7 +1194,7 @@ void frame::nmethods_do(CodeBlobClosure* cf) {
 // call f() on the interpreted Method*s in the stack.
 // Have to walk the entire code cache for the compiled frames Yuck.
 void frame::metadata_do(void f(Metadata*)) {
-  if (_cb != NULL && Interpreter::contains(pc())) {
+  if (_cb != NULL && (UseYuhuInt ? YuhuInterpreter::contains(pc()) : Interpreter::contains(pc()))) {
     Method* m = this->interpreter_frame_method();
     assert(m != NULL, "huh?");
     f(m);
@@ -1330,7 +1341,7 @@ bool frame::verify_return_pc(address x) {
   if (CodeCache::contains(x)) {
     return true;
   }
-  if (Interpreter::contains(x)) {
+  if (UseYuhuInt ? YuhuInterpreter::contains(x) : Interpreter::contains(x)) {
     return true;
   }
   return false;

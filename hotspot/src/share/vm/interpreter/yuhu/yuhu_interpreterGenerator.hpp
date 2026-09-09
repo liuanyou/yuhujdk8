@@ -22,6 +22,7 @@ protected:
     address generate_return_entry_for(TosState state, int step, size_t index_size);
     address generate_deopt_entry_for(TosState state, int step);
     address generate_result_handler_for(BasicType type);
+    address generate_slow_signature_handler();
     address generate_continuation_for(TosState state);
     address generate_safept_entry_for(TosState state, address runtime_entry);
     void    generate_throw_exception();

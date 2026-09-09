@@ -172,7 +172,7 @@ bool frame::safe_for_sender(JavaThread *thread) {
 
 
     // If the potential sender is the interpreter then we can do some more checking
-    if (Interpreter::contains(sender_pc)) {
+    if (UseYuhuInt ? YuhuInterpreter::contains(sender_pc) : Interpreter::contains(sender_pc)) {
 
       // fp is always saved in a recognizable place in any code we generate. However
       // only if the sender is interpreted/call_stub (c1 too?) are we certain that the saved fp
@@ -312,7 +312,7 @@ void frame::patch_pc(Thread* thread, address pc) {
 }
 
 bool frame::is_interpreted_frame() const  {
-  return Interpreter::contains(pc()) || YuhuInterpreter::contains(pc());
+  return UseYuhuInt ? YuhuInterpreter::contains(pc()) : Interpreter::contains(pc());
 }
 
 int frame::frame_size(RegisterMap* map) const {
@@ -804,7 +804,7 @@ void internal_pf(uintptr_t sp, uintptr_t fp, uintptr_t pc, uintptr_t bcx) {
   if (bcx == -1ULL)
     bcx = p[frame::interpreter_frame_bcx_offset];
 
-  if (Interpreter::contains((address)pc)) {
+  if (UseYuhuInt ? YuhuInterpreter::contains((address)pc) : Interpreter::contains((address)pc)) {
     Method* m = (Method*)p[frame::interpreter_frame_method_offset];
     if(m && m->is_method()) {
       printbc(m, bcx);

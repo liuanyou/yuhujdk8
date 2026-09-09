@@ -337,7 +337,7 @@ void JvmtiEventControllerPrivate::set_should_post_single_step(bool on) {
 void VM_ChangeSingleStep::doit() {
   JvmtiEventControllerPrivate::set_should_post_single_step(_on);
   if (_on) {
-    Interpreter::notice_safepoints();
+    if (UseYuhuInt) { YuhuInterpreter::notice_safepoints(); } else { Interpreter::notice_safepoints(); }
   }
 }
 

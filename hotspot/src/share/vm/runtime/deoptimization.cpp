@@ -365,7 +365,7 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
   int popframe_extra_args = 0;
   // Create an interpreter return address for the stub to use as its return
   // address so the skeletal frames are perfectly walkable
-  frame_pcs[number_of_frames] = Interpreter::deopt_entry(vtos, 0);
+  frame_pcs[number_of_frames] = UseYuhuInt ? YuhuInterpreter::deopt_entry(vtos, 0) : Interpreter::deopt_entry(vtos, 0);
 
   // PopFrame requires that the preserved incoming arguments from the recently-popped topmost
   // activation be put back on the expression stack of the caller for reexecution
@@ -431,7 +431,8 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
     // as interpreted so the skeleton frame will be walkable
     // The correct pc will be set when the skeleton frame is completely filled out
     // The final pc we store in the loop is wrong and will be overwritten below
-    frame_pcs[number_of_frames - 1 - index ] = Interpreter::deopt_entry(vtos, 0) - frame::pc_return_offset;
+    frame_pcs[number_of_frames - 1 - index ] = UseYuhuInt ? (YuhuInterpreter::deopt_entry(vtos, 0) - frame::pc_return_offset) :
+                                               (Interpreter::deopt_entry(vtos, 0) - frame::pc_return_offset);
 
     callee_parameters = array->element(index)->method()->size_of_parameters();
     callee_locals = array->element(index)->method()->max_locals();

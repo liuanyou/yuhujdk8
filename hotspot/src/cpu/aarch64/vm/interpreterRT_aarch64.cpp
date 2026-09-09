@@ -370,7 +370,7 @@ void InterpreterRuntime::SignatureHandlerGenerator::generate(uint64_t fingerprin
   iterate(fingerprint);
 
   // return result handler
-  __ lea(r0, ExternalAddress(Interpreter::result_handler(method()->result_type())));
+  __ lea(r0, ExternalAddress(UseYuhuInt ? YuhuInterpreter::result_handler(method()->result_type()) : Interpreter::result_handler(method()->result_type())));
   __ ret(lr);
 
   __ flush();
@@ -532,5 +532,5 @@ IRT_ENTRY(address,
   ssh.iterate((uint64_t)CONST64(-1));
 
   // return result handler
-  return Interpreter::result_handler(m->result_type());
+  return UseYuhuInt ? YuhuInterpreter::result_handler(m->result_type()) : Interpreter::result_handler(m->result_type());
 IRT_END

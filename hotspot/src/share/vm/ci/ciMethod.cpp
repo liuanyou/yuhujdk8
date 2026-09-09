@@ -333,7 +333,7 @@ address ciMethod::interpreter_entry() {
   check_is_loaded();
   VM_ENTRY_MARK;
   methodHandle mh(THREAD, get_Method());
-  return Interpreter::entry_for_method(mh);
+  return UseYuhuInt ? YuhuInterpreter::entry_for_method(mh) : Interpreter::entry_for_method(mh);
 }
 
 

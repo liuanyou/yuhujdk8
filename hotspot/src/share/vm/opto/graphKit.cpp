@@ -815,7 +815,7 @@ static bool should_reexecute_implied_by_bytecode(JVMState *jvms, bool is_anewarr
   int       cur_bci   = jvms->bci();
   if (cur_method != NULL && cur_bci != InvocationEntryBci) {
     Bytecodes::Code code = cur_method->java_code_at_bci(cur_bci);
-    return Interpreter::bytecode_should_reexecute(code) ||
+    return (UseYuhuInt ? YuhuInterpreter::bytecode_should_reexecute(code) : Interpreter::bytecode_should_reexecute(code)) ||
            is_anewarray && code == Bytecodes::_multianewarray;
     // Reexecute _multianewarray bytecode which was replaced with
     // sequence of [a]newarray. See Parse::do_multianewarray().

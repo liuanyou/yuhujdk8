@@ -947,18 +947,35 @@ void os::print_location(outputStream* st, intptr_t x, bool verbose) {
   CodeBlob* b = CodeCache::find_blob_unsafe(addr);
   if (b != NULL) {
     if (b->is_buffer_blob()) {
-      // the interpreter is generated into a buffer blob
-      InterpreterCodelet* i = Interpreter::codelet_containing(addr);
-      if (i != NULL) {
-        st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an Interpreter codelet", addr, (int)(addr - i->code_begin()));
-        i->print_on(st);
-        return;
-      }
-      if (Interpreter::contains(addr)) {
-        st->print_cr(INTPTR_FORMAT " is pointing into interpreter code"
-                     " (not bytecode specific)", addr);
-        return;
-      }
+        if (UseYuhuInt) {
+            // the interpreter is generated into a buffer blob
+            YuhuInterpreterCodelet *i = YuhuInterpreter::codelet_containing(addr);
+            if (i != NULL) {
+                st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an yuhu Interpreter codelet", addr,
+                             (int) (addr - i->code_begin()));
+                i->print_on(st);
+                return;
+            }
+            if (YuhuInterpreter::contains(addr)) {
+                st->print_cr(INTPTR_FORMAT " is pointing into yuhu interpreter code"
+                             " (not bytecode specific)", addr);
+                return;
+            }
+        } else {
+            // the interpreter is generated into a buffer blob
+            InterpreterCodelet *i = Interpreter::codelet_containing(addr);
+            if (i != NULL) {
+                st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an Interpreter codelet", addr,
+                             (int) (addr - i->code_begin()));
+                i->print_on(st);
+                return;
+            }
+            if (Interpreter::contains(addr)) {
+                st->print_cr(INTPTR_FORMAT " is pointing into interpreter code"
+                             " (not bytecode specific)", addr);
+                return;
+            }
+        }
       //
       if (AdapterHandlerLibrary::contains(b)) {
         st->print_cr(INTPTR_FORMAT " is at code_begin+%d in an AdapterHandler", addr, (int)(addr - b->code_begin()));

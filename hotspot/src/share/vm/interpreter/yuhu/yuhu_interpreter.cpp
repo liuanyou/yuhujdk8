@@ -6,6 +6,7 @@
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 
 StubQueue* YuhuInterpreter::_code = NULL;
+bool       YuhuInterpreter::_notice_safepoints                          = false;
 address YuhuInterpreter::_native_entry_begin = NULL;
 address YuhuInterpreter::_native_entry_end = NULL;
 YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_return_entries];
@@ -24,6 +25,7 @@ address    YuhuInterpreter::_wentry_point[YuhuDispatchTable::length];
 
 address    YuhuInterpreter::_entry_table            [YuhuInterpreter::number_of_method_entries];
 address    YuhuInterpreter::_native_abi_to_tosca[number_of_result_handlers];
+address    YuhuInterpreter::_slow_signature_handler = NULL;
 
 address YuhuInterpreter::_rethrow_exception_entry = NULL;
 address YuhuInterpreter::_throw_exception_entry = NULL;
@@ -186,6 +188,112 @@ address* YuhuInterpreter::invoke_return_entry_table_for(Bytecodes::Code code) {
     }
 }
 
+int YuhuInterpreter::TosState_as_index(TosState state) {
+    assert( state < number_of_states , "Invalid state in TosState_as_index");
+    assert(0 <= (int)state && (int)state < YuhuInterpreter::number_of_return_addrs, "index out of bounds");
+    return (int)state;
+}
+
+/**
+ * If a deoptimization happens, this function returns the point of next bytecode to continue execution.
+ */
+address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp, int callee_parameters, bool is_top_frame) {
+    assert(method->contains(bcp), "just checkin'");
+
+    // Get the original and rewritten bytecode.
+    Bytecodes::Code code = Bytecodes::java_code_at(method, bcp);
+    assert(!YuhuInterpreter::bytecode_should_reexecute(code), "should not reexecute");
+
+    const int bci = method->bci_from(bcp);
+
+    // compute continuation length
+    const int length = Bytecodes::length_at(method, bcp);
+
+    // compute result type
+    BasicType type = T_ILLEGAL;
+
+    switch (code) {
+        case Bytecodes::_invokevirtual  :
+        case Bytecodes::_invokespecial  :
+        case Bytecodes::_invokestatic   :
+        case Bytecodes::_invokeinterface: {
+            Thread *thread = Thread::current();
+            ResourceMark rm(thread);
+            methodHandle mh(thread, method);
+            type = Bytecode_invoke(mh, bci).result_type();
+            // since the cache entry might not be initialized:
+            // (NOT needed for the old calling convension)
+            if (!is_top_frame) {
+                int index = Bytes::get_native_u2(bcp+1);
+                method->constants()->cache()->entry_at(index)->set_parameter_size(callee_parameters);
+            }
+            break;
+        }
+
+        case Bytecodes::_invokedynamic: {
+            Thread *thread = Thread::current();
+            ResourceMark rm(thread);
+            methodHandle mh(thread, method);
+            type = Bytecode_invoke(mh, bci).result_type();
+            // since the cache entry might not be initialized:
+            // (NOT needed for the old calling convension)
+            if (!is_top_frame) {
+                int index = Bytes::get_native_u4(bcp+1);
+                method->constants()->invokedynamic_cp_cache_entry_at(index)->set_parameter_size(callee_parameters);
+            }
+            break;
+        }
+
+        case Bytecodes::_ldc   :
+        case Bytecodes::_ldc_w : // fall through
+        case Bytecodes::_ldc2_w:
+        {
+            Thread *thread = Thread::current();
+            ResourceMark rm(thread);
+            methodHandle mh(thread, method);
+            type = Bytecode_loadconstant(mh, bci).result_type();
+            break;
+        }
+
+        default:
+            type = Bytecodes::result_type(code);
+            break;
+    }
+
+    // return entry point for computed continuation state & bytecode length
+    return
+            is_top_frame
+            ? YuhuInterpreter::deopt_entry (as_TosState(type), length)
+            : YuhuInterpreter::return_entry(as_TosState(type), length, code);
+}
+
+address YuhuInterpreter::deopt_entry(TosState state, int length) {
+    guarantee(0 <= length && length < YuhuInterpreter::number_of_deopt_entries, "illegal length");
+    return _deopt_entry[length].entry(state);
+}
+
+/**
+ * Returns the return entry address for the given top-of-stack state and bytecode.
+ */
+address YuhuInterpreter::return_entry(TosState state, int length, Bytecodes::Code code) {
+    guarantee(0 <= length && length < Interpreter::number_of_return_entries, "illegal length");
+    const int index = TosState_as_index(state);
+    switch (code) {
+        case Bytecodes::_invokestatic:
+        case Bytecodes::_invokespecial:
+        case Bytecodes::_invokevirtual:
+        case Bytecodes::_invokehandle:
+            return _invoke_return_entry[index];
+        case Bytecodes::_invokeinterface:
+            return _invokeinterface_return_entry[index];
+        case Bytecodes::_invokedynamic:
+            return _invokedynamic_return_entry[index];
+        default:
+            assert(!Bytecodes::is_invoke(code), err_msg("invoke instructions should be handled separately: %s", Bytecodes::name(code)));
+            return _return_entry[length].entry(state);
+    }
+}
+
 YuhuInterpreter::MethodKind YuhuInterpreter::method_kind(methodHandle m) {
     // Abstract method?
     if (m->is_abstract()) return abstract;
@@ -276,4 +384,90 @@ void YuhuInterpreter::set_entry_for_kind(YuhuInterpreter::MethodKind kind, addre
            kind <= method_handle_invoke_LAST, "late initialization only for MH entry points");
     assert(_entry_table[kind] == _entry_table[abstract], "previous value must be AME entry");
     _entry_table[kind] = entry;
+}
+
+// If deoptimization happens, the interpreter should reexecute this bytecode.
+// This function mainly helps the compilers to set up the reexecute bit.
+bool YuhuInterpreter::bytecode_should_reexecute(Bytecodes::Code code) {
+    if (code == Bytecodes::_return) {
+        //Yes, we consider Bytecodes::_return as a special case of reexecution
+        return true;
+    } else {
+        return AbstractInterpreter::bytecode_should_reexecute(code);
+    }
+}
+
+// If deoptimization happens, this function returns the point where the interpreter reexecutes
+// the bytecode.
+// Note: Bytecodes::_athrow (C1 only) and Bytecodes::_return are the special cases
+//       that do not return "Interpreter::deopt_entry(vtos, 0)"
+address YuhuInterpreter::deopt_reexecute_entry(Method* method, address bcp) {
+    assert(method->contains(bcp), "just checkin'");
+    Bytecodes::Code code   = Bytecodes::java_code_at(method, bcp);
+    if (code == Bytecodes::_return) {
+        // This is used for deopt during registration of finalizers
+        // during Object.<init>.  We simply need to resume execution at
+        // the standard return vtos bytecode to pop the frame normally.
+        // reexecuting the real bytecode would cause double registration
+        // of the finalizable object.
+        return _normal_table.entry(Bytecodes::_return).entry(vtos);
+    } else {
+        assert(method->contains(bcp), "just checkin'");
+        Bytecodes::Code code   = Bytecodes::java_code_at(method, bcp);
+#ifdef COMPILER1
+        if(code == Bytecodes::_athrow ) {
+            return YuhuInterpreter::rethrow_exception_entry();
+        }
+#endif /* COMPILER1 */
+        return YuhuInterpreter::deopt_entry(vtos, 0);
+    }
+}
+
+// These should never be compiled since the interpreter will prefer
+// the compiled version to the intrinsic version.
+bool YuhuInterpreter::can_be_compiled(methodHandle m) {
+    switch (method_kind(m)) {
+        case YuhuInterpreter::java_lang_math_sin     : // fall thru
+        case YuhuInterpreter::java_lang_math_cos     : // fall thru
+        case YuhuInterpreter::java_lang_math_tan     : // fall thru
+        case YuhuInterpreter::java_lang_math_abs     : // fall thru
+        case YuhuInterpreter::java_lang_math_log     : // fall thru
+        case YuhuInterpreter::java_lang_math_log10   : // fall thru
+        case YuhuInterpreter::java_lang_math_sqrt    : // fall thru
+        case YuhuInterpreter::java_lang_math_pow     : // fall thru
+        case YuhuInterpreter::java_lang_math_exp     :
+            return false;
+        default:
+            return true;
+    }
+}
+
+// Safepoint suppport
+
+static inline void copy_table(address* from, address* to, int size) {
+    // Copy non-overlapping tables. The copy has to occur word wise for MT safety.
+    while (size-- > 0) *to++ = *from++;
+}
+
+void YuhuInterpreter::notice_safepoints() {
+    if (!_notice_safepoints) {
+        // switch to safepoint dispatch table
+        _notice_safepoints = true;
+        copy_table((address*)&_safept_table, (address*)&_active_table, sizeof(_active_table) / sizeof(address));
+    }
+}
+
+// switch from the dispatch table which notices safepoints back to the
+// normal dispatch table.  So that we can notice single stepping points,
+// keep the safepoint dispatch table if we are single stepping in JVMTI.
+// Note that the should_post_single_step test is exactly as fast as the
+// JvmtiExport::_enabled test and covers both cases.
+void YuhuInterpreter::ignore_safepoints() {
+    if (_notice_safepoints) {
+        if (!JvmtiExport::should_post_single_step()) {
+            // switch to normal dispatch table
+            _notice_safepoints = false;
+            copy_table((address*)&_normal_table, (address*)&_active_table, sizeof(_active_table) / sizeof(address));
+        }
+    }
 }

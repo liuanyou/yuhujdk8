@@ -174,14 +174,15 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
   if (raw_bci() == SynchronizationEntryBCI) {
     // We are deoptimizing while hanging in prologue code for synchronized method
     bcp = method()->bcp_from(0); // first byte code
-    pc  = Interpreter::deopt_entry(vtos, 0); // step = 0 since we don't skip current bytecode
+    pc  = UseYuhuInt ? YuhuInterpreter::deopt_entry(vtos, 0) : Interpreter::deopt_entry(vtos, 0); // step = 0 since we don't skip current bytecode
   } else if (should_reexecute()) { //reexecute this bytecode
     assert(is_top_frame, "reexecute allowed only for the top frame");
     bcp = method()->bcp_from(bci());
-    pc  = Interpreter::deopt_reexecute_entry(method(), bcp);
+    pc  = UseYuhuInt ? YuhuInterpreter::deopt_reexecute_entry(method(), bcp) : Interpreter::deopt_reexecute_entry(method(), bcp);
   } else {
     bcp = method()->bcp_from(bci());
-    pc  = Interpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame);
+    pc  = UseYuhuInt ? YuhuInterpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame) :
+            Interpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame);
     use_next_mdp = true;
   }
   assert(Bytecodes::is_defined(*bcp), "must be a valid bytecode");
@@ -214,16 +215,17 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
       if (thread->has_pending_popframe()) {
         // Pop top frame after deoptimization
 #ifndef CC_INTERP
+        assert(!UseYuhuInt, "yuhu interpreter doesn't support jvmti yet");
         pc = Interpreter::remove_activation_preserving_args_entry();
 #else
         // Do an uncommon trap type entry. c++ interpreter will know
         // to pop frame and preserve the args
-        pc = Interpreter::deopt_entry(vtos, 0);
+        pc = UseYuhuInt ? YuhuInterpreter::deopt_entry(vtos, 0) : Interpreter::deopt_entry(vtos, 0);
         use_next_mdp = false;
 #endif
       } else {
         // Reexecute invoke in top frame
-        pc = Interpreter::deopt_entry(vtos, 0);
+        pc = UseYuhuInt ? YuhuInterpreter::deopt_entry(vtos, 0) : Interpreter::deopt_entry(vtos, 0);
         use_next_mdp = false;
         popframe_preserved_args_size_in_bytes = in_bytes(thread->popframe_preserved_args_size());
         // Note: the PopFrame-related extension of the expression stack size is done in
@@ -233,6 +235,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     } else if (JvmtiExport::can_force_early_return() && state != NULL && state->is_earlyret_pending()) {
       // Force early return from top frame after deoptimization
 #ifndef CC_INTERP
+        assert(!UseYuhuInt, "yuhu interpreter doesn't support jvmti yet");
       pc = Interpreter::remove_activation_early_entry(state->earlyret_tos());
 #endif
     } else {
@@ -251,7 +254,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
       case Deoptimization::Unpack_uncommon_trap:
       case Deoptimization::Unpack_reexecute:
         // redo last byte code
-        pc  = Interpreter::deopt_entry(vtos, 0);
+        pc  = UseYuhuInt ? YuhuInterpreter::deopt_entry(vtos, 0) : Interpreter::deopt_entry(vtos, 0);
         use_next_mdp = false;
         break;
       default:

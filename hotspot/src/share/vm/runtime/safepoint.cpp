@@ -196,7 +196,7 @@ void SafepointSynchronize::begin() {
   }
 
   // Make interpreter safepoint aware
-  Interpreter::notice_safepoints();
+  if (UseYuhuInt) { YuhuInterpreter::notice_safepoints(); } else { Interpreter::notice_safepoints(); }
 
   if (UseCompilerSafepoints && DeferPollingPageLoopCount < 0) {
     // Make polling safepoint aware
@@ -436,7 +436,7 @@ void SafepointSynchronize::end() {
   }
 
   // Remove safepoint check from interpreter
-  Interpreter::ignore_safepoints();
+  if (UseYuhuInt) { YuhuInterpreter::ignore_safepoints(); } else { Interpreter::ignore_safepoints(); }
 
   {
     MutexLocker mu(Safepoint_lock);

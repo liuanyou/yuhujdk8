@@ -50,6 +50,45 @@ public:
 //    bool operator == (DispatchTable& y);                // for debugging only
 };
 
+class YuhuInterpreterCodelet: public Stub {
+    friend class VMStructs;
+private:
+    int         _size;                             // the size in bytes
+    const char* _description;                      // a description of the codelet, for debugging & printing
+    Bytecodes::Code _bytecode;                     // associated bytecode if any
+    DEBUG_ONLY(CodeStrings _strings;)              // Comments for annotating assembler output.
+
+public:
+    // Initialization/finalization
+    void    initialize(int size,
+                       CodeStrings& strings)       { _size = size; DEBUG_ONLY(_strings.assign(strings);) }
+    void    finalize()                             { ShouldNotCallThis(); }
+
+    // General info/converters
+    int     size() const                           { return _size; }
+    static  int code_size_to_size(int code_size)   { return round_to(sizeof(YuhuInterpreterCodelet), CodeEntryAlignment) + code_size; }
+
+    // Code info
+    address code_begin() const                     { return (address)this + round_to(sizeof(YuhuInterpreterCodelet), CodeEntryAlignment); }
+    address code_end() const                       { return (address)this + size(); }
+
+    // Debugging
+    void    verify();
+    void    print_on(outputStream* st) const;
+    void    print() const { print_on(tty); }
+
+    // Interpreter-specific initialization
+    void    initialize(const char* description, Bytecodes::Code bytecode);
+
+    // Interpreter-specific attributes
+    int         code_size() const                  { return code_end() - code_begin(); }
+    const char* description() const                { return _description; }
+    Bytecodes::Code bytecode() const               { return _bytecode; }
+};
+
+// Define a prototype interface
+DEF_STUB_INTERFACE(YuhuInterpreterCodelet);
+
 class YuhuInterpreter : AllStatic {
 friend class YuhuInterpreterGenerator;
 friend class YuhuTemplateTable;
@@ -100,6 +139,8 @@ public:
     }
 protected:
     static StubQueue* _code;
+    static bool       _notice_safepoints;                         // true if safepoints are activated
+
     static address    _native_entry_begin;                        // Region for native entry code
     static address    _native_entry_end;
     static YuhuEntryPoint _return_entry[number_of_return_entries];    // entry points to return to from a call
@@ -119,6 +160,7 @@ protected:
     // method entry points
     static address    _entry_table[number_of_method_entries];     // entry points for a given method
     static address    _native_abi_to_tosca[number_of_result_handlers];  // for native method result handlers
+    static address    _slow_signature_handler;                              // the native method generic (slow) signature handler
 
     static address    _rethrow_exception_entry;                   // rethrows an activation in previous frame
     static address    _throw_exception_entry;
@@ -156,6 +198,16 @@ public:
     static address*   invokedynamic_return_entry_table()          { return _invokedynamic_return_entry; }
     static address* invoke_return_entry_table_for(Bytecodes::Code code);
 
+    static int        TosState_as_index(TosState state);
+
+    static address deopt_entry(TosState state, int length);
+    static address return_entry(TosState state, int length, Bytecodes::Code code);
+
+    // Safepoint support
+    static void       notice_safepoints();                        // stops the thread when reaching a safepoint
+    static void       ignore_safepoints();                        // ignores safepoints
+
+    static address    remove_activation_entry()                   { return _remove_activation_entry; }
     static address    rethrow_exception_entry()                   { return _rethrow_exception_entry; }
     static address    throw_exception_entry()                     { return _throw_exception_entry; }
     static address    throw_NullPointerException_entry()          { return _throw_NullPointerException_entry; }
@@ -169,53 +221,34 @@ public:
     
     // used for bootstrapping method handles:
     static void       set_entry_for_kind(MethodKind k, address e);
+
+    // Deoptimization support
+    // Compute the entry address for continuation after
+    static address deopt_continue_after_entry(Method* method,
+                                              address bcp,
+                                              int callee_parameters,
+                                              bool is_top_frame);
+
+    static bool bytecode_should_reexecute(Bytecodes::Code code);
+
+    // Compute the address for reexecution
+    static address deopt_reexecute_entry(Method* method, address bcp);
+
+    // Support for native calls
+    static address    slow_signature_handler()                    { return _slow_signature_handler; }
+    static address    result_handler(BasicType type)              { return _native_abi_to_tosca[BasicType_as_index(type)]; }
     
     // Frame detection support - check if PC is within YuhuInterpreter generated code
     static bool       contains(address pc);
+
+    static YuhuInterpreterCodelet* codelet_containing(address pc)     { return (YuhuInterpreterCodelet*)_code->stub_containing(pc); }
+
+    static bool       can_be_compiled(methodHandle m);
 
 #ifdef TARGET_ARCH_aarch64
 # include "yuhu_interpreter_aarch64.hpp"
 #endif
 };
-
-class YuhuInterpreterCodelet: public Stub {
-    friend class VMStructs;
-private:
-    int         _size;                             // the size in bytes
-    const char* _description;                      // a description of the codelet, for debugging & printing
-    Bytecodes::Code _bytecode;                     // associated bytecode if any
-    DEBUG_ONLY(CodeStrings _strings;)              // Comments for annotating assembler output.
-
-public:
-    // Initialization/finalization
-    void    initialize(int size,
-                       CodeStrings& strings)       { _size = size; DEBUG_ONLY(_strings.assign(strings);) }
-    void    finalize()                             { ShouldNotCallThis(); }
-
-    // General info/converters
-    int     size() const                           { return _size; }
-    static  int code_size_to_size(int code_size)   { return round_to(sizeof(YuhuInterpreterCodelet), CodeEntryAlignment) + code_size; }
-
-    // Code info
-    address code_begin() const                     { return (address)this + round_to(sizeof(YuhuInterpreterCodelet), CodeEntryAlignment); }
-    address code_end() const                       { return (address)this + size(); }
-
-    // Debugging
-    void    verify();
-    void    print_on(outputStream* st) const;
-    void    print() const { print_on(tty); }
-
-    // Interpreter-specific initialization
-    void    initialize(const char* description, Bytecodes::Code bytecode);
-
-    // Interpreter-specific attributes
-    int         code_size() const                  { return code_end() - code_begin(); }
-    const char* description() const                { return _description; }
-    Bytecodes::Code bytecode() const               { return _bytecode; }
-};
-
-// Define a prototype interface
-DEF_STUB_INTERFACE(YuhuInterpreterCodelet);
 
 class YuhuCodeletMark: ResourceMark {
 private:

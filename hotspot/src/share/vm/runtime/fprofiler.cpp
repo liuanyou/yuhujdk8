@@ -970,10 +970,18 @@ void ThreadProfiler::record_interpreted_tick(JavaThread* thread, frame fr, TickP
 
   interpreted_update(method, where);
 
-  // update byte code table
-  InterpreterCodelet* desc = Interpreter::codelet_containing(fr.pc());
-  if (desc != NULL && desc->bytecode() >= 0) {
-    ticks[desc->bytecode()]++;
+  if (UseYuhuInt) {
+      // update byte code table
+      YuhuInterpreterCodelet *desc = YuhuInterpreter::codelet_containing(fr.pc());
+      if (desc != NULL && desc->bytecode() >= 0) {
+          ticks[desc->bytecode()]++;
+      }
+  } else {
+      // update byte code table
+      InterpreterCodelet *desc = Interpreter::codelet_containing(fr.pc());
+      if (desc != NULL && desc->bytecode() >= 0) {
+          ticks[desc->bytecode()]++;
+      }
   }
 }
 

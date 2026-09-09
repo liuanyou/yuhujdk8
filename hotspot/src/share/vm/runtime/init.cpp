@@ -105,10 +105,12 @@ jint init_globals() {
   if (status != JNI_OK)
     return status;
 
-  interpreter_init();  // before any methods loaded
   if (UseYuhuInt) {
       yuhuInterpreter_init();
+  } else {
+      interpreter_init();  // before any methods loaded
   }
+
   invocationCounter_init();  // before any methods loaded
   marksweep_init();
   accessFlags_init();

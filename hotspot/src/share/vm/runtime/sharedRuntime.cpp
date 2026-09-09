@@ -509,13 +509,8 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
       return StubRoutines::catch_exception_entry();
   }
   // Interpreted code
-  if (Interpreter::contains(return_address)) {
-    return Interpreter::rethrow_exception_entry();
-  }
-  
-  // YuhuInterpreter code
-  if (YuhuInterpreter::contains(return_address)) {
-    return YuhuInterpreter::rethrow_exception_entry();
+  if (UseYuhuInt ? YuhuInterpreter::contains(return_address) : Interpreter::contains(return_address)) {
+    return UseYuhuInt ? YuhuInterpreter::rethrow_exception_entry() : Interpreter::rethrow_exception_entry();
   }
 
   guarantee(blob == NULL || !blob->is_runtime_stub(), "caller should have skipped stub");
@@ -775,25 +770,18 @@ address SharedRuntime::continuation_for_implicit_exception(JavaThread* thread,
 {
   address target_pc = NULL;
 
-  if (Interpreter::contains(pc)) {
+  if (UseYuhuInt ? YuhuInterpreter::contains(pc) : Interpreter::contains(pc)) {
 #ifdef CC_INTERP
     // C++ interpreter doesn't throw implicit exceptions
     ShouldNotReachHere();
 #else
     switch (exception_kind) {
-      case IMPLICIT_NULL:           return Interpreter::throw_NullPointerException_entry();
-      case IMPLICIT_DIVIDE_BY_ZERO: return Interpreter::throw_ArithmeticException_entry();
-      case STACK_OVERFLOW:          return Interpreter::throw_StackOverflowError_entry();
+      case IMPLICIT_NULL:           return UseYuhuInt ? YuhuInterpreter::throw_NullPointerException_entry() : Interpreter::throw_NullPointerException_entry();
+      case IMPLICIT_DIVIDE_BY_ZERO: return UseYuhuInt ? YuhuInterpreter::throw_ArithmeticException_entry() : Interpreter::throw_ArithmeticException_entry();
+      case STACK_OVERFLOW:          return UseYuhuInt ? YuhuInterpreter::throw_StackOverflowError_entry() : Interpreter::throw_StackOverflowError_entry();
       default:                      ShouldNotReachHere();
     }
 #endif // !CC_INTERP
-  } else if (YuhuInterpreter::contains(pc)) {
-    switch (exception_kind) {
-      case IMPLICIT_NULL:           return YuhuInterpreter::throw_NullPointerException_entry();
-      case IMPLICIT_DIVIDE_BY_ZERO: return YuhuInterpreter::throw_ArithmeticException_entry();
-      case STACK_OVERFLOW:          return YuhuInterpreter::throw_StackOverflowError_entry();
-      default:                      ShouldNotReachHere();
-    }
   } else {
     switch (exception_kind) {
       case STACK_OVERFLOW: {

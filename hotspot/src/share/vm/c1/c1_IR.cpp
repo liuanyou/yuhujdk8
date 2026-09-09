@@ -173,7 +173,7 @@ bool IRScopeDebugInfo::should_reexecute() {
   int       cur_bci    = bci();
   if (cur_method != NULL && cur_bci != SynchronizationEntryBCI) {
     Bytecodes::Code code = cur_method->java_code_at_bci(cur_bci);
-    return Interpreter::bytecode_should_reexecute(code);
+    return (UseYuhuInt ? YuhuInterpreter::bytecode_should_reexecute(code) : Interpreter::bytecode_should_reexecute(code));
   } else
     return false;
 }

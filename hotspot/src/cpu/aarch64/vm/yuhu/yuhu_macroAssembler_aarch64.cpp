@@ -1365,7 +1365,7 @@ address YuhuMacroAssembler::write_inst_pop_i(YuhuRegister r) {
 }
 
 address YuhuMacroAssembler::write_inst_pop_l(YuhuRegister r) {
-    return write_inst("ldr %s, [x20], #%d", r, 2 * Interpreter::stackElementSize);
+    return write_inst("ldr %s, [x20], #%d", r, 2 * YuhuInterpreter::stackElementSize);
 }
 
 address YuhuMacroAssembler::write_inst_push_ptr(YuhuRegister r) {
@@ -1385,7 +1385,7 @@ address YuhuMacroAssembler::write_inst_pop_f(YuhuFloatRegister r) {
 }
 
 address YuhuMacroAssembler::write_inst_pop_d(YuhuFloatRegister r) {
-    return write_inst("ldr %s, [x20], #%d", r, 2 * Interpreter::stackElementSize);
+    return write_inst("ldr %s, [x20], #%d", r, 2 * YuhuInterpreter::stackElementSize);
 }
 
 address YuhuMacroAssembler::write_inst_push_f(YuhuFloatRegister r) {
@@ -4484,10 +4484,10 @@ address YuhuMacroAssembler::write_insts_profile_final_call(YuhuRegister mdp) {
 
 YuhuAddress YuhuMacroAssembler::compute_argument_address(YuhuRegisterOrConstant arg_slot, int extra_slot_offset) {
     // cf. TemplateTable::prepare_invoke(), if (load_receiver).
-    int stackElementSize = Interpreter::stackElementSize;
-    int offset = Interpreter::expr_offset_in_bytes(extra_slot_offset+0);
+    int stackElementSize = YuhuInterpreter::stackElementSize;
+    int offset = YuhuInterpreter::expr_offset_in_bytes(extra_slot_offset+0);
 #ifdef ASSERT
-    int offset1 = Interpreter::expr_offset_in_bytes(extra_slot_offset+1);
+    int offset1 = YuhuInterpreter::expr_offset_in_bytes(extra_slot_offset+1);
     assert(offset1 - offset == stackElementSize, "correct arithmetic");
 #endif
     if (arg_slot.is_constant()) {
