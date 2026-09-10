@@ -961,6 +961,7 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     case Bytecodes::_invokespecial:
     case Bytecodes::_invokevirtual:
     case Bytecodes::_invokeinterface:
+    case Bytecodes::_invokedynamic:
       do_call();
       break;
 

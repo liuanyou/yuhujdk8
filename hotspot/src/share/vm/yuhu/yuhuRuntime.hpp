@@ -59,7 +59,8 @@ enum YuhuStubCallType {
   YUHUSTUB_STATIC_CALL = 0,
   YUHUSTUB_VIRTUAL_CALL,
   YUHUSTUB_INTERFACE_CALL,
-  YUHUSTUB_INDETERMINATE_INTERFACE_CALL
+  YUHUSTUB_INDETERMINATE_INTERFACE_CALL,
+  YUHUSTUB_DYNAMIC_CALL
 };
 
 // Hashtable entry for caching YuhuRuntimeStubs keyed by method properties
@@ -184,6 +185,14 @@ class YuhuRuntime : public AllStatic {
                                                         GrowableArray<BasicType>* reg_basic_types,
                                                         GrowableArray<BasicType>* stk_basic_types);
 
+  // Generate dynamic resolution call stub for invokedynamic bytecodes.
+  // The stub calls resolve_dynamic_call to resolve the CallSite at runtime
+  // via the bootstrap method, then jumps to the resolved target's compiled entry.
+  static address generate_dynamic_call_stub(ciMethod* target_method,
+                                            ciMethod* current_method,
+                                            GrowableArray<BasicType>* reg_basic_types,
+                                            GrowableArray<BasicType>* stk_basic_types);
+
   static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);
   static void anewarray(JavaThread* thread, Klass* element_klass, int size);
@@ -223,6 +232,14 @@ class YuhuRuntime : public AllStatic {
                                          const char* file,
                                          int         line);
   // throw_StackOverflowError - SharedRuntime::throw_StackOverflowError
+
+  // Dynamic resolution of invokedynamic call sites.
+  // Resolves the CallSite via the bootstrap method and returns the target's
+  // verified_code_entry. Stores the resolved Method* in thread->vm_result_2()
+  // for the stub to load into x12 (rmethod) for the c2i adapter.
+  static address resolve_dynamic_call(JavaThread* thread,
+                                      Method* target_method,
+                                      Klass* current_klass);
 
   // Dynamic resolution of interface calls for methods with itable_index() < 0
   // (e.g. Object methods re-declared in interfaces like equals/hashCode/toString)

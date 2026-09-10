@@ -222,6 +222,35 @@ JRT_ENTRY(void, YuhuRuntime::throw_NullPointerException(JavaThread* thread,
     "");
 JRT_END
 
+// Resolve invokedynamic call site.
+// Calls InterpreterRuntime::resolve_invokedynamic to run the bootstrap method
+// and populate the CP cache entry, then returns the resolved target's
+// verified_code_entry. Stores the resolved Method* in thread->vm_result_2()
+// for the stub to load into x12 (rmethod) for the c2i adapter.
+JRT_ENTRY(address, YuhuRuntime::resolve_dynamic_call(JavaThread* thread,
+                                                      Method* target_method,
+                                                      Klass* current_klass))
+  // The target_method is the resolved method from the constant pool.
+  // We need to resolve the invokedynamic call site which will run the
+  // bootstrap method if not already resolved, populating the CP cache.
+  //
+  // Since we can't easily get the caller's bcp from here (the caller frame
+  // is the stub, not the nmethod), we use the target_method directly.
+  // The CP cache should already be resolved by the time we get here
+  // (the interpreter or runtime resolves it on first encounter).
+  //
+  // For invokedynamic, the target_method's _from_compiled_entry is the
+  // call target. If it's a method handle intrinsic or compiled lambda form,
+  // we need to call through the method handle invocation mechanism.
+
+  methodHandle sel_method(THREAD, target_method);
+  assert(sel_method.not_null(), "resolved method should not be null");
+
+  // Store Method* for the stub to retrieve and set in x12 for c2i adapter
+  thread->set_vm_result_2(sel_method());
+  return sel_method->verified_code_entry();
+JRT_END
+
 // Resolve interface call dynamically.
 // Used for interface methods with itable_index() < 0 (e.g. Object methods
 // re-declared in interfaces like Set.equals()). These methods cannot use
@@ -1233,6 +1262,202 @@ address YuhuRuntime::generate_indeterminate_interface_call_stub(ciMethod* target
 
   // Add to stub cache
   _stub_cache->add(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL, stub);
+
+  return stub_addr;
+}
+
+// Generate dynamic call stub for invokedynamic bytecodes.
+// The stub calls resolve_dynamic_call to resolve the CallSite at runtime,
+// then jumps to the resolved target's verified_code_entry.
+// invokedynamic is like invokestatic (no receiver) but the target method
+// is resolved at runtime via the bootstrap method.
+// Frame layout (same pattern as indeterminate_interface_call_stub):
+//   [stk args] [saved reg args] [prologue: x29, x30, xzr, x19]
+address YuhuRuntime::generate_dynamic_call_stub(ciMethod* target_method,
+                                                ciMethod* current_method,
+                                                GrowableArray<BasicType>* reg_basic_types,
+                                                GrowableArray<BasicType>* stk_basic_types) {
+  // Check stub cache first
+  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_DYNAMIC_CALL);
+  if (cached != NULL) {
+    if (YuhuTraceInstalls) {
+        if (YuhuStackMapFile != NULL) {
+            YUHU_STACK_MAP_LOG("Yuhu: Using cached dynamic call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                               p2i(cached->entry_point()),
+                               target_method->holder()->name()->as_utf8(),
+                               target_method->name()->as_utf8(),
+                               target_method->signature()->as_symbol()->as_utf8(),
+                               current_method->holder()->name()->as_utf8(),
+                               current_method->name()->as_utf8(),
+                               current_method->signature()->as_symbol()->as_utf8());
+        } else {
+            tty->print_cr("Yuhu: Using cached dynamic call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                          p2i(cached->entry_point()),
+                          target_method->holder()->name()->as_utf8(),
+                          target_method->name()->as_utf8(),
+                          target_method->signature()->as_symbol()->as_utf8(),
+                          current_method->holder()->name()->as_utf8(),
+                          current_method->name()->as_utf8(),
+                          current_method->signature()->as_symbol()->as_utf8());
+        }
+    }
+    return cached->entry_point();
+  }
+
+  ResourceMark rm;
+
+  const int stub_size = 256;
+  CodeBuffer cb("yuhu_dynamic_call_stub", stub_size, stub_size);
+  YuhuMacroAssembler masm(&cb);
+
+  address begin = masm.current_pc();
+
+  int stk_args = count_stk_args(stk_basic_types);
+
+  assert(reg_basic_types->length() <= 7, "should be less than or equal to 7");
+
+  // Prologue: save FP, LR, x19
+  int stk_args_size_in_bytes = align_size_up(stk_args * wordSize, 16);
+  int reg_args_size_in_bytes = align_size_up(reg_basic_types->length() * wordSize, 16);
+  int frame_size_in_bytes = stk_args_size_in_bytes + reg_args_size_in_bytes + 4 * wordSize;
+  masm.write_inst("sub sp, sp, #%d", frame_size_in_bytes);
+  masm.write_inst("stp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
+  masm.write_inst("stp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
+  masm.write_inst("add x29, sp, #%d", frame_size_in_bytes - 16);
+
+  generate_stk_args(&masm, frame_size_in_bytes, stk_basic_types);
+
+    auto *oopmap_set = new OopMapSet();
+    int arg_count = 0;
+    auto *oopmap = new OopMap(YuhuStack::oopmap_slot_munge(frame_size_in_bytes / wordSize),
+                              YuhuStack::oopmap_slot_munge(arg_count));
+
+  // store reg args
+  store_reg_args(&masm, stk_args_size_in_bytes, reg_args_size_in_bytes, reg_basic_types, stk_basic_types, oopmap);
+
+    masm.write_insts_set_last_java_frame(YuhuMacroAssembler::sp, YuhuMacroAssembler::noreg, YuhuMacroAssembler::noreg, YuhuMacroAssembler::x9);
+
+    YuhuLabel label;
+    masm.write_inst_adr(YuhuMacroAssembler::x9, label);
+    masm.write_inst("stp xzr, x9, [sp, #-16]!");
+
+    // Load arguments for resolve_dynamic_call:
+    //   x0 = JavaThread* (thread)
+    //   x1 = Method* target_method
+    //   x2 = Klass* current_klass
+
+    // x0 = thread (x28 holds the thread register per Yuhu convention)
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x0, YuhuMacroAssembler::x28);
+
+    // x1 = target_method Method*
+    Method* method_ptr = target_method->get_Method();
+    int method_metadata_index = cb.oop_recorder()->allocate_metadata_index(method_ptr);
+    RelocationHolder method_metadata_rspec = metadata_Relocation::spec(method_metadata_index);
+    cb.relocate(masm.current_pc(), method_metadata_rspec);
+    masm.write_insts_lea(YuhuMacroAssembler::x1, YuhuAddress((address)method_ptr, relocInfo::metadata_type));
+
+    // x2 = current_klass (the class containing the call, for access checking)
+    ciInstanceKlass* ci_current_klass = current_method->holder();
+    InstanceKlass* current_klass = ci_current_klass->get_instanceKlass();
+    int current_metadata_index = cb.oop_recorder()->allocate_metadata_index(current_klass);
+    RelocationHolder current_metadata_rspec = metadata_Relocation::spec(current_metadata_index);
+    cb.relocate(masm.current_pc(), current_metadata_rspec);
+    masm.write_insts_lea(YuhuMacroAssembler::x2, YuhuAddress((address)current_klass, relocInfo::metadata_type));
+
+    masm.write_insts_lea(YuhuMacroAssembler::x8, YuhuExternalAddress(CAST_FROM_FN_PTR(address, YuhuRuntime::resolve_dynamic_call)));
+    masm.write_inst_blr(YuhuMacroAssembler::x8);
+
+    oopmap_set->add_gc_map(masm.current_pc() - begin, oopmap);
+
+    masm.pin_label(label);
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x8, YuhuMacroAssembler::x0);
+
+    masm.write_inst("add sp, sp, #16");
+
+    masm.write_insts_reset_last_java_frame(true);
+
+    // load reg args
+    load_reg_args(&masm, stk_args_size_in_bytes, reg_basic_types);
+
+  // Load Method* from thread->vm_result_2() into x12 for c2i adapter
+  masm.write_inst_ldr(YuhuMacroAssembler::x12,
+                      YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::vm_result_2_offset())));
+  // Clear vm_result_2
+  masm.write_inst_str(YuhuMacroAssembler::xzr,
+                      YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::vm_result_2_offset())));
+
+  // Jump to resolved compiled entry (x8 = verified_code_entry)
+  masm.write_inst_blr(YuhuMacroAssembler::x8);
+
+  YuhuLabel normal_exit;
+  masm.write_inst_b(normal_exit);
+
+  int exception_handler_begin_offset = (int)(masm.current_pc() - begin);
+
+  // x0 contains exception oop, save x0 to pending exception field
+  masm.write_inst_str(YuhuMacroAssembler::x0, YuhuAddress(YuhuMacroAssembler::x28, in_bytes(JavaThread::pending_exception_offset())));
+
+  masm.pin_label(normal_exit);
+
+    // save return value and return address
+    NOT_PRODUCT(YuhuLabel is_valid_return_address);
+    NOT_PRODUCT(masm.write_inst("stp x0, lr, [sp, #-16]!"));
+    NOT_PRODUCT(masm.write_inst("ldr x8, [sp, #%d]", frame_size_in_bytes + 8));
+    NOT_PRODUCT(masm.write_insts_final_call_VM_leaf(CAST_FROM_FN_PTR(address, YuhuRuntime::is_yuhu_nmethod), YuhuMacroAssembler::x8));
+    NOT_PRODUCT(masm.write_inst_cbnz(YuhuMacroAssembler::x0, is_valid_return_address));
+    NOT_PRODUCT(masm.write_insts_stop("invalid return address"));
+    NOT_PRODUCT(masm.pin_label(is_valid_return_address));
+    NOT_PRODUCT(masm.write_inst("ldp x0, lr, [sp], #16"));
+
+  // Epilogue: restore x19, FP, LR
+  masm.write_inst("ldp x29, x30, [sp, #%d]", frame_size_in_bytes - 16);
+  masm.write_inst("ldp xzr, x19, [sp, #%d]", frame_size_in_bytes - 32);
+  masm.write_inst("add sp, sp, #%d", frame_size_in_bytes);
+
+  // Return
+  masm.write_inst("ret");
+
+  masm.flush();
+
+  // Create RuntimeStub
+  int frame_size_in_words = frame_size_in_bytes / wordSize;
+
+  YuhuRuntimeStub* stub = YuhuRuntimeStub::new_yuhu_runtime_stub(
+      "yuhu_dynamic_call_stub",
+      &cb,
+      CodeOffsets::frame_never_safe,
+      frame_size_in_words,
+      oopmap_set,  // collect oops in stack
+      false,
+      exception_handler_begin_offset
+  );
+
+  address stub_addr = stub->entry_point();
+
+  if (YuhuTraceInstalls) {
+      if (YuhuStackMapFile != NULL) {
+          YUHU_STACK_MAP_LOG("Yuhu: Generated dynamic call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                             p2i(stub_addr),
+                             target_method->holder()->name()->as_utf8(),
+                             target_method->name()->as_utf8(),
+                             target_method->signature()->as_symbol()->as_utf8(),
+                             current_method->holder()->name()->as_utf8(),
+                             current_method->name()->as_utf8(),
+                             current_method->signature()->as_symbol()->as_utf8());
+      } else {
+          tty->print_cr("Yuhu: Generated dynamic call RuntimeStub at " PTR_FORMAT " for target method %s.%s signature %s from current method %s.%s signature %s",
+                        p2i(stub_addr),
+                        target_method->holder()->name()->as_utf8(),
+                        target_method->name()->as_utf8(),
+                        target_method->signature()->as_symbol()->as_utf8(),
+                        current_method->holder()->name()->as_utf8(),
+                        current_method->name()->as_utf8(),
+                        current_method->signature()->as_symbol()->as_utf8());
+      }
+  }
+
+  // Add to stub cache
+  _stub_cache->add(target_method, current_method, YUHUSTUB_DYNAMIC_CALL, stub);
 
   return stub_addr;
 }

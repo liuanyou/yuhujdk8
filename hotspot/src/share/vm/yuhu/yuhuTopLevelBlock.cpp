@@ -127,10 +127,27 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 }
             }
                 break;
-            case Bytecodes::_invokedynamic:
+            case Bytecodes::_invokedynamic: {
+                // invokedynamic: treat like invokestatic (no receiver).
+                // The target method is resolved at runtime via the bootstrap method.
+                bool will_link;
+                ciSignature *sig;
+                ciMethod *dest_method = iter()->get_method(will_link, &sig);
+                // For invokedynamic, will_link may be false if the CallSite is not
+                // yet resolved. In that case, we still allow compilation — the
+                // dynamic call stub will resolve it at runtime.
+                if (!dest_method->holder()->is_linked()) {
+                    set_trap(
+                            Deoptimization::make_trap_request(
+                                    Deoptimization::Reason_uninitialized,
+                                    Deoptimization::Action_reinterpret), bci());
+                    return;
+                }
+            }
+                break;
             case Bytecodes::_invokehandle: {
                 if (YuhuPerformanceWarnings) {
-                    warning("JSR292 optimization not yet implemented in Yuhu");
+                    warning("JSR292 invokehandle not yet implemented in Yuhu");
                 }
                 set_trap(
                         Deoptimization::make_trap_request(
@@ -1384,9 +1401,30 @@ Value* YuhuTopLevelBlock::get_indeterminate_interface_callee(YuhuValue *receiver
     "indeterminate_interface_callee_stub");
 }
 
+Value* YuhuTopLevelBlock::get_dynamic_callee(ciMethod*   call_method,
+                                              address* out_stub_addr,
+                                              GrowableArray<BasicType>* reg_basic_types,
+                                              GrowableArray<BasicType>* stk_basic_types) {
+  // Generate a dynamic call stub for invokedynamic bytecodes.
+  // The stub calls YuhuRuntime::resolve_dynamic_call at runtime to resolve
+  // the CallSite via the bootstrap method, then jumps to the resolved target.
+  address stub_addr = YuhuRuntime::generate_dynamic_call_stub(
+    call_method, target(), reg_basic_types, stk_basic_types);
+  if (out_stub_addr != NULL) {
+      *out_stub_addr = stub_addr;
+  }
+
+  // Return the stub address as an integer constant
+  return builder()->CreateIntToPtr(
+    LLVMValue::intptr_constant((intptr_t)stub_addr),
+    YuhuType::intptr_type(),
+    "dynamic_callee_stub");
+}
+
 void YuhuTopLevelBlock::do_call() {
   // Set frequently used booleans
   bool is_static = bc() == Bytecodes::_invokestatic;
+  bool is_dynamic = bc() == Bytecodes::_invokedynamic;
   bool is_virtual = bc() == Bytecodes::_invokevirtual;
   bool is_interface = bc() == Bytecodes::_invokeinterface;
 
@@ -1395,8 +1433,13 @@ void YuhuTopLevelBlock::do_call() {
   ciSignature* sig;
   ciMethod *dest_method = iter()->get_method(will_link, &sig);
 
-  assert(will_link, "typeflow responsibility");
-  assert(dest_method->is_static() == is_static, "must match bc");
+  assert(will_link || is_dynamic, "typeflow responsibility (invokedynamic may not be linked yet)");
+  // invokedynamic target method is typically static (lambda factories, MH intrinsics)
+  // but the spec allows instance methods too (receiver passed as explicit argument).
+  // So we only assert is_static for invokestatic, not for invokedynamic.
+  if (!is_dynamic) {
+    assert(dest_method->is_static() == is_static, "must match bc");
+  }
 
   // Find the class of the method being called.  Note
   // that the superclass check in the second assertion
@@ -1450,8 +1493,9 @@ void YuhuTopLevelBlock::do_call() {
   // trying to inline because the inliner can only use
   // zero-checked values, not being able to perform the
   // check itself.
+  // invokedynamic has no receiver (like invokestatic).
   YuhuValue *receiver = NULL;
-  if (!is_static) {
+  if (!is_static && !is_dynamic) {
     receiver = xstack(dest_method->arg_size() - 1);
     check_null(receiver);
   }
@@ -1469,7 +1513,7 @@ void YuhuTopLevelBlock::do_call() {
   }
 
   // Try to inline the call
-  if (!call_is_virtual) {
+  if (!call_is_virtual && !is_dynamic) {
     if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
       return;
     }
@@ -1487,6 +1531,12 @@ void YuhuTopLevelBlock::do_call() {
     std::vector<Value*> call_args;
     int arg_slots = call_method->arg_size();
 
+    // For invokedynamic, arg_size() includes the appendix slot, but the appendix
+    // is NOT on the operand stack at the bytecode level. We need to collect only
+    // the regular arguments from the stack, then push the appendix separately.
+    bool has_appendix = is_dynamic && iter()->has_appendix();
+    int stack_arg_slots = has_appendix ? (arg_slots - 1) : arg_slots;
+
     // calculate number of int registers, number of float register and number of parameters in stack
     // it is a little bit different with hotspot ABI
     // 8 int registers are x0-x7, and x0 is empty, need to manually populate x0 in stub
@@ -1500,10 +1550,11 @@ void YuhuTopLevelBlock::do_call() {
     call_args.push_back(LLVMValue::intptr_constant(0));
     int_args++; // x0 is empty, but int_args increases
 
-    if (is_static) {
-        // Static: x1 = first parameter, x2+ = remaining parameters
-        // Collect all Java arguments from stack in reverse order
-        for (int i = arg_slots - 1; i >= 0; i--) {
+    if (is_static || is_dynamic) {
+        // Static/dynamic: x1 = first parameter, x2+ = remaining parameters
+        // invokedynamic has no receiver (like invokestatic).
+        // Collect regular arguments from stack in reverse order (excluding appendix).
+        for (int i = stack_arg_slots - 1; i >= 0; i--) {
             YuhuValue* v = xstack(i);
             switch (v->basic_type()) {
                 case T_BOOLEAN:
@@ -1566,14 +1617,14 @@ void YuhuTopLevelBlock::do_call() {
         }
     } else {
         // Non-static: x1 = receiver
-        YuhuValue* recv_val = xstack(arg_slots - 1);
+        YuhuValue* recv_val = xstack(stack_arg_slots - 1);
         // Explicit null check for method call receiver
         check_null(recv_val);
         call_args.push_back(recv_val->jobject_value());  // receiver in x1
         reg_basic_types.append(recv_val->basic_type());
         int_args++; // int_args increases coz receiver is in x1
         // Collect remaining Java arguments (excluding receiver)
-        for (int i = arg_slots - 2; i >= 0; i--) {
+        for (int i = stack_arg_slots - 2; i >= 0; i--) {
             YuhuValue* v = xstack(i);
             switch (v->basic_type()) {
                 case T_BOOLEAN:
@@ -1636,6 +1687,28 @@ void YuhuTopLevelBlock::do_call() {
         }
     }
 
+    // For invokedynamic, push the appendix (CallSite object) as an extra argument
+    // if present. The appendix is stored in the constant pool's resolved references.
+    // We must push it onto both the call_args (for the stub) AND the Yuhu stack
+    // (so decache_for_Java_call can pop it correctly).
+    if (has_appendix) {
+        ciObject* appendix = iter()->get_appendix();
+        assert(appendix != NULL, "appendix should not be null");
+        // The appendix is an oop (CallSite), push it as an object argument
+        // Use CreateInlineOop to create an LLVM value for the appendix
+        llvm::Value* appendix_val = builder()->CreateInlineOop(appendix, "invokedynamic_appendix");
+        // Push onto Yuhu stack so decache_for_Java_call can pop it
+        push(YuhuValue::create_jobject(appendix_val, false));
+        // Also add to call_args for the stub
+        call_args.push_back(appendix_val);
+        if (int_args < 8) {
+            reg_basic_types.append(T_OBJECT);
+            int_args++;
+        } else {
+            stk_basic_types.append(T_OBJECT);
+        }
+    }
+
   // Find the method we are calling
   Value *callee;
   address compiled_entry_address = 0;
@@ -1658,6 +1731,10 @@ void YuhuTopLevelBlock::do_call() {
         callee = get_indeterminate_interface_callee(receiver, call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
       }
     }
+  }
+  else if (is_dynamic) {
+    // invokedynamic: use dynamic call stub that resolves the CallSite at runtime
+    callee = get_dynamic_callee(call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
   }
   else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
@@ -1702,8 +1779,9 @@ void YuhuTopLevelBlock::do_call() {
   // x0 = dummy/return value slot (unused for input)
   // x1 = receiver (for non-static) or NULL (for static)
   // x2+ = remaining parameters
-  if (is_static) {
+  if (is_static || is_dynamic) {
     param_types.push_back(YuhuType::intptr_type());  // Dummy in x0 (unused)
+    // invokedynamic has no receiver (like invokestatic)
     // x1, x2, ... will be filled by actual parameters (no NULL placeholder needed)
   } else {
     param_types.push_back(YuhuType::intptr_type());  // Dummy in x0 (unused)
@@ -1714,6 +1792,13 @@ void YuhuTopLevelBlock::do_call() {
   for (int i = 0; i < sig->count(); i++) {
     ciType* param_type = sig->type_at(i);
     param_types.push_back(YuhuType::to_stackType(param_type));
+  }
+
+  // For invokedynamic, add the appendix parameter (always an oop/CallSite)
+  // The declared signature (sig) doesn't include the appendix, but the resolved
+  // method's signature does, and we pass it as an argument.
+  if (has_appendix) {
+    param_types.push_back(YuhuType::oop_addrspace1_type());
   }
 
   // Use the actual return type of the method being called
