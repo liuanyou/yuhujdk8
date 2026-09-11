@@ -1193,6 +1193,9 @@ address YuhuRuntime::generate_indeterminate_interface_call_stub(ciMethod* target
   // Jump to resolved compiled entry (x8 = verified_code_entry)
   masm.write_inst_blr(YuhuMacroAssembler::x8);
 
+  oopmap_set->add_gc_map(masm.current_pc() - begin, new OopMap(YuhuStack::oopmap_slot_munge(frame_size_in_bytes / wordSize),
+                                                               YuhuStack::oopmap_slot_munge(arg_count)));
+
   YuhuLabel normal_exit;
   masm.write_inst_b(normal_exit);
 
@@ -1388,6 +1391,9 @@ address YuhuRuntime::generate_dynamic_call_stub(ciMethod* target_method,
 
   // Jump to resolved compiled entry (x8 = verified_code_entry)
   masm.write_inst_blr(YuhuMacroAssembler::x8);
+
+    oopmap_set->add_gc_map(masm.current_pc() - begin, new OopMap(YuhuStack::oopmap_slot_munge(frame_size_in_bytes / wordSize),
+                                                                 YuhuStack::oopmap_slot_munge(arg_count)));
 
   YuhuLabel normal_exit;
   masm.write_inst_b(normal_exit);
