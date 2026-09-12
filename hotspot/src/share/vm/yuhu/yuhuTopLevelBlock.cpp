@@ -1742,10 +1742,10 @@ void YuhuTopLevelBlock::do_call() {
       }
     }
   }
-  else if (is_dynamic) {
-    // invokedynamic: use dynamic call stub that resolves the CallSite at runtime
-    callee = get_dynamic_callee(call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
-  }
+//  else if (is_dynamic) {
+//    // invokedynamic: use dynamic call stub that resolves the CallSite at runtime
+//    callee = get_dynamic_callee(call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
+//  }
   else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
     // which now returns the stub address that jumps to _from_compiled_entry
