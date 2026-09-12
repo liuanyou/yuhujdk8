@@ -86,6 +86,10 @@ void YuhuTopLevelBlock::scan_for_traps() {
     while (iter()->next_bci() < scan_limit) {
         iter()->next();
 
+        // Check raw bytecode for invokehandle (java_code() converts it to invokevirtual)
+        Bytecodes::Code raw_bc = iter()->cur_bc_raw();
+        bool is_invokehandle = (raw_bc == Bytecodes::_invokehandle);
+
         switch (bc()) {
             case Bytecodes::_invokestatic:
             case Bytecodes::_invokespecial:
@@ -95,7 +99,8 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 ciSignature *sig;
                 ciMethod *dest_method = iter()->get_method(will_link, &sig);
                 assert(will_link, "typeflow responsibility");
-                if (dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form()) {
+                // For invokehandle, don't trap — let do_call() handle it like C1
+                if (!is_invokehandle && (dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form())) {
                     if (YuhuPerformanceWarnings) {
                         warning("JSR292 optimization not yet implemented in Yuhu");
                     }
@@ -145,16 +150,9 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 }
             }
                 break;
-            case Bytecodes::_invokehandle: {
-                if (YuhuPerformanceWarnings) {
-                    warning("JSR292 invokehandle not yet implemented in Yuhu");
-                }
-                set_trap(
-                        Deoptimization::make_trap_request(
-                                Deoptimization::Reason_unhandled,
-                                Deoptimization::Action_make_not_compilable), bci());
-                return;
-            }
+            // Note: _invokehandle case is not needed here because java_code() converts
+            // invokehandle to invokevirtual, so it's handled by the invokevirtual case above.
+            // The invokehandle is now supported in do_call() following C1's approach.
         }
     }
 
@@ -1422,7 +1420,12 @@ Value* YuhuTopLevelBlock::get_dynamic_callee(ciMethod*   call_method,
 }
 
 void YuhuTopLevelBlock::do_call() {
+  // Check raw bytecode for invokehandle (java_code() converts it to invokevirtual)
+  Bytecodes::Code raw_bc = iter()->cur_bc_raw();
+  bool is_invokehandle = (raw_bc == Bytecodes::_invokehandle);
+
   // Set frequently used booleans
+  // For invokehandle, treat as invokestatic or invokespecial based on target method
   bool is_static = bc() == Bytecodes::_invokestatic;
   bool is_dynamic = bc() == Bytecodes::_invokedynamic;
   bool is_virtual = bc() == Bytecodes::_invokevirtual;
@@ -1433,11 +1436,18 @@ void YuhuTopLevelBlock::do_call() {
   ciSignature* sig;
   ciMethod *dest_method = iter()->get_method(will_link, &sig);
 
-  assert(will_link || is_dynamic, "typeflow responsibility (invokedynamic may not be linked yet)");
+  // For invokehandle, override is_static based on target method's staticness (like C1)
+  if (is_invokehandle) {
+    is_static = dest_method->is_static();
+    is_virtual = false;  // invokehandle is never virtual
+  }
+
+  assert(will_link || is_dynamic || is_invokehandle, "typeflow responsibility (invokedynamic/invokehandle may not be linked yet)");
   // invokedynamic target method is typically static (lambda factories, MH intrinsics)
   // but the spec allows instance methods too (receiver passed as explicit argument).
   // So we only assert is_static for invokestatic, not for invokedynamic.
-  if (!is_dynamic) {
+  // For invokehandle, the target is a LambdaForm method which can be static or instance.
+  if (!is_dynamic && !is_invokehandle) {
     assert(dest_method->is_static() == is_static, "must match bc");
   }
 
@@ -1513,7 +1523,7 @@ void YuhuTopLevelBlock::do_call() {
   }
 
   // Try to inline the call
-  if (!call_is_virtual && !is_dynamic) {
+  if (!call_is_virtual && !is_dynamic && !is_invokehandle) {
     if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
       return;
     }
@@ -1531,10 +1541,10 @@ void YuhuTopLevelBlock::do_call() {
     std::vector<Value*> call_args;
     int arg_slots = call_method->arg_size();
 
-    // For invokedynamic, arg_size() includes the appendix slot, but the appendix
+    // For invokedynamic and invokehandle, arg_size() includes the appendix slot, but the appendix
     // is NOT on the operand stack at the bytecode level. We need to collect only
     // the regular arguments from the stack, then push the appendix separately.
-    bool has_appendix = is_dynamic && iter()->has_appendix();
+    bool has_appendix = (is_dynamic || is_invokehandle) && iter()->has_appendix();
     int stack_arg_slots = has_appendix ? (arg_slots - 1) : arg_slots;
 
     // calculate number of int registers, number of float register and number of parameters in stack
@@ -1789,15 +1799,18 @@ void YuhuTopLevelBlock::do_call() {
   }
   
   // Add Java method parameters
-  for (int i = 0; i < sig->count(); i++) {
-    ciType* param_type = sig->type_at(i);
+  // for invokehandle, call_method is LambdaForm (call_method->signature())	(Object, Object, Object)Object, which has actual param count
+  int param_count = is_invokehandle ? call_method->signature()->count() : sig->count();
+  for (int i = 0; i < param_count; i++) {
+    ciType* param_type = is_invokehandle ? call_method->signature()->type_at(i) : sig->type_at(i);
     param_types.push_back(YuhuType::to_stackType(param_type));
   }
 
   // For invokedynamic, add the appendix parameter (always an oop/CallSite)
   // The declared signature (sig) doesn't include the appendix, but the resolved
   // method's signature does, and we pass it as an argument.
-  if (has_appendix) {
+  // For invokehandle, appendix param is already counted in signature()->count()
+  if (is_dynamic && has_appendix) {
     param_types.push_back(YuhuType::oop_addrspace1_type());
   }
 
