@@ -13,6 +13,11 @@ Key Features:
   * Yuhu Interpreter - Advanced interpretation engine for AArch64 platform
   * Yuhu Compiler - LLVM-based JIT compiler with full bytecode-to-native compilation
   * AArch64 Support - Fully optimized for ARM64 architecture
+  * JSR 292 Support - invokedynamic and invokehandle bytecode support for lambdas
+    and MethodHandle invocations
+  * Method Inlining - Automatic inlining of eligible methods for improved performance
+  * Exception Handling - Comprehensive implicit exception support with deoptimization
+  * On-Stack Replacement - Compile long-running loops mid-execution
 
 Implementation Status:
   ✅ Core Infrastructure - Complete (ORC JIT, CompileBroker integration)
@@ -21,8 +26,15 @@ Implementation Status:
   ✅ Stack Frame Management - Complete (interpreter-compatible layout, traversal)
   ✅ Safepoint Mechanism - Complete (OopMap generation, GC integration)
   ✅ Lock/Monitor Support - Complete (synchronized semantics with CAS fast-path)
-  ⚠️ Runtime Support - Partial (deoptimization and exception handling improving)
-  ⚠️ Optimizations - Limited (relies on LLVM defaults, no inlining)
+  ✅ Exception Handling - Complete (exception handler and unwind handler)
+  ✅ Deoptimization - Complete (trap mechanism with ciTypeFlow integration)
+  ✅ Method Inlining - Complete (YuhuInliner with type-based eligibility checks)
+  ✅ Virtual Call Optimization - Complete (inline caches for monomorphic/megamorphic dispatch)
+  ✅ invokedynamic Support - Complete (lambda expressions, CallSite resolution)
+  ✅ invokehandle Support - Complete (MethodHandle.invoke() following C1's conversion logic)
+  ✅ On-Stack Replacement (OSR) - Complete (long-running loop compilation)
+  ⚠️ Runtime Support - Partial (frame walking compatibility with HotSpot still improving)
+  ⚠️ Optimizations - LLVM-based (leverages LLVM optimization passes)
 
 Platform Requirements:
   * Architecture: AArch64 (ARM64) only - Yuhu interpreter and compiler are currently
@@ -66,6 +78,17 @@ Build Instructions:
      
      This script verifies that the Matrix.multiply method is compiled by the Yuhu compiler.
      It will automatically detect the built JDK and run the matrix multiplication test.
+
+     Available test scripts:
+       - test_matrix.sh      : Basic Yuhu compilation verification
+       - test_exception.sh   : Implicit exception handling (NPE, AIOOBE, etc.)
+       - test_deopt.sh       : Deoptimization scenarios
+       - test_invokehandle.sh: MethodHandle.invoke() support
+       - test_concurrent.sh  : Concurrent HashMap operations
+       - test_osr.sh         : On-Stack Replacement (long-running loops)
+       - test_decimal.sh     : Decimal arithmetic operations
+       - test_mixed.sh       : Mixed C1/C2/Yuhu compilation
+       - test_nine.sh        : Complex multi-method scenarios
 
   License:
   yuhujdk8 is licensed under the same terms as OpenJDK (GPL v2 with Classpath Exception).
