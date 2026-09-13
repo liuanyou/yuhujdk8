@@ -29,7 +29,6 @@ Implementation Status:
   ✅ Exception Handling - Complete (exception handler and unwind handler)
   ✅ Deoptimization - Complete (trap mechanism with ciTypeFlow integration)
   ✅ Method Inlining - Complete (YuhuInliner with type-based eligibility checks)
-  ✅ Virtual Call Optimization - Complete (inline caches for monomorphic/megamorphic dispatch)
   ✅ invokedynamic Support - Complete (lambda expressions, CallSite resolution)
   ✅ invokehandle Support - Complete (MethodHandle.invoke() following C1's conversion logic)
   ✅ On-Stack Replacement (OSR) - Complete (long-running loop compilation)
