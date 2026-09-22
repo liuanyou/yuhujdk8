@@ -19,6 +19,10 @@ Key Features:
   * Exception Handling - Comprehensive implicit exception support with deoptimization
   * On-Stack Replacement - Compile long-running loops mid-execution
 
+Documentation:
+  Read the Yuhu Compiler blog series for in-depth technical documentation:
+  https://liuanyou.github.io/yuhu/compiler/2026/09/14/welcome-to-yuhu-compiler.html
+
 Implementation Status:
   ✅ Core Infrastructure - Complete (ORC JIT, CompileBroker integration)
   ✅ Compilation Trigger - Complete (complexity-based selection with thresholds)
