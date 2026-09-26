@@ -96,23 +96,6 @@ public:
     int extended_frame_offset = -1; // extracted from stack map
 };
 
-class ExceptionTableInfoRecord : public ResourceObj {
-public:
-    int start_bci;
-    int limit_bci;
-    int handler_bci;
-    bool is_catch_all;
-};
-
-class HandlerBlockInfoRecord : public ResourceObj {
-public:
-    uint32_t instruction_offset;
-    uint32_t start_bci; // start bci of handler block, should be matched as handler bci when searching handler for exception table
-    uint32_t limit_bci; // limit bci of handler block
-    uint32_t num_exceptions;
-    uint32_t num_successors;
-};
-
 // Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
 extern "C" void gc_safepoint_poll(JavaThread* thread);
 
@@ -142,11 +125,6 @@ private:
   // frame layout information
   FrameLayoutInfo* _frame_layout_info;
 
-  GrowableArray<ExceptionTableInfoRecord*>* _exception_table_info_records;
-
-  // handler block stack map information
-  GrowableArray<HandlerBlockInfoRecord*>* _handler_block_info_records;
-
   // Mangled function name
   std::string _mangled_func_name;
   size_t _func_size;
@@ -156,8 +134,6 @@ private:
 
   // Thread-local storage index
   static int _tls_index;
-
-  uint64_t _unified_exit_block_start_pco;
 
   void check_frame_layout_info() const {
       assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
@@ -431,10 +407,6 @@ public:
 
   void register_frame_layout_info_with_stack_map_fields(int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset);
 
-  void register_exception_handler_info(int start_bci, int limit_bci, int handler_bci, bool is_catch_all);
-
-  void register_handler_block_info(uint32_t instruction_offset, uint32_t start_bci, uint32_t limit_bci, uint32_t num_exceptions, uint32_t num_successors);
-
   int max_monitors() const {
       check_frame_layout_info();
 
@@ -519,20 +491,10 @@ public:
       return _func_size;
   }
 
-  void set_unified_exit_block_start_pco(uint64_t unified_exit_block_start_pco) {
-      _unified_exit_block_start_pco = unified_exit_block_start_pco;
-  }
-
-  uint64_t get_unified_exit_block_start_pco() const {
-      return _unified_exit_block_start_pco;
-  }
-
   void generate_safepoint_and_describe_scope(DebugInformationRecorder* real_recorder,
                                              ciMethod* method,
                                              int plus_offset,
                                              int frame_size);
-
-  void generate_exception_handler_table(ciMethod* method, ExceptionHandlerTable* exception_handler_table, int plus_offset);
 };
 
 #endif // SHARE_VM_YUHU_YUHUDEBUGINFORMATIONRECORDER_HPP

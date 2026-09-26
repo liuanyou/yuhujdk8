@@ -31,11 +31,14 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuState.hpp"
 
+class YuhuInlineNode;
+class YuhuTopLevelBlock;
+
 class YuhuInliner : public AllStatic {
  public:
   static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci);
-
- private:
+  static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci,
+                              YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block);
   static bool may_be_inlinable(ciMethod* target);
 };
 

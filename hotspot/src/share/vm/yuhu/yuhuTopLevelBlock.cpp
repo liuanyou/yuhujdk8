@@ -39,6 +39,8 @@
 #include "yuhu/yuhuCacheDecache.hpp"
 #include "yuhu/yuhuConstant.hpp"
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
+#include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuInlineTree.hpp"
 #include "yuhu/yuhuInliner.hpp"
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuTopLevelBlock.hpp"
@@ -1524,8 +1526,27 @@ void YuhuTopLevelBlock::do_call() {
 
   // Try to inline the call
   if (!call_is_virtual && !is_dynamic && !is_invokehandle) {
-    if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
-      return;
+    // Check if we have an inline tree and this BCI is marked for inlining
+    YuhuInlineNode* inline_node = NULL;
+    YuhuFunction* func = function();
+    if (func != NULL && func->inline_tree() != NULL) {
+      inline_node = func->inline_tree()->root()->find_child_by_bci(bci());
+    }
+    
+    if (inline_node != NULL) {
+      // This BCI is marked for inlining in the inline tree
+      if (YuhuTraceInlining) {
+        tty->print_cr("[Yuhu] Inlining %s at bci %d (depth %d)",
+                      call_method->name()->as_utf8(), bci(), inline_node->inline_depth());
+      }
+//      if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci(), inline_node, this)) {
+//        return;
+//      }
+    } else {
+      // No inline tree or this BCI is not marked - use old single-level inlining
+      if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
+        return;
+      }
     }
   }
 

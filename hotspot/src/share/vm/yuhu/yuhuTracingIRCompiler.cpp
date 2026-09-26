@@ -342,8 +342,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                     }
                 }
                 assert(found_offset, "extended sp alloca should have offset");
-            } else if (UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID == StatepointID) {
-                YuhuDebugInformationRecorder::get()->set_unified_exit_block_start_pco(InstructionOffset);
             } else if (StatepointDirectives::DefaultStatepointID == StatepointID) {
                 // 5. 解析 locations（栈上的 GC 根）
                 for (auto LocationRecord : StatepointRecord.locations()) {
@@ -425,44 +423,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                                                                 constant);
                     }
                 }
-            } else {
-                uint32_t start_bci = 0;
-                uint32_t limit_bci = 0;
-                uint32_t num_exceptions = 0;
-                uint32_t num_successors = 0;
-                int i = 0;
-                // stackmap for handler blocks
-                for (auto LocationRecord : StatepointRecord.locations()) {
-                    auto Kind = LocationRecord.getKind();
-                    assert(Kind == StackMapParser::LocationKind::Constant, "handler blocks should contain constant only");
-                    uint32_t constant = LocationRecord.getSmallConstant();
-                    if (YuhuTraceMachineCode) {
-                        if (YuhuStackMapFile != NULL) {
-                            YUHU_STACK_MAP_LOG("[StackMap] handler block Constant: %d", constant);
-                        } else {
-                            errs() << "[StackMap] handler block Constant: " << constant << "\n";
-                        }
-                    }
-                    switch (i) {
-                        case 0:
-                            start_bci = constant;
-                            break;
-                        case 1:
-                            limit_bci = constant;
-                            break;
-                        case 2:
-                            num_exceptions = constant;
-                            break;
-                        case 3:
-                            num_successors = constant;
-                            break;
-                        default:
-                            break;
-                    }
-                    i++;
-                }
-                assert(i == 4, "handler blocks should contain 4 constants only");
-                YuhuDebugInformationRecorder::get()->register_handler_block_info(StatepointRecord.getInstructionOffset(), start_bci, limit_bci, num_exceptions, num_successors);
             }
         }
 

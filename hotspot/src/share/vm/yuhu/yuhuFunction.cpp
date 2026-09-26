@@ -40,6 +40,7 @@
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuEntry.hpp"
 #include "yuhu/yuhuFunction.hpp"
+#include "yuhu/yuhuInlinePlanner.hpp"
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhu_globals.hpp"
@@ -308,8 +309,12 @@ void YuhuFunction::initialize(const char *name) {
     }
   }
   
+  // Phase 1: Plan inlining decisions before creating stack frame
+  // This allows us to calculate the total frame size needed for all inlined methods
+  _inline_tree = YuhuInlinePlanner::plan_inlining(target());
+  
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
-  // Pass sp_storage_alloca so YuhuStack uses the alloca created in the entry block
+  // The stack will use the inline tree to calculate total frame size
   _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
 
   // Set return slot to pc_slot in frame header (for non-void methods)
@@ -409,60 +414,6 @@ void YuhuFunction::initialize(const char *name) {
     block(i)->emit_IR();
   }
   do_deferred_zero_checks();
-//  collect_handler_blocks_and_insert_stackmap();
-  std::vector<llvm::Value*> live_values;
-  builder()->InsertStackMapAtBlockStart(_unified_exit_block, UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID, live_values);
-}
-
-void YuhuFunction::collect_handler_blocks_and_insert_stackmap() {
-    GrowableArray<YuhuTopLevelBlock*> handler_blocks;
-    GrowableArray<ciExceptionHandler*> exception_handlers;
-
-    for (int i = 0; i < block_count(); i++) {
-        YuhuTopLevelBlock* individual_block = block(i);
-        for (int j = 0; j < individual_block->num_exceptions(); j++) {
-            YuhuTopLevelBlock* handler_block = individual_block->exception(j);
-            if (handler_block && !handler_blocks.contains(handler_block)) {
-                handler_blocks.append(handler_block);
-            }
-        }
-        for (int j =0; j < individual_block->num_exceptions(); j++) {
-            ciExceptionHandler* exception_handler = individual_block->exc_handler(j);
-            if (exception_handler && !exception_handlers.contains(exception_handler)) {
-                exception_handlers.append(exception_handler);
-            }
-        }
-    }
-
-    // process handler blocks
-    handler_blocks.sort([](YuhuTopLevelBlock** a, YuhuTopLevelBlock** b) -> int {
-        if ((*a)->start() < (*b)->start()) return -1;
-        if ((*a)->start() > (*b)->start()) return  1;
-        return 0;
-    });;
-    if (handler_blocks.length()) {
-        for (int i = 0; i < handler_blocks.length(); ++i) {
-            std::vector<llvm::Value*> live_values;
-            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->start()));
-            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->limit()));
-            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->num_exceptions()));
-            live_values.push_back(builder()->getInt32(handler_blocks.at(i)->num_successors()));
-            builder()->InsertStackMapAtBlockStart(handler_blocks.at(i)->entry_block(), i, live_values);
-        }
-    }
-
-    // process exception handlers
-    exception_handlers.sort([](ciExceptionHandler** a, ciExceptionHandler** b) -> int {
-        if ((*a)->start() < (*b)->start()) return -1;
-        if ((*a)->start() > (*b)->start()) return  1;
-        return 0;
-    });;
-    if (exception_handlers.length()) {
-        for (int i = 0; i < exception_handlers.length(); ++i) {
-            ciExceptionHandler* h = exception_handlers.at(i);
-            YuhuDebugInformationRecorder::get()->register_exception_handler_info(h->start(), h->limit(), h->handler_bci(), h->is_catch_all());
-        }
-    }
 }
 
 class DeferredZeroCheck : public YuhuTargetInvariants {

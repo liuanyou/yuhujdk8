@@ -33,6 +33,7 @@
 #include "yuhu/yuhuState.hpp"
 #include "yuhu/yuhuValue.hpp"
 #include "yuhu/yuhu_globals.hpp"
+#include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
 
 using namespace llvm;

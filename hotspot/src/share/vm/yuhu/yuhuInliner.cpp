@@ -30,10 +30,13 @@
 #include "interpreter/bytecodes.hpp"
 #include "memory/allocation.hpp"
 #include "yuhu/yuhuBlock.hpp"
+#include "yuhu/yuhuCacheDecache.hpp"
 #include "yuhu/yuhuConstant.hpp"
 #include "yuhu/yuhuInliner.hpp"
+#include "yuhu/yuhuInlineTree.hpp"
 #include "yuhu/yuhuIntrinsics.hpp"
 #include "yuhu/yuhuState.hpp"
+#include "yuhu/yuhuTopLevelBlock.hpp"
 #include "yuhu/yuhuValue.hpp"
 #include "yuhu/yuhu_globals.hpp"
 
@@ -41,10 +44,12 @@ using namespace llvm;
 
 class YuhuInlineBlock : public YuhuBlock {
  public:
-  YuhuInlineBlock(ciMethod* target, YuhuState* state)
+  YuhuInlineBlock(ciMethod* target, YuhuState* state, YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block)
     : YuhuBlock(state, target),
       _outer_state(state),
-      _entry_state(new YuhuState(this)) {
+      _entry_state(new YuhuState(this)),
+      _inline_node(inline_node),
+      _outer_block(outer_block) {
     for (int i = target->max_locals() - 1; i >= 0; i--) {
       YuhuValue *value = NULL;
       if (i < target->arg_size())
@@ -56,6 +61,8 @@ class YuhuInlineBlock : public YuhuBlock {
  private:
   YuhuState* _outer_state;
   YuhuState* _entry_state;
+  YuhuInlineNode* _inline_node;  // Inline tree node for this inlined method
+  YuhuTopLevelBlock* _outer_block;  // Outer block for delegating calls
 
  private:
   YuhuState* outer_state() {
@@ -63,6 +70,12 @@ class YuhuInlineBlock : public YuhuBlock {
   }
   YuhuState* entry_state() {
     return _entry_state;
+  }
+  YuhuInlineNode* inline_node() {
+    return _inline_node;
+  }
+  YuhuTopLevelBlock* outer_block() {
+    return _outer_block;
   }
 
  public:
@@ -83,15 +96,19 @@ class YuhuInlineBlock : public YuhuBlock {
 
 class YuhuInlinerHelper : public StackObj {
  public:
-  YuhuInlinerHelper(ciMethod* target, YuhuState* entry_state)
+  YuhuInlinerHelper(ciMethod* target, YuhuState* entry_state, YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block)
     : _target(target),
       _entry_state(entry_state),
-      _iter(target) {}
+      _iter(target),
+      _inline_node(inline_node),
+      _outer_block(outer_block) {}
 
  private:
   ciBytecodeStream _iter;
   YuhuState*      _entry_state;
   ciMethod*        _target;
+  YuhuInlineNode*  _inline_node;  // Inline tree node for the method being inlined
+  YuhuTopLevelBlock* _outer_block;  // Outer block for delegating calls
 
  public:
   ciBytecodeStream* iter() {
@@ -185,7 +202,7 @@ class YuhuInlinerHelper : public StackObj {
   // Code generation
  public:
   void do_inline() {
-    (new YuhuInlineBlock(target(), entry_state()))->emit_IR();
+    (new YuhuInlineBlock(target(), entry_state(), _inline_node, _outer_block))->emit_IR();
   }
 };
 
@@ -744,13 +761,27 @@ bool YuhuInlinerHelper::do_field_access(bool is_get, bool is_field) {
 }
 
 bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci) {
+  return attempt_inline(target, state, stack, bci, NULL, NULL);
+}
+
+bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci,
+                                  YuhuInlineNode *inline_node, YuhuTopLevelBlock *outer_block) {
   if (YuhuIntrinsics::is_intrinsic(target)) {
     YuhuIntrinsics::inline_intrinsic(target, state, stack, bci);
     return true;
   }
 
+  // If we have an inline tree, check if this method is marked for inlining
+  if (inline_node != NULL) {
+    // The inline tree has already decided this method should be inlined
+    YuhuInlinerHelper inliner(target, state, inline_node, outer_block);
+    inliner.do_inline();
+    return true;
+  }
+
+  // No inline tree - use the old single-level inlining logic
   if (may_be_inlinable(target)) {
-    YuhuInlinerHelper inliner(target, state);
+    YuhuInlinerHelper inliner(target, state, NULL, NULL);
     if (inliner.is_inlinable()) {
       inliner.do_inline();
       return true;

@@ -37,6 +37,7 @@
 #include "yuhu/yuhuInvariants.hpp"
 #include "yuhu/yuhuStack.hpp"
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
+#include "yuhu/yuhuInlineTree.hpp"
 
 class YuhuTopLevelBlock;
 class DeferredZeroCheck;
@@ -69,6 +70,7 @@ class YuhuFunction : public YuhuTargetInvariants {
   YuhuTopLevelBlock**              _blocks;
   GrowableArray<DeferredZeroCheck*> _deferred_zero_checks;
   YuhuStack*                       _stack;
+  YuhuInlineTree*                  _inline_tree;  // Inline tree for depth-2 inlining
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
   llvm::Value*                     _return_slot;         // Return slot (pc_slot in frame header)
   llvm::Value*                     _x0_slot; // 8th int-like argument
@@ -98,6 +100,9 @@ class YuhuFunction : public YuhuTargetInvariants {
   }
   YuhuStack* stack() const {
     return _stack;
+  }
+  YuhuInlineTree* inline_tree() const {
+    return _inline_tree;
   }
 
   llvm::Value* x0_slot() const { return _x0_slot; }

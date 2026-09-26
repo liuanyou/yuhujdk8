@@ -38,6 +38,12 @@
   product(intx, YuhuMaxInlineSize, 32,                                       \
           "Maximum bytecode size of methods to inline when using Yuhu")      \
                                                                               \
+  product(intx, YuhuMaxInlineLevel, 2,                                       \
+          "Maximum depth of nested method inlining when using Yuhu")         \
+                                                                              \
+  develop(bool, YuhuTraceInlining, false,                                    \
+          "Trace inlining decisions during compilation")                     \
+                                                                              \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \
                                                                               \
