@@ -197,7 +197,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* debug_stack_overflow_check();
   
   // LLVM intrinsics for deoptimization
-  llvm::CallInst* CreateExperimentalDeoptimize(llvm::ArrayRef<llvm::OperandBundleDef> Bundles);
+  llvm::CallInst* CreateExperimentalDeoptimize(uint64_t statepoint_id, llvm::ArrayRef<llvm::OperandBundleDef> Bundles);
 
   llvm::CallInst* CreateStackMap(uint64_t id, uint32_t num_shadow_bytes, llvm::ArrayRef<llvm::Value*> live_values);
 

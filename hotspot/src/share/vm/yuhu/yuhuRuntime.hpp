@@ -35,8 +35,6 @@ class Symbol;
 class YuhuRuntimeStub;
 
 extern "C" void gc_safepoint_poll(JavaThread* thread);
-extern "C" void handle_deoptimization();
-extern "C" void go_unwind();
 
 // Stable cache key for a method: (klass_name, method_name, signature, access_flags)
 // All Symbol* are interned in HotSpot, so pointer comparison is safe.

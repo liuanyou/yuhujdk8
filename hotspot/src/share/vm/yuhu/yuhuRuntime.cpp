@@ -342,14 +342,6 @@ extern "C" void gc_safepoint_poll(JavaThread* thread) {
 //    }
 }
 
-extern "C" void handle_deoptimization() {
-    // just a placeholder function
-}
-
-extern "C" void go_unwind() {
-    // just a placeholder function
-}
-
 int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
     int stk_args = 0;
     bool is_first_int_checked = false;

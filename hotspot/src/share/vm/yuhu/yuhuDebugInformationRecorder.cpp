@@ -71,7 +71,9 @@ void YuhuDebugInformationRecorder::init_collections() {
   _call_site_entries = new (_arena) GrowableArray<CallSiteEntry*>(_arena, 10, 0, (CallSiteEntry*)NULL);
   _stack_map_entries = new (_arena) GrowableArray<StackMapEntry*>(_arena, 10, 0, (StackMapEntry*)NULL);
   _deopt_bundles = new (_arena) GrowableArray<DeoptBundle*>(_arena, 10, 0, (DeoptBundle*)NULL);
-  _const_symbol_entries = new (_arena) GrowableArray<ConstSymbolEntry*>(_arena, 10, 0, (ConstSymbolEntry*)NULL);
+  _patchpoint_entries = new (_arena) GrowableArray<PatchPointEntry*>(_arena, 10, 0, (PatchPointEntry*)NULL);
+  _const_symbol_entries = new (_arena) GrowableArray<SymbolEntry*>(_arena, 10, 0, (SymbolEntry*)NULL);
+  _edge_entries = new (_arena) GrowableArray<EdgeEntry*>(_arena, 10, 0, (EdgeEntry*)NULL);
   _frame_layout_info = new (_arena) FrameLayoutInfo();
 }
 
@@ -126,27 +128,28 @@ void YuhuDebugInformationRecorder::release() {
 }
 
 // Register call site for JITLink correlation
-void YuhuDebugInformationRecorder::register_call_site(uint64_t virtual_offset,
-                                                       uint64_t virtual_address, 
-                                                       uint64_t helper_address,
+void YuhuDebugInformationRecorder::register_call_site(uint64_t statepoint_id,
+                                                       ciMethod* current_method,
+                                                       uint64_t call_target,
                                                        CallSiteType call_site_type,
                                                        int bci,
-                                                       int num_monitors) {
-    int index = _call_site_entries->find(&virtual_offset, [](void* token, CallSiteEntry* entry) -> bool {
-        return *((uint64_t*)token) == entry->virtual_offset;
+                                                       int num_monitors,
+                                                       bool is_method_handle_invoke) {
+    int index = _call_site_entries->find(&statepoint_id, [](void* token, CallSiteEntry* entry) -> bool {
+        return *((uint64_t*)token) == entry->statepoint_id;
     });
     // skip registration if already exists
     if (index != -1) {
         return;
     }
     auto call_site_entry = new (_arena) CallSiteEntry();
-    call_site_entry->virtual_offset = virtual_offset;
-    call_site_entry->virtual_address = virtual_address;
-    call_site_entry->helper_address = helper_address;
+    call_site_entry->statepoint_id = statepoint_id;
+    call_site_entry->current_method = current_method;
+    call_site_entry->call_target = call_target;
     call_site_entry->call_site_type = call_site_type;
     call_site_entry->bci = bci;
     call_site_entry->num_monitors = num_monitors;
-    call_site_entry->machine_code_offsets = new (_arena) GrowableArray<CallSiteMachineCodeOffsets*>(_arena, 10, 0, (CallSiteMachineCodeOffsets*)NULL);
+    call_site_entry->is_method_handle_invoke = is_method_handle_invoke;
     _call_site_entries->append(call_site_entry);
 }
 
@@ -162,25 +165,23 @@ void YuhuDebugInformationRecorder::embed_call_site_metadata() {
   
   llvm::LLVMContext& ctx = _module->getContext();
   
-  // Create metadata for each call site: {virtual_offset, virtual_address, helper_address}
+  // Create metadata for each call site: {statepoint_id, call_target}
   std::vector<llvm::MDNode*> call_site_mds;
   
   for (int i = 0; i < get_call_site_count(); i++) {
-    int virtual_offset = get_call_site_virtual_offset(i);
-    uint64_t virtual_address = get_call_site_virtual_address(i);
-    uint64_t helper_address = get_call_site_helper_address(i);
+    uint64_t statepoint_id = get_call_site_statepoint_id(i);
+    uint64_t call_target = get_call_site_call_target(i);
     
-    // Create a tuple: !{i32 virtual_offset, i64 virtual_address, i64 helper_address}
+    // Create a tuple: !{i64 statepoint_id, i64 call_target}
     llvm::Metadata* operands[] = {
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), virtual_offset)),
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), virtual_address)),
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), helper_address))
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), statepoint_id)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), call_target))
     };
     
     call_site_mds.push_back(llvm::MDNode::get(ctx, operands));
   }
   
-  // Create named metadata node: !yuhu.call_sites = {!{i32, i64, i64}, ...}
+  // Create named metadata node: !yuhu.call_sites = {!{i64, i64}, ...}
   llvm::NamedMDNode* named_md = _module->getOrInsertNamedMetadata("yuhu.call_sites");
   
   for (auto* md : call_site_mds) {
@@ -193,16 +194,44 @@ void YuhuDebugInformationRecorder::embed_call_site_metadata() {
   }
 }
 
-void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offset,
-                                                      uint8_t location_kind,
-                                                      uint32_t location_reg_num,
-                                                      int32_t location_offset,
-                                                      uint64_t constant) {
-    int index = _stack_map_entries->find(&instruction_offset, [](void* token, StackMapEntry* entry) -> bool {
-        return *((uint32_t*)token) == entry->instruction_offset;
-    });
+void YuhuDebugInformationRecorder::register_stack_map(uint64_t statepoint_id, uint32_t instruction_offset) {
+    int index = -1;
+    for (int i = 0; i < _stack_map_entries->length(); ++i) {
+        StackMapEntry* stack_map = _stack_map_entries->at(i);
+        if (stack_map->statepoint_id == statepoint_id && stack_map->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
+
+    if (index != -1) {
+        return;
+    }
+
+    auto stack_map_entry = new (_arena) StackMapEntry();
+    stack_map_entry->statepoint_id = statepoint_id;
+    stack_map_entry->instruction_offset = instruction_offset;
+    stack_map_entry->locations = new (_arena) GrowableArray<StackMapLocation*>(_arena, 10, 0, (StackMapLocation*)NULL);
+    _stack_map_entries->append(stack_map_entry);
+}
+
+void YuhuDebugInformationRecorder::register_stack_map_location_data(uint64_t statepoint_id,
+                                                                    uint32_t instruction_offset,
+                                                                    uint8_t location_kind,
+                                                                    uint32_t location_reg_num,
+                                                                    int32_t location_offset,
+                                                                    uint64_t constant) {
+    int index = -1;
+    for (int i = 0; i < _stack_map_entries->length(); ++i) {
+        StackMapEntry* stack_map = _stack_map_entries->at(i);
+        if (stack_map->statepoint_id == statepoint_id && stack_map->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
     if (index == -1) {
         auto stack_map_entry = new (_arena) StackMapEntry();
+        stack_map_entry->statepoint_id = statepoint_id;
         stack_map_entry->instruction_offset = instruction_offset;
         stack_map_entry->locations = new (_arena) GrowableArray<StackMapLocation*>(_arena, 10, 0, (StackMapLocation*)NULL);
         _stack_map_entries->append(stack_map_entry);
@@ -218,16 +247,22 @@ void YuhuDebugInformationRecorder::register_stack_map(uint32_t instruction_offse
     entry->locations->append(location);
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle(uint32_t instruction_offset, uint64_t bci) {
-    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
-        return *((uint32_t*)token) == bundle->instruction_offset;
-    });
+void YuhuDebugInformationRecorder::register_deopt_bundle(uint64_t statepoint_id, uint32_t instruction_offset, uint64_t bci) {
+    int index = -1;
+    for (int i = 0; i < _deopt_bundles->length(); ++i) {
+        DeoptBundle* deopt_bundle = _deopt_bundles->at(i);
+        if (deopt_bundle->statepoint_id == statepoint_id && deopt_bundle->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
     if (index != -1) {
         assert(_deopt_bundles->at(index)->bci == 0 || _deopt_bundles->at(index)->bci == bci, "either bci is not initialized or bci matches");
         // update bci
         _deopt_bundles->at(index)->bci = bci;
     } else {
         auto deopt_bundle = new (_arena) DeoptBundle();
+        deopt_bundle->statepoint_id = statepoint_id;
         deopt_bundle->instruction_offset = instruction_offset;
         deopt_bundle->bci = bci;
         deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
@@ -236,14 +271,20 @@ void YuhuDebugInformationRecorder::register_deopt_bundle(uint32_t instruction_of
     }
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t instruction_offset, uint8_t basic_type) {
-    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
-        return *((uint32_t*)token) == bundle->instruction_offset;
-    });
+void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t basic_type) {
+    int index = -1;
+    for (int i = 0; i < _deopt_bundles->length(); ++i) {
+        DeoptBundle* deopt_bundle = _deopt_bundles->at(i);
+        if (deopt_bundle->statepoint_id == statepoint_id && deopt_bundle->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
     if (index == -1) {
         auto deopt_bundle = new (_arena) DeoptBundle();
+        deopt_bundle->statepoint_id = statepoint_id;
         deopt_bundle->instruction_offset = instruction_offset;
-        deopt_bundle->bci = 0;
+        deopt_bundle->bci = -2;
         deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
@@ -254,14 +295,20 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_local_data(uint32_t ins
     bundle->locals->append(basic_type);
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(uint32_t instruction_offset, uint8_t basic_type) {
-    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
-        return *((uint32_t*)token) == bundle->instruction_offset;
-    });
+void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t basic_type) {
+    int index = -1;
+    for (int i = 0; i < _deopt_bundles->length(); ++i) {
+        DeoptBundle* deopt_bundle = _deopt_bundles->at(i);
+        if (deopt_bundle->statepoint_id == statepoint_id && deopt_bundle->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
     if (index == -1) {
         auto deopt_bundle = new (_arena) DeoptBundle();
+        deopt_bundle->statepoint_id = statepoint_id;
         deopt_bundle->instruction_offset = instruction_offset;
-        deopt_bundle->bci = 0;
+        deopt_bundle->bci = -2;
         deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
@@ -272,14 +319,20 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(u
     bundle->expression_stacks->append(basic_type);
 }
 
-void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t instruction_offset, uint32_t num_monitors) {
-    int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* bundle) -> bool {
-        return *((uint32_t*)token) == bundle->instruction_offset;
-    });
+void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint64_t statepoint_id, uint32_t instruction_offset, uint32_t num_monitors) {
+    int index = -1;
+    for (int i = 0; i < _deopt_bundles->length(); ++i) {
+        DeoptBundle* deopt_bundle = _deopt_bundles->at(i);
+        if (deopt_bundle->statepoint_id == statepoint_id && deopt_bundle->instruction_offset == instruction_offset) {
+            index = i;
+            break;
+        }
+    }
     if (index == -1) {
         auto deopt_bundle = new (_arena) DeoptBundle();
+        deopt_bundle->statepoint_id = statepoint_id;
         deopt_bundle->instruction_offset = instruction_offset;
-        deopt_bundle->bci = 0;
+        deopt_bundle->bci = -2;
         deopt_bundle->locals = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         deopt_bundle->expression_stacks = new (_arena) GrowableArray<uint8_t>(_arena, 10, 0, (uint8_t)0);
         _deopt_bundles->append(deopt_bundle);
@@ -290,17 +343,47 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_monitor_data(uint32_t i
     bundle->num_monitors = num_monitors;
 }
 
+void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id) {
+    int index = _patchpoint_entries->find(&statepoint_id, [](void* token, PatchPointEntry* entry) -> bool {
+        return *((uint64_t*)token) == entry->statepoint_id;
+    });
+    // skip registration if already exists
+    if (index != -1) {
+        return;
+    }
+    auto patch_point_entry = new (_arena) PatchPointEntry();
+    patch_point_entry->statepoint_id = statepoint_id;
+    patch_point_entry->reserved_bytes = reserved_bytes;
+    patch_point_entry->call_site_statepoint_id = call_site_statepoint_id;
+    _patchpoint_entries->append(patch_point_entry);
+}
+
 void YuhuDebugInformationRecorder::register_const_symbol(uint64_t addr, uint64_t start, uint64_t end) {
-    int index = _const_symbol_entries->find(&addr, [](void* token, ConstSymbolEntry* entry) -> bool {
+    int index = _const_symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
         return *((uint32_t*)token) == entry->addr;
     });
     if (index == -1) {
-        auto const_symbol_entry = new (_arena) ConstSymbolEntry();
+        auto const_symbol_entry = new (_arena) SymbolEntry();
         const_symbol_entry->addr = addr;
         const_symbol_entry->start = start;
         const_symbol_entry->end = end;
         _const_symbol_entries->append(const_symbol_entry);
     }
+}
+
+void YuhuDebugInformationRecorder::register_edge(uint32_t offset, EdgeTargetType edge_target_type, uint64_t target_address) {
+    int index = _edge_entries->find(&offset, [](void* token, EdgeEntry* entry) -> bool {
+        return *((uint64_t*)token) == entry->offset;
+    });
+    // skip registration if already exists
+    if (index != -1) {
+        return;
+    }
+    auto edge_entry = new (_arena) EdgeEntry();
+    edge_entry->offset = offset;
+    edge_entry->edge_target_type = edge_target_type;
+    edge_entry->target_address = target_address;
+    _edge_entries->append(edge_entry);
 }
 
 void YuhuDebugInformationRecorder::register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words) {
@@ -328,18 +411,29 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                                                                          int frame_size) {
     using StackMapParser = llvm::StackMapParser<llvm::endianness::little>;
     GrowableArray<uint32_t> processed_instruction_offsets;
-    GrowableArray<CallSiteEntryOffsetsPair> entry_offsets_flatten_list;
+    GrowableArray<CallSiteInstructionHolder> call_site_instruction_holder_list;
     for (int i = 0; i < _call_site_entries->length(); ++i) {
-        assert(_call_site_entries->at(i)->machine_code_offsets->length() > 0, "offsets should not be empty");
-        for (int j = 0; j < _call_site_entries->at(i)->machine_code_offsets->length(); ++j) {
-            entry_offsets_flatten_list.append(CallSiteEntryOffsetsPair(_call_site_entries->at(i), _call_site_entries->at(i)->machine_code_offsets->at(j)));
+        CallSiteEntry* call_site = _call_site_entries->at(i);
+        for (int j = 0; j < _stack_map_entries->length(); ++j) {
+            StackMapEntry* stack_map = _stack_map_entries->at(j);
+            assert(stack_map->statepoint_id != 0, "statepoint id should exist");
+            if (call_site->statepoint_id == stack_map->statepoint_id) { // patch point statepoint id won't match here, so unwind call is skipped
+                call_site_instruction_holder_list.append(CallSiteInstructionHolder(call_site, stack_map)); // multiple stack map may match here
+            }
+        }
+        for (int j = 0; j < _deopt_bundles->length(); ++j) {
+            DeoptBundle* deopt_bundle = _deopt_bundles->at(j);
+            assert(deopt_bundle->statepoint_id != 0, "statepoint id should exist");
+            if (call_site->statepoint_id == deopt_bundle->statepoint_id) {
+                call_site_instruction_holder_list.append(CallSiteInstructionHolder(call_site, deopt_bundle));
+            }
         }
     }
 
-    // sort by return_pc_offset, oopmap should be registered in ascending order
-    entry_offsets_flatten_list.sort([](CallSiteEntryOffsetsPair* a, CallSiteEntryOffsetsPair* b) -> int {
-        if ((*a).offsets->return_pc_offset < (*b).offsets->return_pc_offset) return -1;
-        if ((*a).offsets->return_pc_offset > (*b).offsets->return_pc_offset) return 1;
+    // sort by instruction offset, oopmap should be registered in ascending order
+    call_site_instruction_holder_list.sort([](CallSiteInstructionHolder* a, CallSiteInstructionHolder* b) -> int {
+        if ((*a).instruction_offset() < (*b).instruction_offset()) return -1;
+        if ((*a).instruction_offset() > (*b).instruction_offset()) return 1;
         return 0;
     });
 
@@ -385,11 +479,11 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
 
     int max_monitors = _frame_layout_info->monitor_words / 2;
 
-    for (int i = 0; i < entry_offsets_flatten_list.length(); ++i) {
-        CallSiteEntry* call_site_entry = entry_offsets_flatten_list.at(i).entry;
-        CallSiteMachineCodeOffsets* machine_code_offsets = entry_offsets_flatten_list.at(i).offsets;
+    for (int i = 0; i < call_site_instruction_holder_list.length(); ++i) {
+        CallSiteInstructionHolder holder = call_site_instruction_holder_list.at(i);
+        CallSiteEntry* call_site_entry = holder.call_site_entry;
 
-        uint64_t return_pc_offset = machine_code_offsets->return_pc_offset;
+        uint64_t return_pc_offset = holder.instruction_offset();
 
         // multiple call targets may use same blr, so skip processed return pc offset
         if (processed_instruction_offsets.contains(return_pc_offset)) {
@@ -413,20 +507,11 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
 
             // add plus_offset to get offset in code cache
             int pc_offset = return_pc_offset + plus_offset;
-            uint64_t helper_address = call_site_entry->helper_address;
-            if (helper_address == (uint64_t) &gc_safepoint_poll) {
-                if (YuhuTraceOffset) {
-                    tty->print_cr("Yuhu: Call site is safepoint poll call");
-                }
-                // safepoint poll makes no differences here, coz it is also a runtime call
-//                pc_offset = machine_code_offsets->blr_offset + plus_offset;
-            }
 
             GrowableArray<int32_t> processed_stack_offsets;
             GrowableArray<uint32_t> processed_register_nums;
 
-            StackMapEntry *stack_map_entry = get_stack_map_by_instruction_offset(return_pc_offset);
-
+            StackMapEntry* stack_map_entry = holder.stack_map_entry;
             for (int j = 0; j < stack_map_entry->locations->length(); ++j) {
                 uint8_t kind = stack_map_entry->locations->at(j)->kind;
                 if (kind == static_cast<uint8_t>(StackMapParser::LocationKind::Direct)) {
@@ -476,11 +561,11 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             // call sites need an oopmap even there is no live oop
             real_recorder->add_safepoint(pc_offset, oopmap);
             real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
-                                          method, // the method being compiled (the caller)
+                                          call_site_entry->current_method, // the method being compiled (the caller)
                                           call_site_entry->bci, // the BCI of the invoke bytecode in the caller
-                                          false, // Whether to re-execute the bytecode after deoptimization
+                                          true, // Whether to re-execute the bytecode after deoptimization
                                           false, // Whether this is a MethodHandle invoke
-                                          method->signature()->return_type()->is_object(), // Whether the return value is an oop
+                                          call_site_entry->current_method->signature()->return_type()->is_object(), // Whether the return value is an oop
                                           NULL, // DebugToken* for local variables (can be NULL/empty)
                                           NULL, // DebugToken* for expression stack (can be NULL/empty)
                                           NULL); // DebugToken* for synchronized monitors (can be NULL/empty)
@@ -489,8 +574,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             // add plus_offset to get offset in code cache
             int pc_offset = return_pc_offset + plus_offset;
 
-            DeoptBundle* bundle = get_deopt_bundle_by_instruction_offset(return_pc_offset);
-            assert(bundle != NULL, "deopt bundle shouldn't be NULL");
+            DeoptBundle* bundle = holder.deopt_bundle;
             assert((int) bundle->bci == call_site_entry->bci, "bci should be the same");
 
             // Convert StackMapLocation arrays to ScopeValue arrays for DebugToken

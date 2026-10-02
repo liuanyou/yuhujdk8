@@ -51,11 +51,6 @@
 
 using namespace llvm;
 
-// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll(JavaThread* thread);
-extern "C" void handle_deoptimization();
-extern "C" void go_unwind();
-
 void YuhuTopLevelBlock::scan_for_traps() {
     // Save ciTypeFlow trap info — we'll decide which trap to use after manual scan
     bool has_ciflow_trap = false;
@@ -102,6 +97,8 @@ void YuhuTopLevelBlock::scan_for_traps() {
                 ciMethod *dest_method = iter()->get_method(will_link, &sig);
                 assert(will_link, "typeflow responsibility");
                 // For invokehandle, don't trap — let do_call() handle it like C1
+                // 1. MH intrinsics are called before rewriting (rare, but possible if class isn't linked)
+                // 2. Lambda form adapters are called via invokestatic (common in MH chains)
                 if (!is_invokehandle && (dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form())) {
                     if (YuhuPerformanceWarnings) {
                         warning("JSR292 optimization not yet implemented in Yuhu");
@@ -279,8 +276,8 @@ void YuhuTopLevelBlock::cache_after_Java_call(ciMethod *callee, Value* call_resu
   YuhuJavaCallCacher(function(), callee).scan(current_state());
 }
 
-void YuhuTopLevelBlock::decache_for_VM_call(int virtual_offset) {
-  YuhuVMCallDecacher decacher(function(), bci(), virtual_offset);
+void YuhuTopLevelBlock::decache_for_VM_call() {
+  YuhuVMCallDecacher decacher(function(), bci());
   decacher.scan(current_state());
 }
 
@@ -574,10 +571,7 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
     args.push_back(check_klass);
     args.push_back(exception_klass);
 
-      // Manual call site registration (can't use call_vm from here)
-      uint64_t virtual_offset = code_buffer()->create_unique_offset();
-      uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-      uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
       // Extract actual helper address
       uint64_t helper_address = 0;
@@ -594,19 +588,21 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
 
       assert(helper_address != 0, "helper_address should have a value");
 
-      // Replace callee with virtual address
-      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-      callee = builder()->CreateIntToPtr(call_target,
-              callee->getType());
-
       YuhuDebugInformationRecorder::get()->register_call_site(
-              virtual_offset, call_target_va, helper_address,
+              statepoint_id, target(), helper_address,
               CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+
+      llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
+
+      llvm::LLVMContext &Ctx = builder()->getContext();
+      llvm::AttrBuilder AB(Ctx);
+      AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+      llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+      call->setAttributes(Attrs);
 
     builder()->CreateCondBr(
       builder()->CreateICmpNE(
-        builder()->CreateCall(func_type, callee, args),
+        call,
         LLVMValue::jbyte_constant(0)),
       handler_for_exception(i), not_subtype);
 
@@ -671,62 +667,30 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
   if (current_state()->has_safepointed())
     return;
 
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
-    uint64_t helper_address = (uint64_t)&gc_safepoint_poll;
-    // call_target_va is not used in the CreateCall, just create one for no use
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
-                                                            call_target_va,
+    // Generate globally unique statepoint ID
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    
+    uint64_t helper_address = (uint64_t)YuhuRuntime::safepoint_poll_stub();
+    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                            target(),
                                                             helper_address,
                                                             CallSiteType::safepoint_poll,
                                                             is_method_entry_safepoint ? -1 : bci(),
                                                             current_state()->num_monitors());
 
-    // Decache: flush all live OOPs to stack slots and create OopMap
-//    decache_for_VM_call(virtual_offset);
-
-//    // Build gc-live operand bundle with all live JVM state
-//    YuhuState* state = current_state();
-//    std::vector<llvm::Value*> gclive_operands;
-//
-//    // 1. Local variables (in order 0..max_locals-1)
-//    for (int i = 0; i < max_locals(); i++) {
-//        ciType* type = state->local_type_at(i);
-//        BasicType slot_type = type->basic_type();
-//
-//        if (slot_type == T_OBJECT || slot_type == T_ARRAY) {
-//            YuhuValue* local_val = state->local(i);
-//            if (local_val != NULL) {
-//                gclive_operands.push_back(local_val->jobject_value());
-//            }
-//        }
-//    }
-//
-//    // 2. Expression stack (in order top..bottom)
-//    for (int i = 0; i < state->stack_depth(); i++) {
-//        YuhuValue* stack_val = state->stack(i);
-//
-//        if (stack_val != NULL) {
-//            BasicType slot_type = stack_val->basic_type();
-//            if (slot_type == T_OBJECT || slot_type == T_ARRAY) {
-//                gclive_operands.push_back(stack_val->jobject_value());
-//            }
-//        }
-//    }
-
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::safepoint_poll);
+    llvm::Value* call_target = LLVMValue::jlong_constant(helper_address);
 
     llvm::Module* mod = builder()->GetInsertBlock()->getModule();
     llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), { YuhuType::thread_type() }, false);
     llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
-//    llvm::OperandBundleDef gclive_bundle("gc-live", gclive_operands);
-//    builder()->CreateCall(poll_ftype, callee, { thread() }, { gclive_bundle });
 
-    builder()->CreateCall(poll_ftype, callee, { thread() });
+    llvm::CallInst* call = builder()->CreateCall(poll_ftype, callee, { thread() });
 
-    // Cache: reload all live OOPs from stack slots (GC may have moved them)
-//    cache_after_VM_call();
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
 
   current_state()->set_has_safepointed(true);
 }
@@ -782,7 +746,25 @@ BasicBlock* YuhuTopLevelBlock::make_trap(int trap_bci, int trap_request) {
   int orig_bci = bci();
   iter()->force_bci(trap_bci);
 
-  do_trap(trap_request);
+  bool is_method_invoke_handle = false;
+
+  switch (iter()->cur_bc()) {
+      case Bytecodes::_invokestatic:
+      case Bytecodes::_invokespecial:
+      case Bytecodes::_invokevirtual:
+      case Bytecodes::_invokeinterface:
+      case Bytecodes::_invokedynamic: {
+          bool will_link;
+          ciSignature *sig;
+          ciMethod *dest_method = iter()->get_method(will_link, &sig);
+          is_method_invoke_handle = dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form();
+      }
+          break;
+      default:
+          break;
+  }
+
+  do_trap(trap_request, is_method_invoke_handle);
 
   builder()->SetInsertPoint(orig_block);
   iter()->force_bci(orig_bci);
@@ -790,7 +772,7 @@ BasicBlock* YuhuTopLevelBlock::make_trap(int trap_bci, int trap_request) {
   return trap_block;
 }
 
-void YuhuTopLevelBlock::do_trap(int trap_request) {
+void YuhuTopLevelBlock::do_trap(int trap_request, bool is_method_handle_invoke) {
   decache_for_trap();
   
   // Build deopt operand bundle with all live JVM state
@@ -869,38 +851,27 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
   // Create deopt operand bundle
   llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);
 
-    // NEW: Get unique virtual offset for this call site (MUST be before creating placeholders)
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-    // NEW: Create dual virtual addresses with same virtual_offset
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
-
-    stack()->CreateCallSitePlaceholder(last_java_pc_va);
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
     // NEW: Register call site for later patching
-    YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
-                                                            call_target_va,
-                                                            (uint64_t)&handle_deoptimization,
+    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                            target(),
+                                                            (uint64_t)YuhuRuntime::handle_deoptimization_stub(),
                                                             CallSiteType::deopt_call,
                                                             bci(),
-                                                            current_state()->num_monitors());
-  
+                                                            current_state()->num_monitors(),
+                                                            is_method_handle_invoke);
+
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
   // The deopt bundle preserves all live JVM state for frame reconstruction
-  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize({deopt_bundle});
+  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize(statepoint_id, {deopt_bundle});
 
   if (target()->return_type()->is_void()) {
       builder()->CreateRetVoid();
   } else {
       builder()->CreateRet(deopt_result);
   }
-
-  // CRITICAL: Jump to the unified exit block (contains epilogue marker and ret)
-  // This ensures we only have ONE marker in the entire function
-  // Remove it because Ret required by deoptimization is already a terminator
-//  builder()->CreateBr(function()->unified_exit_block());
 }
 
 void YuhuTopLevelBlock::call_register_finalizer(Value *receiver) {
@@ -975,25 +946,47 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
 
   if (exception) {
       // jump to unwind handler
-      uint64_t virtual_offset = code_buffer()->create_unique_offset();
-      uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-      uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
-      uint64_t helper_address = (uint64_t)&go_unwind;
+      uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+      uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
+
+//      uint64_t helper_address = (uint64_t)&go_unwind;
       // call_target_va is not used in the CreateCall, just create one for no use
-      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
-                                                              call_target_va,
-                                                              helper_address,
+      YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                              target(),
+                                                              0,
                                                               CallSiteType::unwind_call,
                                                               bci(),
                                                               current_state()->num_monitors());
 
-      llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::unwind_call);
-
+//      llvm::Value* call_target = LLVMValue::jlong_constant(helper_address);
+//
       llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-      llvm::FunctionType* unwind_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
-      llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
+//      llvm::FunctionType* unwind_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+//      llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
 
-      builder()->CreateCall(unwind_ftype, callee, {});
+      llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
+              mod, llvm::Intrinsic::experimental_patchpoint_void);
+
+      // patchpoint.void(id, numBytes, target, numArgs, ...)
+      llvm::Value* pp_args[] = {
+              LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
+              llvm::ConstantInt::get(YuhuType::jint_type(), 4),              // numBytes: reserved region size
+              llvm::ConstantPointerNull::get(
+                      llvm::PointerType::getUnqual(builder()->getContext())), // target: &go_unwind (raw i64)
+              llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
+      };
+
+      // register patch point
+      YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 4, statepoint_id);
+
+      llvm::CallInst* call = builder()->CreateCall(pp_intrinsic, pp_args);
+
+      llvm::LLVMContext &Ctx = builder()->getContext();
+      llvm::AttrBuilder AB(Ctx);
+      AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+      llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+      call->setAttributes(Attrs);
+
       // because Unreachable, unified_exit_block may be eliminated by llvm
       builder()->CreateUnreachable();
       return;
@@ -1773,33 +1766,22 @@ void YuhuTopLevelBlock::do_call() {
     callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
   }
 
-  // All callees (direct, virtual, interface) now return stub addresses
-  // The stub handles loading _from_compiled_entry internally
-  Value *from_compiled_entry = callee;
-
   // NOW it's safe to decache (this will xpop() all arguments)
   // This creates an OopMap at the call site
   decache_for_Java_call(call_method);
 
-  // NEW: Get unique virtual offset for this call site (MUST be before creating placeholders)
-  uint64_t virtual_offset = code_buffer()->create_unique_offset();
-  
-  // NEW: Create dual virtual addresses with same virtual_offset
-  uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
-  llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::java_call);
-  
+  llvm::Value* call_target = LLVMValue::jlong_constant((uint64_t)compiled_entry_address);
+
   // NEW: Register call site for later patching
-  YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset,
-                                                          call_target_va,
+  YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                          target(),
                                                           (uint64_t) compiled_entry_address,
                                                           CallSiteType::java_call,
                                                           bci(),
-                                                          current_state()->num_monitors());
-
-  // Save callee-saved registers that Yuhu uses but interpreter may corrupt
-//  builder()->CreateSaveCalleeSavedRegisters();
+                                                          current_state()->num_monitors(),
+                                                          dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form());
 
   // Cast from_compiled_entry to a function pointer matching the callee's signature
   // We need to construct the callee's FunctionType based on its Java signature
@@ -1852,11 +1834,16 @@ void YuhuTopLevelBlock::do_call() {
 
   // Call the compiled entry and get the actual return value
   // Note: decache_for_Java_call() was already called above (line 1566)
-  Value* call_result = builder()->CreateCall(
+  llvm::CallInst* call = builder()->CreateCall(
     compiled_ftype, compiled_entry_ptr, call_args);
 
-  // Restore callee-saved registers from save area at [sp, #80]
-//  builder()->CreateRestoreCalleeSavedRegisters();
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
+    Value* call_result = call;
 
   // NOTE: Unlike Shark, we use the correct function return type instead of jint.
   // Shark uses a special entry point that returns jint (deoptimization count),
@@ -2028,9 +2015,7 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
   builder()->SetInsertPoint(subtype_check);
 
     // Manual call site registration (can't use call_vm from here)
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
     // Extract actual helper address
     uint64_t helper_address = 0;
@@ -2047,23 +2032,26 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
 
     assert(helper_address != 0, "helper_address should have a value");
 
-    // Replace callee with virtual address
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-    callee = builder()->CreateIntToPtr(call_target,
-            callee->getType());
-
     YuhuDebugInformationRecorder::get()->register_call_site(
-            virtual_offset, call_target_va, helper_address,
+            statepoint_id, target(), helper_address,
             CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;
   args.push_back(check_klass);
   args.push_back(object_klass);
+
+  llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   builder()->CreateCondBr(
     builder()->CreateICmpNE(
-      builder()->CreateCall(func_type, callee, args),
+      call,
       LLVMValue::jbyte_constant(0)),
     is_instance, not_instance);
 

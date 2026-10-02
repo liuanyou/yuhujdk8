@@ -189,11 +189,7 @@ void YuhuIntrinsics::do_Math_1to1(Value *function) {
 
   Value* callee = function;
 
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-    // Step 2: Create dual virtual addresses with same virtual_offset
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
     // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;
@@ -207,12 +203,8 @@ void YuhuIntrinsics::do_Math_1to1(Value *function) {
 
     assert(helper_address != 0, "helper_address should have a value");
 
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-    callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
     YuhuDebugInformationRecorder::get()->register_call_site(
-            virtual_offset, call_target_va, helper_address,
+            statepoint_id, target(), helper_address,
             CallSiteType::leaf_call, bci(), state()->num_monitors());
 
   // LLVM 20+ requires FunctionType for CreateCall
@@ -221,14 +213,31 @@ void YuhuIntrinsics::do_Math_1to1(Value *function) {
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("d", "d");
   std::vector<Value*> args;
   args.push_back(state()->pop()->jdouble_value());
+
+  llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   state()->push(
     YuhuValue::create_jdouble(
-      builder()->CreateCall(func_type, callee, args)));
+      call));
 #else
+    llvm::CallInst* call = builder()->CreateCall(
+        callee, state()->pop()->jdouble_value());
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   state()->push(
     YuhuValue::create_jdouble(
-      builder()->CreateCall(
-        callee, state()->pop()->jdouble_value())));
+      call));
 #endif
   state()->push(NULL);
 }
@@ -243,11 +252,7 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
 
   Value* callee = function;
 
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-    // Step 2: Create dual virtual addresses with same virtual_offset
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
     // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;
@@ -261,12 +266,8 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
 
     assert(helper_address != 0, "helper_address should have a value");
 
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-    callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
     YuhuDebugInformationRecorder::get()->register_call_site(
-            virtual_offset, call_target_va, helper_address,
+            statepoint_id, target(), helper_address,
             CallSiteType::leaf_call, bci(), state()->num_monitors());
 
   // LLVM 20+ requires FunctionType for CreateCall
@@ -275,9 +276,18 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
   std::vector<Value*> args;
   args.push_back(x);
   args.push_back(y);
+
+  llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   state()->push(
     YuhuValue::create_jdouble(
-      builder()->CreateCall(func_type, callee, args)));
+      call));
   state()->push(NULL);
 }
 
@@ -297,9 +307,7 @@ void YuhuIntrinsics::do_Object_getClass() {
 
 void YuhuIntrinsics::do_System_currentTimeMillis() {
   // Manual call site registration (can't use call_vm from here)
-  uint64_t virtual_offset = code_buffer()->create_unique_offset();
-  uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-  uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
   
   // Extract actual helper address
   uint64_t helper_address = 0;
@@ -313,24 +321,37 @@ void YuhuIntrinsics::do_System_currentTimeMillis() {
   }
 
   assert(helper_address != 0, "helper_address should have a value");
-  
-  // Replace callee with virtual address
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-    callee = builder()->CreateIntToPtr(call_target, callee->getType());
 
     YuhuDebugInformationRecorder::get()->register_call_site(
-      virtual_offset, call_target_va, helper_address,
+      statepoint_id, target(), helper_address,
       CallSiteType::leaf_call, bci(), state()->num_monitors());
   
   // Create the call
 #if LLVM_VERSION_MAJOR >= 20
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("", "l");
   std::vector<Value*> args;  // No arguments
+
+    llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   state()->push(
     YuhuValue::create_jlong(
-      builder()->CreateCall(func_type, callee, args),
+      call,
       false));
 #else
+    llvm::CallInst* call = builder()->CreateCall(callee);
+
+    llvm::LLVMContext &Ctx = builder()->getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
   state()->push(
     YuhuValue::create_jlong(
       builder()->CreateCall(callee),

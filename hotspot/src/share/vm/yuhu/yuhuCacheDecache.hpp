@@ -62,12 +62,11 @@ class YuhuCacherDecacher : public YuhuStateScanner {
 
 class YuhuDecacher : public YuhuCacherDecacher {
  protected:
-  YuhuDecacher(YuhuFunction* function, int bci, int virtual_offset = -1)
-    : YuhuCacherDecacher(function), _bci(bci), _forced_virtual_offset(virtual_offset) {}
+  YuhuDecacher(YuhuFunction* function, int bci)
+    : YuhuCacherDecacher(function), _bci(bci) {}
 
  private:
   int _bci;
-  int _forced_virtual_offset;  // External virtual_offset (if provided)
 
  protected:
   int bci() const {
@@ -218,8 +217,8 @@ class YuhuJavaCallDecacher : public YuhuDecacher {
 
 class YuhuVMCallDecacher : public YuhuDecacher {
  public:
-  YuhuVMCallDecacher(YuhuFunction* function, int bci, int virtual_offset = -1)
-    : YuhuDecacher(function, bci, virtual_offset) {}
+  YuhuVMCallDecacher(YuhuFunction* function, int bci)
+    : YuhuDecacher(function, bci) {}
 
   // Stack slot helpers
  protected:

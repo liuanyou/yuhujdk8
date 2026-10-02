@@ -219,7 +219,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
  private:
   void decache_for_Java_call(ciMethod* callee);
   void cache_after_Java_call(ciMethod* callee, llvm::Value* call_result);
-  void decache_for_VM_call(int virtual_offset = -1);
+  void decache_for_VM_call();
   void cache_after_VM_call();
   void decache_for_trap();
 
@@ -301,12 +301,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
                           llvm::Value** args_end,
                           int           exception_action,
                           llvm::Type*   return_type) {
-    // NEW: Get unique virtual offset for this call site (MUST be before decache)
-    uint64_t virtual_offset = code_buffer()->create_unique_offset();
-    
-    // Step 2: Create dual virtual addresses with same virtual_offset
-    uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-    uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
     
     // Step 3: Extract actual helper address from callee (inttoptr constant)
     uint64_t helper_address = 0;
@@ -320,15 +315,11 @@ class YuhuTopLevelBlock : public YuhuBlock {
 
       assert(helper_address != 0, "helper_address should have a value");
 
-    // Step 4: Store last_Java_pc placeholder
-    llvm::Value* call_target = stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::vm_call);
-    // Step 5: Replace callee with virtual address placeholder
-    llvm::Value* virtual_callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
-      YuhuDebugInformationRecorder::get()->register_call_site(virtual_offset, call_target_va, helper_address, CallSiteType::vm_call, bci(), current_state()->num_monitors());
+      YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id, target(), helper_address,
+                                                              CallSiteType::vm_call, bci(), current_state()->num_monitors());
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
-    decache_for_VM_call(virtual_offset);
+    decache_for_VM_call();
     
     // Step 7: Create the call
 #if LLVM_VERSION_MAJOR >= 20
@@ -338,9 +329,21 @@ class YuhuTopLevelBlock : public YuhuBlock {
       param_types.push_back((*arg)->getType());
     }
     llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, param_types, false);
-    llvm::CallInst *res = builder()->CreateCall(func_type, virtual_callee, args_array);
+    llvm::CallInst *res = builder()->CreateCall(func_type, callee, args_array);
+
+      llvm::LLVMContext &Ctx = builder()->getContext();
+      llvm::AttrBuilder AB(Ctx);
+      AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+      llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+      res->setAttributes(Attrs);
 #else
     llvm::CallInst *res = builder()->CreateCall(virtual_callee, llvm::makeArrayRef(args_start, args_end));
+
+      llvm::LLVMContext &Ctx = builder()->getContext();
+      llvm::AttrBuilder AB(Ctx);
+      AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+      llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+      res->setAttributes(Attrs);
 #endif
 
     cache_after_VM_call();
@@ -441,7 +444,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
   // Traps
  private:
   llvm::BasicBlock* make_trap(int trap_bci, int trap_request);
-  void do_trap(int trap_request);
+  void do_trap(int trap_request, bool is_method_handle_invoke = false);
 
   // Returns
  private:

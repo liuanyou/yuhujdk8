@@ -35,12 +35,7 @@
 using namespace llvm;
 
 void YuhuDecacher::start_frame() {
-  // Use forced virtual_offset if provided, otherwise create new one
-  if (_forced_virtual_offset >= 0) {
-    _pc_offset = _forced_virtual_offset;
-  } else {
-    _pc_offset = code_buffer()->create_unique_offset();
-  }
+  _pc_offset = code_buffer()->create_unique_offset();
 }
 
 void YuhuDecacher::start_stack(int stack_depth) {

@@ -675,11 +675,7 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     case Bytecodes::_f2i: {
         Value* callee = builder()->f2i();
 
-        uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-        // Step 2: Create dual virtual addresses with same virtual_offset
-        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+        uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
         // Step 3: Extract actual helper address from callee (inttoptr constant)
         uint64_t helper_address = 0;
@@ -693,29 +689,30 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
 
         assert(helper_address != 0, "helper_address should have a value");
 
-        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-        callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
         YuhuDebugInformationRecorder::get()->register_call_site(
-                virtual_offset, call_target_va, helper_address,
+                statepoint_id, target(), helper_address,
                 CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "i"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("f", "i");
+
+      llvm::CallInst* call = builder()->CreateCall(func_type, callee, arg);
+
+        llvm::LLVMContext &Ctx = builder()->getContext();
+        llvm::AttrBuilder AB(Ctx);
+        AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+        llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+        call->setAttributes(Attrs);
+
       push(YuhuValue::create_jint(
-        builder()->CreateCall(func_type, callee, arg), false));
+        call, false));
       break;
     }
     case Bytecodes::_f2l: {
       Value* callee = builder()->f2l();
 
-        uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-        // Step 2: Create dual virtual addresses with same virtual_offset
-        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+        uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
         // Step 3: Extract actual helper address from callee (inttoptr constant)
         uint64_t helper_address = 0;
@@ -729,19 +726,24 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
 
         assert(helper_address != 0, "helper_address should have a value");
 
-        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-        callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
         YuhuDebugInformationRecorder::get()->register_call_site(
-                virtual_offset, call_target_va, helper_address,
+                statepoint_id, target(), helper_address,
                 CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "l"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("f", "l");
+
+      llvm::CallInst* call = builder()->CreateCall(func_type, callee, arg);
+
+        llvm::LLVMContext &Ctx = builder()->getContext();
+        llvm::AttrBuilder AB(Ctx);
+        AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+        llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+        call->setAttributes(Attrs);
+
       push(YuhuValue::create_jlong(
-        builder()->CreateCall(func_type, callee, arg), false));
+        call, false));
       break;
     }
     case Bytecodes::_f2d:
@@ -753,11 +755,7 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     case Bytecodes::_d2i: {
       Value* callee = builder()->d2i();
 
-        uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-        // Step 2: Create dual virtual addresses with same virtual_offset
-        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+        uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
         // Step 3: Extract actual helper address from callee (inttoptr constant)
         uint64_t helper_address = 0;
@@ -771,29 +769,30 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
 
         assert(helper_address != 0, "helper_address should have a value");
 
-        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-        callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
         YuhuDebugInformationRecorder::get()->register_call_site(
-                virtual_offset, call_target_va, helper_address,
+                statepoint_id, target(), helper_address,
                 CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "i"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("d", "i");
+
+      llvm::CallInst* call = builder()->CreateCall(func_type, callee, arg);
+
+        llvm::LLVMContext &Ctx = builder()->getContext();
+        llvm::AttrBuilder AB(Ctx);
+        AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+        llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+        call->setAttributes(Attrs);
+
       push(YuhuValue::create_jint(
-        builder()->CreateCall(func_type, callee, arg), false));
+        call, false));
       break;
     }
     case Bytecodes::_d2l: {
       Value* callee = builder()->d2l();
 
-        uint64_t virtual_offset = code_buffer()->create_unique_offset();
-
-        // Step 2: Create dual virtual addresses with same virtual_offset
-        uint64_t last_java_pc_va = LAST_JAVA_PC_MAGIC | virtual_offset;  // For last_Java_pc
-        uint64_t call_target_va = (virtual_offset << 32) | (virtual_offset << 16) | CALL_TARGET_MAGIC;
+        uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
 
         // Step 3: Extract actual helper address from callee (inttoptr constant)
         uint64_t helper_address = 0;
@@ -807,19 +806,24 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
 
         assert(helper_address != 0, "helper_address should have a value");
 
-        llvm::Value* call_target = builder()->function()->stack()->CreateCallSitePlaceholderWithCallTarget(last_java_pc_va, call_target_va, CallSiteType::leaf_call);
-
-        callee = builder()->CreateIntToPtr(call_target, callee->getType());
-
         YuhuDebugInformationRecorder::get()->register_call_site(
-                virtual_offset, call_target_va, helper_address,
+                statepoint_id, target(), helper_address,
                 CallSiteType::leaf_call, bci(), current_state()->num_monitors());
 
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "l"
       llvm::FunctionType* func_type = YuhuBuilder::make_ftype("d", "l");
+
+      llvm::CallInst* call = builder()->CreateCall(func_type, callee, arg);
+
+        llvm::LLVMContext &Ctx = builder()->getContext();
+        llvm::AttrBuilder AB(Ctx);
+        AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+        llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+        call->setAttributes(Attrs);
+
       push(YuhuValue::create_jlong(
-        builder()->CreateCall(func_type, callee, arg), false));
+        call, false));
       break;
     }
     case Bytecodes::_d2f:

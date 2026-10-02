@@ -50,12 +50,6 @@ class YuhuStack : public YuhuCompileInvariants {
  protected:
   void initialize(llvm::Value* method, ciMethod* target);
 
- protected:
-  // Stack overflow check - checks if the new stack pointer (sp) has enough space
-  // FIXED: Now only takes sp parameter, checks the actual stack pointer after frame allocation
-  // exit_block: unified exit block to jump to on overflow (NULL for native wrappers)
-  void CreateStackOverflowCheck(llvm::Value* sp, llvm::BasicBlock* exit_block);
-
   // Properties of the method being compiled
  protected:
   virtual int arg_size() const = 0;
@@ -100,17 +94,8 @@ class YuhuStack : public YuhuCompileInvariants {
 
  public:
   void CreateSetLastJavaFrame();
-
-  void CreateSetLastJavaFrameWithPlaceholderNoPC(uint64_t virtual_address);
-  
-  // NEW: CreateSetLastJavaFrameWithPlaceholderPC - stores a 64-bit virtual address placeholder
-  // that will be patched by JITLink plugin with the actual return address
-  // This generates movz/movk/str pattern that can be scanned and patched
-  void CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address);
   
   void CreateResetLastJavaFrame();
-
-  void CreateResetLastJavaFrameWithNoPC();
 
   void CreateCallSitePlaceholder(uint64_t virtual_address);
 

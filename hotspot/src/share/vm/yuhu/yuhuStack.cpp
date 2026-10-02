@@ -157,87 +157,6 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
     builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
 }
 
-// Stack overflow check for AArch64
-// AArch64 uses standard ABI stack, so we only need to check the ABI stack
-// This should match SharkStack::CreateStackOverflowCheck logic for ABI stack
-// FIXED: Now checks current_sp instead of stack_pointer to ensure there's enough
-// space for throw_StackOverflowError (which needs its own stack frame)
-// exit_block: unified exit block to jump to on overflow (NULL = create ret directly)
-void YuhuStack::CreateStackOverflowCheck(Value* sp, llvm::BasicBlock* exit_block) {
-  BasicBlock *overflow = CreateBlock("stack_overflow");
-  BasicBlock *ok       = CreateBlock("stack_ok");
-
-  // Get actual stack pointer (SP register x31) using read_register intrinsic
-  // This is the stack pointer BEFORE allocating the new frame
-  // NOTE: CreateGetFrameAddress() returns FP (frame pointer), not SP (stack pointer)
-  Value *current_sp = builder()->CreateReadStackPointer();
-
-  // Calculate stack bottom (stack_base - stack_size)
-  // This is the lowest address of the thread's stack
-  Value *stack_base = builder()->CreateValueOfStructEntry(
-    thread(),
-    Thread::stack_base_offset(),
-    YuhuType::intptr_type(),
-    "stack_base");
-  Value *stack_size = builder()->CreateValueOfStructEntry(
-    thread(),
-    Thread::stack_size_offset(),
-    YuhuType::intptr_type(),
-    "stack_size");
-  Value *stack_bottom = builder()->CreateSub(stack_base, stack_size, "stack_bottom");
-  
-  // Calculate available stack space from current SP to stack bottom
-  Value *free_stack = builder()->CreateSub(current_sp, stack_bottom, "free_stack");
-
-  // Calculate frame size (current_sp - stack_pointer)
-  Value *frame_size = builder()->CreateSub(current_sp, sp, "frame_size");
-
-  // Calculate minimum required space: StackShadowPages + frame_size
-  // StackShadowPages provides space for throw_StackOverflowError and its call chain
-  // frame_size is the size of the frame we're about to allocate
-  Value *min_required = builder()->CreateAdd(
-    LLVMValue::intptr_constant(StackShadowPages * os::vm_page_size()),
-    frame_size,
-    "min_required");
-  
-  // Check if we have enough space: free_stack >= min_required
-  // If free_stack < min_required, we have a stack overflow
-  builder()->CreateCondBr(
-    builder()->CreateICmpULT(free_stack, min_required),
-    overflow, ok);
-
-  // Handle overflow
-  builder()->SetInsertPoint(overflow);
-  // throw_StackOverflowError signature: "T" -> "v" (Thread* -> void)
-#if LLVM_VERSION_MAJOR >= 20
-  llvm::FunctionType* func_type = YuhuBuilder::make_ftype("T", "v");
-  std::vector<Value*> args;
-  args.push_back(thread());
-  builder()->CreateCall(func_type, builder()->throw_StackOverflowError(), args);
-#else
-  builder()->CreateCall(builder()->throw_StackOverflowError(), thread());
-#endif
-  // CRITICAL: Jump to the unified exit block instead of creating multiple rets
-  // This ensures we only have ONE marker in the entire function
-  // If exit_block is NULL (during initialize), create ret directly
-  if (exit_block != NULL) {
-    builder()->CreateBr(exit_block);
-  } else {
-    // Called during initialize before unified_exit_block exists.
-    // Emit a ret matching the function's declared return type so the verifier
-    // accepts it for any return type (int / long / float / double / oop / void).
-    llvm::Function* fn = builder()->GetInsertBlock()->getParent();
-    llvm::Type* ret_ty = fn->getReturnType();
-    if (ret_ty->isVoidTy()) {
-      builder()->CreateRetVoid();
-    } else {
-      builder()->CreateRet(llvm::Constant::getNullValue(ret_ty));
-    }
-  }
-
-  builder()->SetInsertPoint(ok);
-}
-
 llvm::LoadInst* YuhuStack::CreateLoadFramePointer(const char *name) {
     // For AArch64, load frame pointer from frame header
     // LLVM 20+ requires explicit type parameter for CreateLoad
@@ -294,10 +213,6 @@ llvm::Value* YuhuStack::last_Java_pc_addr() const {
 }
 
 void YuhuStack::CreateSetLastJavaFrame() {
-    // Legacy implementation - uses ADR instruction to read PC
-    // TODO: This has a bug - ADR reads its own PC, not the return address after call
-    // Kept for backward compatibility, but should use CreateSetLastJavaFrameWithPlaceholder()
-
     // Note that whenever _last_Java_sp != NULL other anchor fields
     // must be valid.  The profiler apparently depends on this.
     builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
@@ -336,127 +251,10 @@ void YuhuStack::CreateSetLastJavaFrame() {
     builder()->CreateCall(store_asm_type2, store_pc_asm, store_pc_args);
 }
 
-// NEW: CreateSetLastJavaFrameWithPlaceholderPC - generates adr instruction with marker
-// The adr instruction will be patched by JITLink plugin to point to return address after blr
-// This generates: marker (mov/movk with virtual_offset) + adr + str pattern
-void YuhuStack::CreateSetLastJavaFrameWithPlaceholderPC(uint64_t virtual_address) {
-    // Extract virtual_offset from the virtual address (low 16 bits)
-    int virtual_offset = virtual_address & 0xFFFF;
-    
-    // Store FP and SP (same as CreateSetLastJavaFrame)
-    builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
-
-    llvm::Value* unextended_sp = builder()->CreateLoad(
-            YuhuType::intptr_type(),
-            slot_addr(unextended_sp_slot_offset()));
-    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
-
-    // Generate inline asm with marker + adr instruction
-    // The marker embeds virtual_offset for correlation during patching
-    // asm template:
-    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
-    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
-    //   adr x20, .+8                  - adr with dummy offset (will be patched)
-    //   str x20, [$0]                 - Store to last_Java_pc
-    
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    llvm::LLVMContext& ctx = mod->getContext();
-    
-    // Create function type for inline asm: void (ptr)
-    llvm::FunctionType* asm_type = llvm::FunctionType::get(
-        llvm::Type::getVoidTy(ctx),
-        {llvm::PointerType::getUnqual(llvm::Type::getInt64Ty(ctx))},
-        false);
-    
-    // Inline asm string with marker and adr (no label needed)
-    // Use virtual_offset in the marker for identification during patching
-    char asm_buf[256];
-    snprintf(asm_buf, sizeof(asm_buf),
-        "mov w19, #%d\n" // Virtual offset (embedded for correlation)
-        "movk w19, #0xDEAD, lsl #16\n"           // Marker magic
-        "adr x20, .+8\n"               // adr with dummy offset (+8 bytes, will be patched)
-        "str x20, [$0]\n",             // Store address to last_Java_pc
-        virtual_offset);
-    
-    std::string asm_string(asm_buf);
-    
-    // Constraints: "r" means input operand goes to a general register
-    // $0 will be replaced with the last_Java_pc address
-    llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
-        asm_type,
-        asm_string,
-        "r,~{x19},~{x20},~{memory}",  // Constraint string
-        true, // hasSideEffects
-        true  // isAlignStack
-    );
-    
-    // Get the address of last_Java_pc
-    llvm::Value* last_java_pc_addr = last_Java_pc_addr();
-    
-    // Create the inline asm call
-    builder()->CreateCall(asm_inst, {last_java_pc_addr});
-}
-
-void YuhuStack::CreateSetLastJavaFrameWithPlaceholderNoPC(uint64_t virtual_address) {
-    // Extract virtual_offset from the virtual address (low 16 bits)
-    int virtual_offset = virtual_address & 0xFFFF;
-
-    // Store FP and SP (same as CreateSetLastJavaFrame)
-    builder()->CreateStore(CreateLoadFramePointer(), last_Java_fp_addr());
-
-    llvm::Value* unextended_sp = builder()->CreateLoad(
-            YuhuType::intptr_type(),
-            slot_addr(unextended_sp_slot_offset()));
-    builder()->CreateStore(unextended_sp, last_Java_sp_addr());
-
-    // Generate inline asm with marker + adr instruction
-    // The marker embeds virtual_offset for correlation during patching
-    // asm template:
-    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
-    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
-
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    llvm::LLVMContext& ctx = mod->getContext();
-
-    // Create function type for inline asm: void (ptr)
-    llvm::FunctionType* asm_type = llvm::FunctionType::get(
-            llvm::Type::getVoidTy(ctx),
-            {},
-            false);
-
-    // Inline asm string with marker and adr (no label needed)
-    // Use virtual_offset in the marker for identification during patching
-    char asm_buf[256];
-    snprintf(asm_buf, sizeof(asm_buf),
-             "mov w19, #%d\n" // Virtual offset (embedded for correlation)
-             "movk w19, #0xDEAD, lsl #16\n",           // Marker magic
-             virtual_offset);
-
-    std::string asm_string(asm_buf);
-
-    // Constraints: "r" means input operand goes to a general register
-    // $0 will be replaced with the last_Java_pc address
-    llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
-            asm_type,
-            asm_string,
-            "~{x19},~{memory}",  // Constraint string
-            true, // hasSideEffects
-            true  // isAlignStack
-    );
-
-    // Create the inline asm call
-    builder()->CreateCall(asm_inst, {});
-}
-
 void YuhuStack::CreateResetLastJavaFrame() {
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_sp_addr());
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_fp_addr());
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_pc_addr());
-}
-
-void YuhuStack::CreateResetLastJavaFrameWithNoPC() {
-    builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_sp_addr());
-    builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_fp_addr());
 }
 
 /**

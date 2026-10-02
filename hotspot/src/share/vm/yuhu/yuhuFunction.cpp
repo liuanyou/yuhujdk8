@@ -47,9 +47,6 @@
 
 using namespace llvm;
 
-// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll(JavaThread* thread);
-
 // Generate function signature for normal entry based on Java method parameters
 // According to 021 design: LLVM function parameters directly correspond to Java method parameters
 // For static methods: first parameter is NULL (x0), then Java parameters

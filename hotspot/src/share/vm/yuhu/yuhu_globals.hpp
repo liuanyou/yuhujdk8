@@ -27,6 +27,7 @@
 #define SHARE_VM_YUHU_YUHU_GLOBALS_HPP
 
 #include "runtime/globals.hpp"
+#include "runtime/atomic.hpp"
 #ifdef TARGET_ARCH_zero
 # include "yuhu_globals_zero.hpp"
 #endif
@@ -120,9 +121,33 @@ const uint64_t DEOPT_STATEPOINT_ID = 4096;
 
 const uint64_t EXTENDED_SP_ALLOCA_STATEPOINT_ID = 1024;
 
-const uint64_t UNIFIED_EXIT_BLOCK_START_STATEPOINT_ID = 1026;
-
 const uint64_t X0_SP_ALLOCA_STATEPOINT_ID = 1028;
+
+// Global unique statepoint ID generator
+// Reserved range: 0-9999 for special statepoints (deopt, alloca, etc.)
+// Dynamic statepoints start from 10000
+const uint64_t DYNAMIC_STATEPOINT_ID_START = 10000;
+
+class YuhuStatepointIDGenerator : public AllStatic {
+ private:
+  static volatile jlong _next_id;
+  
+ public:
+  // Generate next globally unique statepoint ID
+  static uint64_t next() {
+    return Atomic::add(1, &_next_id);
+  }
+  
+  // Initialize the counter (called once at JVM startup)
+  static void initialize() {
+    _next_id = DYNAMIC_STATEPOINT_ID_START;
+  }
+  
+  // Get current counter value (for debugging)
+  static uint64_t current() {
+    return _next_id;
+  }
+};
 
 YUHU_FLAGS(DECLARE_DEVELOPER_FLAG, DECLARE_PD_DEVELOPER_FLAG, DECLARE_PRODUCT_FLAG, DECLARE_PD_PRODUCT_FLAG, DECLARE_DIAGNOSTIC_FLAG, DECLARE_NOTPRODUCT_FLAG)
 

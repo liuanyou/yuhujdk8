@@ -26,4 +26,7 @@
 #include "precompiled.hpp"
 #include "yuhu/yuhu_globals.hpp"
 
+// Static member definition for global unique statepoint ID generator
+volatile jlong YuhuStatepointIDGenerator::_next_id = DYNAMIC_STATEPOINT_ID_START;
+
 YUHU_FLAGS(MATERIALIZE_DEVELOPER_FLAG, MATERIALIZE_PD_DEVELOPER_FLAG, MATERIALIZE_PRODUCT_FLAG, MATERIALIZE_PD_PRODUCT_FLAG, MATERIALIZE_DIAGNOSTIC_FLAG, MATERIALIZE_NOTPRODUCT_FLAG)

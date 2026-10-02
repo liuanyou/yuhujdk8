@@ -50,9 +50,6 @@
 #include "runtime/deoptimization.hpp"
 #include "utilities/debug.hpp"
 
-// Forward declaration of gc_safepoint_poll from yuhuRuntime.cpp
-extern "C" void gc_safepoint_poll(JavaThread* thread);
-extern "C" void handle_deoptimization();
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #include "code/codeCache.hpp"
 #include "oops/method.hpp"
@@ -349,15 +346,18 @@ public:
         }
         MainJD.addGenerator(std::move(*DLSGOrErr));
 
+        // Initialize VM call RuntimeStubs
+        YuhuRuntime::initialize_vm_stubs();
+
         llvm::orc::SymbolMap SymMap;
         auto& ES = _jit->getExecutionSession();
         SymMap[ES.intern("_gc.safepoint_poll")] =
                 llvm::orc::ExecutorSymbolDef(
-                        llvm::orc::ExecutorAddr::fromPtr(&gc_safepoint_poll),
+                        llvm::orc::ExecutorAddr::fromPtr(YuhuRuntime::safepoint_poll_stub()),
                         llvm::JITSymbolFlags::Callable);
         SymMap[ES.intern("___llvm_deoptimize")] =
                 llvm::orc::ExecutorSymbolDef(
-                        llvm::orc::ExecutorAddr::fromPtr(&handle_deoptimization),
+                        llvm::orc::ExecutorAddr::fromPtr(YuhuRuntime::handle_deoptimization_stub()),
                         llvm::JITSymbolFlags::Callable);
         auto symErr = MainJD.define(llvm::orc::absoluteSymbols(std::move(SymMap)));
         if (symErr) {
@@ -810,9 +810,6 @@ public:
 
 YuhuCompiler::YuhuCompiler()
   : AbstractCompiler(), _p_impl(std::make_unique<Impl>()) {
-
-  // Initialize VM call RuntimeStubs
-  YuhuRuntime::initialize_vm_stubs();
 
   // All done
   set_state(initialized);
