@@ -45,11 +45,17 @@ class YuhuInlinePlanner : public StackObj {
     }
 
     ciMethod* method = parent_node->method();
+    // Skip if the method's holder class is not yet linked
+    // (bytecodes haven't been rewritten, CP cache indices are invalid)
+    if (!method->holder()->is_linked()) {
+        return;
+    }
     ciBytecodeStream iter(method);
 
     // Iterate through all bytecodes
-    for (int bci = iter.next(); bci != ciBytecodeStream::EOBC(); bci = iter.next()) {
-      Bytecodes::Code bc = iter.cur_bc();
+    while (iter.next() != ciBytecodeStream::EOBC()) {
+        int bci = iter.cur_bci();
+        Bytecodes::Code bc = iter.cur_bc();
 
       // Check if this is an invoke bytecode
       if (is_invoke(bc)) {
