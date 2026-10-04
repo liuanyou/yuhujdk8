@@ -1465,41 +1465,6 @@ address InterpreterGenerator::generate_normal_entry(bool synchronized) {
   // jvmti support
   __ notify_method_entry();
 
-    address begin = __ pc();
-
-    const Register t = r17;
-    Label not_I_STRING_GETBYTES_P_STRING_R_BYTES;
-    Label not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES;
-    Label not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES;
-    Label not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT;
-
-    __ ldr(t, Address(rmethod, Method::const_offset()));
-    __ ldrb(t, Address(r17, ConstMethod::debug_id_offset()));
-
-    __ cmpw(t, I_STRING_GETBYTES_P_STRING_R_BYTES);
-    __ br(Assembler::NE, not_I_STRING_GETBYTES_P_STRING_R_BYTES);
-    __ ldr(t, Address(rmethod, Method::const_offset()));
-
-    __ bind(not_I_STRING_GETBYTES_P_STRING_R_BYTES);
-    __ cmpw(t, I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
-    __ br(Assembler::NE, not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
-    __ ldr(t, Address(rmethod, Method::const_offset()));
-
-    __ bind(not_I_STRINGCODING_ENCODE_P_STRING_CHARS_INT_INT_R_BYTES);
-    __ cmpw(t, I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
-    __ br(Assembler::NE, not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
-    __ ldr(t, Address(rmethod, Method::const_offset()));
-
-    __ bind(not_I_STRINGCODING$STRINGENCODER_ENCODE_P_CHARS_INT_INT_R_BYTES);
-    __ cmpw(t, I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
-    __ br(Assembler::NE, not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
-    __ ldr(t, Address(rmethod, Method::const_offset()));
-
-    __ bind(not_I_UTF_8$ENCODER_P_CHARS_INT_INT_BYTES_R_INT);
-
-    address end = __ pc();
-//    Disassembler::decode(begin, end);
-
   __ dispatch_next(vtos);
 
   // invocation counter overflow
