@@ -71,7 +71,7 @@ echo ""
      -XX:YuhuNewCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/yuhu_new_code.txt \
      -XX:C1C2OsrCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/c1c2_osr_code.txt \
      -XX:YuhuOsrCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/yuhu_osr_code.txt \
-     com.example.InvokeHandleTest 2>&1 | grep -E "(Register method|successfully)"
+     com.example.InvokeHandleTest
 
 echo ""
 echo "=== 提示 ==="
