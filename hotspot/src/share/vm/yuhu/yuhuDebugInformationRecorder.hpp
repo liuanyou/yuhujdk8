@@ -38,7 +38,6 @@ public:
     CallSiteType call_site_type; // generated at IR phase
     int bci; // generated at IR phase
     int num_monitors; // generated at IR phase
-    bool is_method_handle_invoke;
 };
 
 class StackMapLocation : public ResourceObj {
@@ -57,15 +56,11 @@ public:
     GrowableArray<StackMapLocation*>* locations;
 };
 
-// statepoint_id & instruction_offset makes unique
 class DeoptBundle : public ResourceObj {
 public:
     uint64_t statepoint_id;
-    uint32_t instruction_offset;
-    uint64_t bci;
     GrowableArray<uint8_t>* locals; // list of locals with basic type only...from 0 to max_locals-1
     GrowableArray<uint8_t>* expression_stacks; // list of expression stacks with basic type only...from 0 to stack_depth-1
-    uint32_t num_monitors = 0; // num of monitors, 0 by default
 };
 
 class PatchPointEntry : public ResourceObj {
@@ -123,13 +118,11 @@ public:
     CallSiteInstructionHolder() : call_site_entry(nullptr), stack_map_entry(nullptr), deopt_bundle(nullptr) {}
 
     // explicitly set to nullptr, otherwise, it points to undefined area
-    CallSiteInstructionHolder(CallSiteEntry* call_site, StackMapEntry* stack_map) : call_site_entry(call_site), stack_map_entry(stack_map), deopt_bundle(nullptr) {}
-
-    CallSiteInstructionHolder(CallSiteEntry* call_site, DeoptBundle* deopt_bundle) : call_site_entry(call_site), stack_map_entry(nullptr), deopt_bundle(deopt_bundle) {}
+    CallSiteInstructionHolder(CallSiteEntry* call_site, DeoptBundle* dpt_bundle, StackMapEntry* stack_map) : call_site_entry(call_site), deopt_bundle(dpt_bundle), stack_map_entry(stack_map) {}
 
     uint64_t instruction_offset() const {
-        assert(stack_map_entry != NULL || deopt_bundle != NULL, "either stack map or deopt bundle should exist");
-        return stack_map_entry != NULL ? stack_map_entry->instruction_offset : deopt_bundle->instruction_offset;
+        assert(stack_map_entry != NULL, "stack map should exist");
+        return stack_map_entry->instruction_offset;
     }
 };
 
@@ -212,8 +205,7 @@ public:
                           uint64_t call_target,
                           CallSiteType call_site_type,
                           int bci,
-                          int num_monitors,
-                          bool is_method_handle_invoke = false);
+                          int num_monitors);
 
   void clean_eliminated_call_sites() {
       // remove call sites which don't appear in llvm machine code
@@ -357,15 +349,6 @@ public:
 //        return _call_site_entries->at(index)->machine_code_offsets->at(cto_index)->blr_offset;
 //    }
 
-    DeoptBundle* get_deopt_bundle_by_instruction_offset(uint64_t instruction_offset) const {
-      if (!_deopt_bundles) return NULL;
-        int index = _deopt_bundles->find(&instruction_offset, [](void* token, DeoptBundle* entry) -> bool {
-            return *((uint64_t*)token) == entry->instruction_offset;
-        });
-        if (index == -1) return NULL;
-        return _deopt_bundles->at(index);
-    }
-
   SymbolEntry* get_const_symbol_by_addr(uint64_t addr) const {
       if (!addr) return NULL;
       int index = _const_symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
@@ -436,13 +419,9 @@ public:
 
   void register_stack_map_location_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0);
 
-  void register_deopt_bundle(uint64_t statepoint_id, uint32_t instruction_offset, uint64_t bci);
+  void register_deopt_bundle_local_data(uint64_t statepoint_id, uint8_t basic_type);
 
-  void register_deopt_bundle_local_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t basic_type);
-
-  void register_deopt_bundle_expression_stack_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t basic_type);
-
-  void register_deopt_bundle_monitor_data(uint64_t statepoint_id, uint32_t instruction_offset, uint32_t num_monitors);
+  void register_deopt_bundle_expression_stack_data(uint64_t statepoint_id, uint8_t basic_type);
 
   void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id);
 
@@ -541,7 +520,6 @@ public:
   }
 
   void generate_safepoint_and_describe_scope(DebugInformationRecorder* real_recorder,
-                                             ciMethod* method,
                                              int plus_offset,
                                              int frame_size);
 };

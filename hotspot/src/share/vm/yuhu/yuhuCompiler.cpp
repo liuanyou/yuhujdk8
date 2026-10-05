@@ -1473,7 +1473,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
 
     // Register oop map
-    recorder->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
+    recorder->generate_safepoint_and_describe_scope(env->debug_info(), adapter_size, frame_size);
     // Generate exception handler table
 //    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
     
@@ -1582,7 +1582,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       offsets.set_value(CodeOffsets::Deopt,       exc_handler_size);
 
       // Register oop map
-      recorder->generate_safepoint_and_describe_scope(env->debug_info(), target, adapter_size, frame_size);
+      recorder->generate_safepoint_and_describe_scope(env->debug_info(), adapter_size, frame_size);
 
       env->register_method(target,
                            entry_bci,
@@ -1898,12 +1898,6 @@ int YuhuCompiler::measure_deopt_handler_size() {
   YuhuMacroAssembler masm(&temp_cb);
   address start = masm.current_pc();
 
-  // nop to ensure the return address points into the code area (same reason as C1)
-  masm.write_inst("nop");
-
-  // mark as not implemented, TODO
-  masm.write_insts_stop("deopt handler is not implemented");
-
   // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
   masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());
 
@@ -1927,12 +1921,6 @@ int YuhuCompiler::generate_deopt_handler(CodeBuffer& cb, int handler_size) {
 
   // Record offset BEFORE the nop -- this is where the handler starts
   address start = masm.current_pc();
-
-  // nop to ensure the return address points into the code area (same reason as C1)
-  masm.write_inst("nop");
-
-  // mark as not implemented, TODO
-  masm.write_insts_stop("deopt handler is not implemented");
 
   // adr lr, . -- set lr to the current PC (this is the "return address" for deopt)
   masm.write_inst_adr(YuhuMacroAssembler::lr, masm.current_pc());

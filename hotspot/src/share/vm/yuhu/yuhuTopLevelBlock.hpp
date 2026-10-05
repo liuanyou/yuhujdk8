@@ -320,6 +320,8 @@ class YuhuTopLevelBlock : public YuhuBlock {
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
     decache_for_VM_call();
+
+      register_deopt_bundle(statepoint_id);
     
     // Step 7: Create the call
 #if LLVM_VERSION_MAJOR >= 20
@@ -444,7 +446,8 @@ class YuhuTopLevelBlock : public YuhuBlock {
   // Traps
  private:
   llvm::BasicBlock* make_trap(int trap_bci, int trap_request);
-  void do_trap(int trap_request, bool is_method_handle_invoke = false);
+  void do_trap(int trap_request);
+  void register_deopt_bundle(uint64_t statepoint_id);
 
   // Returns
  private:
@@ -493,12 +496,6 @@ class YuhuTopLevelBlock : public YuhuBlock {
                                  ciInstanceKlass* klass,
                                  ciMethod*        dest_method,
                                  ciType*          receiver_type);
-  llvm::Value* get_direct_callee(ciMethod* method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
-  llvm::Value* get_virtual_callee(YuhuValue* receiver, ciMethod* call_method, int vtable_index, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
-  llvm::Value* get_interface_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types);
-  llvm::Value* get_indeterminate_interface_callee(YuhuValue* receiver, ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* reg_basic_types, GrowableArray<BasicType>* stk_basic_types);
-  llvm::Value* get_dynamic_callee(ciMethod* call_method, address* out_stub_addr, GrowableArray<BasicType>* reg_basic_types, GrowableArray<BasicType>* stk_basic_types);
-
   void do_call();
 
   // checkcast and instanceof

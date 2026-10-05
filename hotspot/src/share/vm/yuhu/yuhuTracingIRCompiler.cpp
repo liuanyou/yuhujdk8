@@ -227,238 +227,101 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                 assert(found_offset, "extended sp alloca should have offset");
             } else {
                 CallSiteType call_site_type = recorder->get_call_site_type_by_statepoint_id(StatepointID);
-                if (call_site_type == CallSiteType::deopt_call) {
-                    // process stack map for deopt bundle
-                    // last 4 locations is bci, num of locals, num of expression stacks, num of monitors
-                    GrowableArray<StackMapLocation> locations;
+                if (YuhuTraceMachineCode) {
+                    if (YuhuStackMapFile != NULL) {
+                        YUHU_STACK_MAP_LOG("[StackMap] ID: %llu , call site type: %d", StatepointID, call_site_type);
+                    } else {
+                        errs() << "[StackMap] ID: " << StatepointID << " , call site type: " << static_cast<uint8_t>(call_site_type) << "\n";
+                    }
+                }
 
-                    for (auto LocationRecord: StatepointRecord.locations()) {
-                        StackMapLocation location{};
-                        auto Kind = LocationRecord.getKind();
-                        location.kind = static_cast<uint8_t>(LocationRecord.getKind());
-                        switch (Kind) {
-                            case StackMapParser::LocationKind::Direct:
-                                location.reg_num = LocationRecord.getDwarfRegNum();
-                                location.offset = LocationRecord.getOffset();
-                                if (YuhuTraceMachineCode) {
-                                    if (YuhuStackMapFile != NULL) {
-                                        YUHU_STACK_MAP_LOG(
-                                                "[StackMap]     Deopt Bundle operand at stack offset: %d , Direct: %d",
-                                                location.offset, location.reg_num);
-                                    } else {
-                                        errs() << "[StackMap]     Deopt Bundle operand at stack offset: "
-                                               << location.offset << " , Direct: "
-                                               << location.reg_num << "\n";
-                                    }
-                                }
-                                break;
-                            case StackMapParser::LocationKind::Register:
-                                location.reg_num = LocationRecord.getDwarfRegNum();
-                                if (YuhuTraceMachineCode) {
-                                    if (YuhuStackMapFile != NULL) {
-                                        YUHU_STACK_MAP_LOG("[StackMap]     Deopt Bundle operand in register: %d",
-                                                           (int) location.reg_num);
-                                    } else {
-                                        errs() << "[StackMap]     Deopt Bundle operand in register: "
-                                               << (int) location.reg_num << "\n";
-                                    }
-                                }
-                                break;
-                            case StackMapParser::LocationKind::Indirect:
-                                location.reg_num = LocationRecord.getDwarfRegNum();
-                                location.offset = LocationRecord.getOffset();
-                                if (YuhuTraceMachineCode) {
-                                    if (YuhuStackMapFile != NULL) {
-                                        YUHU_STACK_MAP_LOG(
-                                                "[StackMap]     Deopt Bundle operand at stack offset: %d , Indirect: %d",
-                                                location.offset, location.reg_num);
-                                    } else {
-                                        errs() << "[StackMap]     Deopt Bundle operand at stack offset: "
-                                               << location.offset << " , Indirect: "
-                                               << location.reg_num << "\n";
-                                    }
-                                }
-                                break;
-                            case StackMapParser::LocationKind::Constant:
-                                location.constant = LocationRecord.getSmallConstant();
-                                if (YuhuTraceMachineCode) {
-                                    if (YuhuStackMapFile != NULL) {
-                                        YUHU_STACK_MAP_LOG("[StackMap]     Deopt Bundle operand at Constant: %llu",
-                                                           location.constant);
-                                    } else {
-                                        errs() << "[StackMap]     Deopt Bundle operand at Constant: "
-                                               << location.constant << "\n";
-                                    }
-                                }
-                                break;
-                            case StackMapParser::LocationKind::ConstantIndex:
-                                uint32_t constantIndex = LocationRecord.getConstantIndex();
-                                location.constant = Parser.getConstant(constantIndex).getValue();
-                                if (YuhuTraceMachineCode) {
-                                    if (YuhuStackMapFile != NULL) {
-                                        YUHU_STACK_MAP_LOG(
-                                                "[StackMap]     Deopt Bundle operand at ConstantIndex: %d , value: %llu",
-                                                constantIndex, location.constant);
-                                    } else {
-                                        errs() << "[StackMap]     Deopt Bundle operand at ConstantIndex: "
-                                               << constantIndex << " , value: " << location.constant << "\n";
-                                    }
-                                }
-                                break;
+                // either call site or patch point comes to here
+                recorder->register_stack_map(StatepointID, InstructionOffset);
+                for (auto LocationRecord: StatepointRecord.locations()) {
+                    auto Kind = LocationRecord.getKind();
+                    if (Kind == StackMapParser::LocationKind::Direct) {
+                        uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                        int32_t Offset = LocationRecord.getOffset();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                YUHU_STACK_MAP_LOG("[StackMap]     GC Root at stack offset: %d , Direct: %d",
+                                                   Offset, DwarfRegNum);
+                            } else {
+                                errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Direct: "
+                                       << DwarfRegNum << "\n";
+                            }
                         }
-                        locations.append(location);
-                    }
-
-                    assert(locations.length() >= 4,
-                           "locations should contain bci, num of locals, num of expression stacks, num of monitors");
-                    // get bci
-                    StackMapLocation bci_loc = locations.at(locations.length() - 4);
-                    assert(bci_loc.kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                           "bci should be constant");
-                    uint32_t bci = bci_loc.constant;
-                    // get num of locals
-                    StackMapLocation num_of_locals_loc = locations.at(locations.length() - 3);
-                    assert(num_of_locals_loc.kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                           "num of locals should be constant");
-                    uint32_t num_of_locals = num_of_locals_loc.constant;
-                    // get num of expression stacks
-                    StackMapLocation num_of_expression_stacks_loc = locations.at(locations.length() - 2);
-                    assert(num_of_expression_stacks_loc.kind ==
-                           static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                           "num of expression stacks should be constant");
-                    uint32_t num_of_expression_stacks = num_of_expression_stacks_loc.constant;
-                    // get num of monitors
-                    StackMapLocation num_of_monitors_loc = locations.at(locations.length() - 1);
-                    assert(num_of_monitors_loc.kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                           "num of monitors should be constant");
-                    uint32_t num_of_monitors = num_of_monitors_loc.constant;
-
-                    assert(locations.length() >= (int) (4 + num_of_locals + num_of_expression_stacks),
-                           "locations should have basic type of locals and expression stacks");
-
-                    recorder->register_deopt_bundle(StatepointID, InstructionOffset, bci);
-
-                    // Each section only has its type metadata
-                    // Layout: [type0, type1, ...]
-                    // Total entries per section = count * 1
-                    int locals_total = num_of_locals;
-                    int stacks_total = num_of_expression_stacks;
-
-                    int metadata_end = locations.length() - 4;
-                    int stacks_start = metadata_end - stacks_total;
-                    int locals_start = stacks_start - locals_total;
-
-                    // register locals (every other entry starting from locals_start)
-                    for (int i = locals_start; i < stacks_start; i++) {
-                        // i is type
-                        StackMapLocation *type_loc = &locations.at(i);
-                        assert(type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                               "basic_type must be constant");
-
-                        uint8_t basic_type = (uint8_t) type_loc->constant;
-
-                        recorder->register_deopt_bundle_local_data(StatepointID, InstructionOffset, basic_type);
-                    }
-                    // register expression stacks (every other entry starting from stacks_start)
-                    for (int i = stacks_start; i < metadata_end; i++) {
-                        StackMapLocation *type_loc = &locations.at(i);
-                        assert(type_loc->kind == static_cast<uint8_t>(StackMapParser::LocationKind::Constant),
-                               "basic_type must be constant");
-
-                        uint8_t basic_type = (uint8_t) type_loc->constant;
-
-                        recorder->register_deopt_bundle_expression_stack_data(StatepointID, InstructionOffset, basic_type);
-                    }
-                    recorder->register_deopt_bundle_monitor_data(StatepointID, InstructionOffset, num_of_monitors);
-                } else {
-                    // either non-deopt call site or patch point comes to here
-                    recorder->register_stack_map(StatepointID, InstructionOffset);
-                    for (auto LocationRecord: StatepointRecord.locations()) {
-                        auto Kind = LocationRecord.getKind();
-                        if (Kind == StackMapParser::LocationKind::Direct) {
-                            uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
-                            int32_t Offset = LocationRecord.getOffset();
-                            if (YuhuTraceMachineCode) {
-                                if (YuhuStackMapFile != NULL) {
-                                    YUHU_STACK_MAP_LOG("[StackMap]     GC Root at stack offset: %d , Direct: %d",
-                                                       Offset, DwarfRegNum);
-                                } else {
-                                    errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Direct: "
-                                           << DwarfRegNum << "\n";
-                                }
+                        recorder->register_stack_map_location_data(StatepointID,
+                                                                   InstructionOffset,
+                                                                   static_cast<uint8_t>(Kind),
+                                                                   DwarfRegNum,
+                                                                   Offset);
+                    } else if (Kind == StackMapParser::LocationKind::Register) {
+                        uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                YUHU_STACK_MAP_LOG("[StackMap]     GC Root in register: %d", (int) DwarfRegNum);
+                            } else {
+                                errs() << "[StackMap]     GC Root in register: " << (int) DwarfRegNum << "\n";
                             }
-                            recorder->register_stack_map_location_data(StatepointID,
-                                                                       InstructionOffset,
-                                                                       static_cast<uint8_t>(Kind),
-                                                                       DwarfRegNum,
-                                                                       Offset);
-                        } else if (Kind == StackMapParser::LocationKind::Register) {
-                            uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
-                            if (YuhuTraceMachineCode) {
-                                if (YuhuStackMapFile != NULL) {
-                                    YUHU_STACK_MAP_LOG("[StackMap]     GC Root in register: %d", (int) DwarfRegNum);
-                                } else {
-                                    errs() << "[StackMap]     GC Root in register: " << (int) DwarfRegNum << "\n";
-                                }
-                            }
-                            recorder->register_stack_map_location_data(StatepointID,
-                                                                       InstructionOffset,
-                                                                       static_cast<uint8_t>(Kind),
-                                                                       DwarfRegNum,
-                                                                       0);
-                        } else if (Kind == StackMapParser::LocationKind::Indirect) {
-                            uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
-                            int32_t Offset = LocationRecord.getOffset();
-                            if (YuhuTraceMachineCode) {
-                                if (YuhuStackMapFile != NULL) {
-                                    YUHU_STACK_MAP_LOG("[StackMap]     GC Root at stack offset: %d , Indirect: %d",
-                                                       Offset, DwarfRegNum);
-                                } else {
-                                    errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Indirect: "
-                                           << DwarfRegNum << "\n";
-                                }
-                            }
-                            recorder->register_stack_map_location_data(StatepointID,
-                                                                       InstructionOffset,
-                                                                       static_cast<uint8_t>(Kind),
-                                                                       DwarfRegNum,
-                                                                       Offset);
-                        } else if (Kind == StackMapParser::LocationKind::Constant) {
-                            uint32_t constant = LocationRecord.getSmallConstant();
-                            if (YuhuTraceMachineCode) {
-                                if (YuhuStackMapFile != NULL) {
-                                    YUHU_STACK_MAP_LOG("[StackMap] Ignore Constant: %d", constant);
-                                } else {
-                                    errs() << "[StackMap] Ignore Constant: " << constant << "\n";
-                                }
-                            }
-                            // record every location, otherwise call site may not find corresponding stack map
-                            recorder->register_stack_map_location_data(StatepointID,
-                                                                       InstructionOffset,
-                                                                       static_cast<uint8_t>(Kind),
-                                                                       0,
-                                                                       0,
-                                                                       constant);
-                        } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
-                            uint32_t constantIndex = LocationRecord.getConstantIndex();
-                            uint64_t constant = Parser.getConstant(constantIndex).getValue();
-                            if (YuhuTraceMachineCode) {
-                                if (YuhuStackMapFile != NULL) {
-                                    YUHU_STACK_MAP_LOG("[StackMap] Ignore ConstantIndex: %d , value: %llu",
-                                                       constantIndex, constant);
-                                } else {
-                                    errs() << "[StackMap] Ignore ConstantIndex: " << constantIndex << " , value: "
-                                           << constant << "\n";
-                                }
-                            }
-                            // record every location, otherwise call site may not find corresponding stack map
-                            recorder->register_stack_map_location_data(StatepointID,
-                                                                       InstructionOffset,
-                                                                       static_cast<uint8_t>(Kind),
-                                                                       0,
-                                                                       0,
-                                                                       constant);
                         }
+                        recorder->register_stack_map_location_data(StatepointID,
+                                                                   InstructionOffset,
+                                                                   static_cast<uint8_t>(Kind),
+                                                                   DwarfRegNum,
+                                                                   0);
+                    } else if (Kind == StackMapParser::LocationKind::Indirect) {
+                        uint32_t DwarfRegNum = LocationRecord.getDwarfRegNum();
+                        int32_t Offset = LocationRecord.getOffset();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                YUHU_STACK_MAP_LOG("[StackMap]     GC Root at stack offset: %d , Indirect: %d",
+                                                   Offset, DwarfRegNum);
+                            } else {
+                                errs() << "[StackMap]     GC Root at stack offset: " << Offset << " , Indirect: "
+                                       << DwarfRegNum << "\n";
+                            }
+                        }
+                        recorder->register_stack_map_location_data(StatepointID,
+                                                                   InstructionOffset,
+                                                                   static_cast<uint8_t>(Kind),
+                                                                   DwarfRegNum,
+                                                                   Offset);
+                    } else if (Kind == StackMapParser::LocationKind::Constant) {
+                        uint32_t constant = LocationRecord.getSmallConstant();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                YUHU_STACK_MAP_LOG("[StackMap]     Constant: %d", constant);
+                            } else {
+                                errs() << "[StackMap]     Constant: " << constant << "\n";
+                            }
+                        }
+                        // record every location, otherwise call site may not find corresponding stack map
+                        recorder->register_stack_map_location_data(StatepointID,
+                                                                   InstructionOffset,
+                                                                   static_cast<uint8_t>(Kind),
+                                                                   0,
+                                                                   0,
+                                                                   constant);
+                    } else if (Kind == StackMapParser::LocationKind::ConstantIndex) {
+                        uint32_t constantIndex = LocationRecord.getConstantIndex();
+                        uint64_t constant = Parser.getConstant(constantIndex).getValue();
+                        if (YuhuTraceMachineCode) {
+                            if (YuhuStackMapFile != NULL) {
+                                YUHU_STACK_MAP_LOG("[StackMap]     ConstantIndex: %d , value: %llu",
+                                                   constantIndex, constant);
+                            } else {
+                                errs() << "[StackMap]     ConstantIndex: " << constantIndex << " , value: "
+                                       << constant << "\n";
+                            }
+                        }
+                        // record every location, otherwise call site may not find corresponding stack map
+                        recorder->register_stack_map_location_data(StatepointID,
+                                                                   InstructionOffset,
+                                                                   static_cast<uint8_t>(Kind),
+                                                                   0,
+                                                                   0,
+                                                                   constant);
                     }
                 }
             }

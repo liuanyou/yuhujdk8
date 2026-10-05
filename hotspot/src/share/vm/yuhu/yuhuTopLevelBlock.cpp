@@ -684,6 +684,8 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), { YuhuType::thread_type() }, false);
     llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
 
+    register_deopt_bundle(statepoint_id);
+
     llvm::CallInst* call = builder()->CreateCall(poll_ftype, callee, { thread() });
 
     llvm::LLVMContext &Ctx = builder()->getContext();
@@ -746,25 +748,7 @@ BasicBlock* YuhuTopLevelBlock::make_trap(int trap_bci, int trap_request) {
   int orig_bci = bci();
   iter()->force_bci(trap_bci);
 
-  bool is_method_invoke_handle = false;
-
-  switch (iter()->cur_bc()) {
-      case Bytecodes::_invokestatic:
-      case Bytecodes::_invokespecial:
-      case Bytecodes::_invokevirtual:
-      case Bytecodes::_invokeinterface:
-      case Bytecodes::_invokedynamic: {
-          bool will_link;
-          ciSignature *sig;
-          ciMethod *dest_method = iter()->get_method(will_link, &sig);
-          is_method_invoke_handle = dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form();
-      }
-          break;
-      default:
-          break;
-  }
-
-  do_trap(trap_request, is_method_invoke_handle);
+  do_trap(trap_request);
 
   builder()->SetInsertPoint(orig_block);
   iter()->force_bci(orig_bci);
@@ -772,13 +756,12 @@ BasicBlock* YuhuTopLevelBlock::make_trap(int trap_bci, int trap_request) {
   return trap_block;
 }
 
-void YuhuTopLevelBlock::do_trap(int trap_request, bool is_method_handle_invoke) {
-  decache_for_trap();
-  
+// deopt bundle are constants, don't go to operand bundle, just register at debug recorder
+void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
   // Build deopt operand bundle with all live JVM state
   YuhuState* state = current_state();
-  std::vector<llvm::Value*> deopt_operands;
-  
+  YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+
   // 1. Local variables (in order 0..max_locals-1)
   for (int i = 0; i < max_locals(); i++) {
       // Basic type collected at YuhuNormalEntryState is not reliable.
@@ -788,13 +771,14 @@ void YuhuTopLevelBlock::do_trap(int trap_request, bool is_method_handle_invoke) 
       YuhuValue* local_val = state->local(i);
       if (local_val != NULL) {
           BasicType basic_type = local_val->basic_type();
-          deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+
+          recorder->register_deopt_bundle_local_data(statepoint_id, basic_type);
           if (basic_type == T_LONG || basic_type == T_DOUBLE) {
               assert(i + 1 < max_locals(), "padding slot should be next to T_LONG/T_DOUBLE");
               YuhuValue* next = state->local(i + 1);
               assert(next == NULL, "next must be padding value");
               BasicType padding_type = (basic_type == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
-              deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
+              recorder->register_deopt_bundle_local_data(statepoint_id, padding_type);
               i++;
           }
           continue;
@@ -802,7 +786,7 @@ void YuhuTopLevelBlock::do_trap(int trap_request, bool is_method_handle_invoke) 
     ciType* type = state->local_type_at(i);
     BasicType slot_type = type->basic_type();
     assert(slot_type == ciTypeFlow::StateVector::T_BOTTOM, "basic type should be T_CONFLICT");
-    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), slot_type));
+    recorder->register_deopt_bundle_local_data(statepoint_id, slot_type);
   }
   
   // 2. Expression stack (in order top..bottom)
@@ -816,56 +800,35 @@ void YuhuTopLevelBlock::do_trap(int trap_request, bool is_method_handle_invoke) 
       YuhuValue* next = state->stack(i + 1);
       assert(next && next->is_two_word(), "next must be wide value");
       BasicType padding_type = (next->basic_type() == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
-      deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), padding_type));
+      recorder->register_deopt_bundle_expression_stack_data(statepoint_id, padding_type);
       continue;
     }
     
     // Push type metadata first
     BasicType basic_type = stack_val->basic_type();
-    deopt_operands.push_back(llvm::ConstantInt::get(builder()->getInt64Ty(), basic_type));
+    recorder->register_deopt_bundle_expression_stack_data(statepoint_id, basic_type);
   }
+}
 
-  // 4. bci
-    int current_bci = bci();
-    llvm::Value* bci_val = llvm::ConstantInt::get(builder()->getInt64Ty(), current_bci);
-    deopt_operands.push_back(bci_val);
+void YuhuTopLevelBlock::do_trap(int trap_request) {
+  decache_for_trap();
 
-    // 5. num of locals
-    int locals_num = max_locals();
-    llvm::Value* locals_num_val = llvm::ConstantInt::get(builder()->getInt64Ty(), locals_num);
-    deopt_operands.push_back(locals_num_val);
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    // Build deopt operand bundle with all live JVM state
+    register_deopt_bundle(statepoint_id);
 
-    // 6. num of expression stacks
-    int stacks_num = state->stack_depth();
-    llvm::Value* stacks_num_val = llvm::ConstantInt::get(builder()->getInt64Ty(), stacks_num);
-    deopt_operands.push_back(stacks_num_val);
-
-    // 7. num of monitors
-    int monitor_count = num_monitors();
-    llvm::Value* monitor_count_val = llvm::ConstantInt::get(builder()->getInt64Ty(), monitor_count);
-    deopt_operands.push_back(monitor_count_val);
-    
-    // Note: only need its type metadata
-    // Total operands = locals + stacks + 4 metadata
-  
-  // Create deopt operand bundle
-  llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);
-
-    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
-
-    // NEW: Register call site for later patching
-    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            target(),
-                                                            (uint64_t)YuhuRuntime::handle_deoptimization_stub(),
-                                                            CallSiteType::deopt_call,
-                                                            bci(),
-                                                            current_state()->num_monitors(),
-                                                            is_method_handle_invoke);
+  // NEW: Register call site for later patching
+  YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                          target(),
+                                                          (uint64_t)YuhuRuntime::handle_deoptimization_stub(),
+                                                          CallSiteType::deopt_call,
+                                                          bci(),
+                                                          current_state()->num_monitors());
 
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
   // The deopt bundle preserves all live JVM state for frame reconstruction
-  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize(statepoint_id, {deopt_bundle});
+  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize(statepoint_id);
 
   if (target()->return_type()->is_void()) {
       builder()->CreateRetVoid();
@@ -1317,103 +1280,6 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   return NULL;
 }
 
-Value *YuhuTopLevelBlock::get_direct_callee(ciMethod* method, address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
-  // Generate call to static call stub that returns the _from_compiled_entry directly
-  // This stub loads the Method* and jumps to _from_compiled_entry, avoiding
-  // the problematic field access in the generated LLVM IR
-  // Pass both the target method and the current method being compiled
-  address stub_addr = YuhuRuntime::generate_static_call_stub(method, target(), stk_basic_types);
-  if (out_stub_addr != NULL) {
-      *out_stub_addr = stub_addr;
-  }
-  
-  // Return the stub address as an integer constant
-  // This will be used to access the compiled entry point
-  return builder()->CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),
-    "direct_callee_stub");
-}
-
-Value *YuhuTopLevelBlock::get_virtual_callee(YuhuValue* receiver,
-                                              ciMethod* call_method,
-                                              int vtable_index,
-                                              address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
-  // Generate a virtual call stub that performs vtable lookup at runtime.
-  // The stub address becomes the compile-time constant call target.
-  // call_method is the statically declared target from the bytecode.
-  address stub_addr = YuhuRuntime::generate_virtual_call_stub(
-    call_method, target(), vtable_index, stk_basic_types);
-  if (out_stub_addr != NULL) {
-      *out_stub_addr = stub_addr;
-  }
-  
-  // Return the stub address as an integer constant
-  return builder()->CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),
-    "virtual_callee_stub");
-}
-
-Value* YuhuTopLevelBlock::get_interface_callee(YuhuValue *receiver,
-                                                ciMethod*   call_method,
-                                                address* out_stub_addr, GrowableArray<BasicType>* stk_basic_types) {
-  // Generate an interface call stub that performs itable lookup at runtime.
-  // The stub address becomes the compile-time constant call target.
-  address stub_addr = YuhuRuntime::generate_interface_call_stub(
-    call_method, target(), stk_basic_types);
-  if (out_stub_addr != NULL) {
-      *out_stub_addr = stub_addr;
-  }
-  
-  // Return the stub address as an integer constant
-  return builder()->CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),
-    "interface_callee_stub");
-}
-
-Value* YuhuTopLevelBlock::get_indeterminate_interface_callee(YuhuValue *receiver,
-                                                         ciMethod*   call_method,
-                                                         address* out_stub_addr,
-                                                         GrowableArray<BasicType>* reg_basic_types,
-                                                         GrowableArray<BasicType>* stk_basic_types) {
-  // Generate a dynamic resolution stub for interface methods with itable_index() < 0.
-  // These are typically Object methods (equals, hashCode, toString) re-declared in interfaces.
-  // The stub calls LinkResolver at runtime to resolve the target method dynamically.
-  address stub_addr = YuhuRuntime::generate_indeterminate_interface_call_stub(
-    call_method, target(), reg_basic_types, stk_basic_types);
-  if (out_stub_addr != NULL) {
-      *out_stub_addr = stub_addr;
-  }
-  
-  // Return the stub address as an integer constant
-  return builder()->CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),
-    "indeterminate_interface_callee_stub");
-}
-
-Value* YuhuTopLevelBlock::get_dynamic_callee(ciMethod*   call_method,
-                                              address* out_stub_addr,
-                                              GrowableArray<BasicType>* reg_basic_types,
-                                              GrowableArray<BasicType>* stk_basic_types) {
-  // Generate a dynamic call stub for invokedynamic bytecodes.
-  // The stub calls YuhuRuntime::resolve_dynamic_call at runtime to resolve
-  // the CallSite via the bootstrap method, then jumps to the resolved target.
-  address stub_addr = YuhuRuntime::generate_dynamic_call_stub(
-    call_method, target(), reg_basic_types, stk_basic_types);
-  if (out_stub_addr != NULL) {
-      *out_stub_addr = stub_addr;
-  }
-
-  // Return the stub address as an integer constant
-  return builder()->CreateIntToPtr(
-    LLVMValue::intptr_constant((intptr_t)stub_addr),
-    YuhuType::intptr_type(),
-    "dynamic_callee_stub");
-}
-
 void YuhuTopLevelBlock::do_call() {
   // Check raw bytecode for invokehandle (java_code() converts it to invokevirtual)
   Bytecodes::Code raw_bc = iter()->cur_bc_raw();
@@ -1734,43 +1600,39 @@ void YuhuTopLevelBlock::do_call() {
     }
 
   // Find the method we are calling
-  Value *callee;
-  address compiled_entry_address = 0;
+  address compiled_entry_address = nullptr;
   if (call_is_virtual) {
     if (is_virtual || is_forced_virtual) {
-      assert(klass->is_linked(), "scan_for_traps responsibility");
-      int vtable_index = call_method->resolve_vtable_index(
-        target()->holder(), klass);
-      assert(vtable_index >= 0, "should be");
-      callee = get_virtual_callee(receiver, call_method, vtable_index, &compiled_entry_address, &stk_basic_types);
+        assert(klass->is_linked(), "scan_for_traps responsibility");
+        int vtable_index = call_method->resolve_vtable_index(target()->holder(), klass);
+        assert(vtable_index >= 0, "should be");
+        compiled_entry_address = YuhuRuntime::generate_virtual_call_stub(call_method, target(), vtable_index, &stk_basic_types);
     }
     else {
       assert(is_interface, "should be");
       if (call_method->itable_index() >= 0) {
-        callee = get_interface_callee(receiver, call_method, &compiled_entry_address, &stk_basic_types);
+          compiled_entry_address = YuhuRuntime::generate_interface_call_stub(call_method, target(), &stk_basic_types);
       } else {
         // Method has no itable index (e.g. Object methods re-declared in interface
         // like equals/hashCode/toString). These require dynamic resolution via
         // LinkResolver at runtime since compile-time indices are insufficient.
-        callee = get_indeterminate_interface_callee(receiver, call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
+          compiled_entry_address = YuhuRuntime::generate_indeterminate_interface_call_stub(call_method, target(), &reg_basic_types, &stk_basic_types);
       }
     }
-  }
-//  else if (is_dynamic) {
-//    // invokedynamic: use dynamic call stub that resolves the CallSite at runtime
-//    callee = get_dynamic_callee(call_method, &compiled_entry_address, &reg_basic_types, &stk_basic_types);
-//  }
-  else {
+  } else {
     // For direct calls (including optimized virtual calls), use get_direct_callee
     // which now returns the stub address that jumps to _from_compiled_entry
-    callee = get_direct_callee(call_method, &compiled_entry_address, &stk_basic_types);
+      compiled_entry_address = YuhuRuntime::generate_static_call_stub(call_method, target(), &stk_basic_types);
   }
 
   // NOW it's safe to decache (this will xpop() all arguments)
   // This creates an OopMap at the call site
   decache_for_Java_call(call_method);
 
-  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    // must register deopt bundle after decache_for_Java_call pops values from expression stack
+    // bci here doesn't need to be re-executed
+    register_deopt_bundle(statepoint_id);
 
   llvm::Value* call_target = LLVMValue::jlong_constant((uint64_t)compiled_entry_address);
 
@@ -1780,8 +1642,7 @@ void YuhuTopLevelBlock::do_call() {
                                                           (uint64_t) compiled_entry_address,
                                                           CallSiteType::java_call,
                                                           bci(),
-                                                          current_state()->num_monitors(),
-                                                          dest_method->is_method_handle_intrinsic() || dest_method->is_compiled_lambda_form());
+                                                          current_state()->num_monitors());
 
   // Cast from_compiled_entry to a function pointer matching the callee's signature
   // We need to construct the callee's FunctionType based on its Java signature

@@ -524,8 +524,11 @@ Value* YuhuBuilder::throw_StackOverflowError() {
   return make_function((address) YuhuRuntime::throw_StackOverflowError_stub(), "T", "v");
 }
 
-CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id, llvm::ArrayRef<llvm::OperandBundleDef> Bundles) {
+CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id) {
     llvm::Type* return_type = YuhuType::to_stackType(function()->target_method()->return_type());
+
+    std::vector<llvm::Value*> deopt_operands;
+    llvm::OperandBundleDef deopt_bundle("deopt", deopt_operands);
 
   // Get or create the llvm.experimental.deoptimize intrinsic declaration
   llvm::Function* deopt_intrinsic = llvm::Intrinsic::getDeclaration(
@@ -534,7 +537,7 @@ CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id, llvm
     { return_type });
   
   // Create the call with deopt bundle
-  llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, Bundles);
+  llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, {deopt_bundle});
   
   // Attach custom Statepoint ID to distinguish deopt statepoints from GC statepoints
   // GC safepoints use DefaultStatepointID (0), deopt traps use 0x1000+
