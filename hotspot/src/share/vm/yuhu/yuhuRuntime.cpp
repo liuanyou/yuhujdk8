@@ -68,15 +68,19 @@ static void yuhu_stack_map_log_init() {
     } while(0)
 
 // File-based logging for YuhuRuntime monitor tracing.
-// Fixed path so the trace can always be captured without needing an extra
-// VM flag; the write is a small fprintf + fflush, negligible next to the
-// runtime-call cost of the enter/exit stubs themselves. Kept separate from
+// Controlled by the -XX:+UnlockDiagnosticVMOptions -XX:YuhuMonitorFile=<path>
+// flag: logs are emitted only when the flag is set, appended to the given
+// file; otherwise the trace is fully suppressed. Kept separate from
 // the stack-map log so the hot enter/exit stream does not interleave with
 // compiler-side trace lines.
 static FILE* yuhu_monitor_log = NULL;
+static int yuhu_monitor_log_opened = 0;
 static void yuhu_monitor_log_init() {
-    if (yuhu_monitor_log == NULL) {
-        yuhu_monitor_log = fopen("/tmp/yuhu_monitor.log", "a");
+    if (!yuhu_monitor_log_opened) {
+        yuhu_monitor_log_opened = 1;
+        if (YuhuMonitorFile != NULL) {
+            yuhu_monitor_log = fopen(YuhuMonitorFile, "a");
+        }
     }
 }
 #define YUHU_MONITOR_LOG(fmt, ...) \
@@ -157,7 +161,7 @@ JRT_ENTRY(void, YuhuRuntime::monitorenter(JavaThread*      thread,
     // and (c) the BasicLock is at exactly the same address as the one we are
     // passing in as `lock`. We log all three signals here so a single line in
     // the trace shows whether this call is about to trip the assert.
-    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+    { // monitor-trace block (logs only when YuhuMonitorFile is set)
         ResourceMark rm;
         char buf[512];
         markOop   pre     = object()->mark();
@@ -265,7 +269,7 @@ JRT_ENTRY(void, YuhuRuntime::monitorenter(JavaThread*      thread,
     // lock->displaced_header() (so dhw on the BasicLock slot is uninitialised
     // garbage from the frame stack). THIN means the CAS ran and displaced_header
     // was written with the pre-enter mark. FAT means we inflated.
-    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+    { // monitor-trace block (logs only when YuhuMonitorFile is set)
         markOop   post = object()->mark();
         BasicLock* blk = lock->lock();
         YUHU_MONITOR_LOG("[yuhu-enter+] t=%p obj=%p post-mark=0x%016lx post-state=%s dhw=0x%016lx",
@@ -300,7 +304,7 @@ JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
     // reused by an activation whose enter-side never wrote it.
     markOop   pre_exit = object()->mark();
     BasicLock* blk     = lock->lock();
-    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+    { // monitor-trace block (logs only when YuhuMonitorFile is set)
         char buf[512];
         uintptr_t mv     = p2i(pre_exit);
         markOop   dhw    = blk->displaced_header();
@@ -340,7 +344,7 @@ JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
     // the object could not be rebiased toward another thread, so the bias
     // bit would already be clear.
     if (UseBiasedLocking && pre_exit->has_bias_pattern()) {
-        { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+        { // monitor-trace block (logs only when YuhuMonitorFile is set)
             YUHU_MONITOR_LOG("[yuhu-exit+] t=%p obj=%p BIASED-NOOP (returned early)",
                                (void*)thread, (void*)object());
         }
@@ -348,7 +352,7 @@ JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
     }
     ObjectSynchronizer::slow_exit(object(), blk, thread);
 
-    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+    { // monitor-trace block (logs only when YuhuMonitorFile is set)
         markOop   post = object()->mark();
         YUHU_MONITOR_LOG("[yuhu-exit+] t=%p obj=%p post-mark=0x%016lx post-state=%s",
                            (void*)thread,

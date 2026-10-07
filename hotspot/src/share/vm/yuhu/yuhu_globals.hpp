@@ -73,6 +73,9 @@
   diagnostic(ccstr, YuhuStackMapFile, NULL,                                    \
           "Dump stack map to file (default file is yuhu_stack_map.txt)")                            \
                                                                               \
+  diagnostic(ccstr, YuhuMonitorFile, NULL,                                     \
+          "Dump YuhuRuntime monitor enter/exit trace to file; no trace when not set") \
+                                                                              \
   diagnostic(bool, YuhuTraceIRCompilation, false,                             \
           "Trace IR to object file compilation (print IR and disassemble object file)") \
                                                                               \
