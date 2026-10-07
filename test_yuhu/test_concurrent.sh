@@ -62,16 +62,22 @@ echo "=== 测试 1: 强制使用 Yuhu 编译器 ==="
 echo "命令: $JAVA -XX:+UseYuhuCompiler -XX:+YuhuTraceInstalls -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply com.example.Reproducer"
 echo ""
 
-"$JAVA" -XX:+UseYuhuCompiler \
+"$JAVA" -XX:+UseYuhuInt -XX:+UseYuhuCompiler \
      -XX:+YuhuTraceInstalls \
      -XX:TieredStopAtLevel=6 \
-     -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \
+     -XX:CompileCommand=yuhuonly,java/util/concurrent/ConcurrentHashMap.putVal \
+     -XX:YuhuCompileOnlyOf=java.util.concurrent.ConcurrentHashMap::putVal \
+     -XX:YuhuPrintTypeflowOf=java.util.concurrent.ConcurrentHashMap::putVal \
      -XX:YuhuComplexityThreshold=1 \
+     -XX:+YuhuTraceMachineCode \
+     -XX:+YuhuTraceInstalls \
+     -XX:+YuhuDumpIRToFile \
+     -XX:YuhuStackMapFile=/Users/liuanyou/CLionProjects/jdk8/debug/yuhu_stack_map.txt \
      -XX:C1C2NewCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/c1c2_new_code.txt \
      -XX:YuhuNewCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/yuhu_new_code.txt \
      -XX:C1C2OsrCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/c1c2_osr_code.txt \
      -XX:YuhuOsrCodeLogFile=/Users/liuanyou/CLionProjects/jdk8/debug/yuhu_osr_code.txt \
-     com.example.Reproducer 2>&1 | grep -E "(Register method|successfully)"
+     com.example.Reproducer
 
 echo ""
 echo "=== 提示 ==="
