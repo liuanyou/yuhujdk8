@@ -1288,20 +1288,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       }
   }
 
-  // Bail out if any block has a trap (unloaded class at compile time).
-  // Yuhu does not support deoptimization, so such methods cannot be compiled.
-//  for (int i = 0; i < flow->block_count(); i++) {
-//    if (flow->pre_order_at(i)->has_trap()) {
-//        if (strcmp(target->holder()->name()->as_utf8(), "sun/nio/cs/UTF_8$Encoder") == 0
-//            && strcmp(target->name()->as_utf8(), "encodeArrayLoop") == 0
-//            && strcmp(target->signature()->as_symbol()->as_utf8(), "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;") == 0) {
-//          break;
-//        }
-//      env->record_failure("block has trap (unloaded class)");
-//      return;
-//    }
-//  }
-
     if (YuhuTraceInstalls) {
         tty->print_cr("Yuhu: Continue compiling method %s", base_name);
     }
@@ -1474,8 +1460,6 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     // Register oop map
     recorder->generate_safepoint_and_describe_scope(env->debug_info(), adapter_size, frame_size);
-    // Generate exception handler table
-//    YuhuDebugInformationRecorder::get()->generate_exception_handler_table(target, &handler_table, adapter_size);
     
     env->register_method(target,
                          entry_bci,
