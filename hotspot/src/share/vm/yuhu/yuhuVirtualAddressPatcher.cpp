@@ -25,52 +25,26 @@
 #include "yuhu/yuhuVirtualAddressPatcher.hpp"
 #include "utilities/debug.hpp"
 
-void YuhuVirtualAddressScanner::patch_call_target_instructions(
-  uint8_t* code_buffer,
-  uint64_t movz_offset,
-  uint64_t new_value
-) {
-  // Extract 16-bit chunks from new_value
-  uint16_t imm0 = (new_value >> 0) & 0xFFFF;   // Bits 15-0
-  uint16_t imm1 = (new_value >> 16) & 0xFFFF;  // Bits 31-16
-  uint16_t imm2 = (new_value >> 32) & 0xFFFF;  // Bits 47-32
+bool YuhuVirtualAddressScanner::patch_blr_to_mov_x0(uint32_t* blr_instr) {
+  uint32_t blr_inst = blr_instr[0];
+  if ((blr_inst & BLR_MASK) != BLR_PATTERN) {
+    return false;
+  }
 
-    // expected instruction sequences for call target, usually llvm uses movz, just handle mov for safe case
-    // movz   x8, #0xbeef, lsl #0
-    // movk   x8, #0x20, lsl #16
-    // movk   x8, #0x20, lsl #32
-    // or
-    // mov    x8, #0xbeef
-    // movk   x8, #0x20, lsl #16
-    // movk   x8, #0x20, lsl #32
-  
-  uint32_t* instructions = (uint32_t*)(code_buffer + movz_offset);
-  
-  // Patch movz (bits 15-0, lsl #0)
-  // MOVZ 64-bit: 0xD2800000 | (imm16 << 5) | (shift << 21) | rd
-  // shift #0 = 0b00 = 0
-  uint32_t movz_inst = instructions[0];
-  // Verify this is a movz with lsl #0
-  assert((movz_inst & MOVZ_MASK) == MOVZ_PATTERN_64 && ((movz_inst >> 21) & 0x3) == 0,
-         "Expected movz instruction with lsl #0");
-  movz_inst = (movz_inst & ~(0xFFFF << 5)) | (imm0 << 5);  // Replace imm16
-  instructions[0] = movz_inst;
-  
-  // Patch first movk (bits 31-16, lsl #16)
-  // MOVK 64-bit: 0xF2800000 | (imm16 << 5) | (shift << 21) | rd
-  // shift #16 = 0b01 = 1
-  uint32_t movk_inst1 = instructions[1];
-  assert((movk_inst1 & MOVK_MASK) == MOVK_PATTERN_64 && ((movk_inst1 >> 21) & 0x3) == 1,
-         "Expected movk instruction with lsl #16");
-  movk_inst1 = (movk_inst1 & ~(0xFFFF << 5)) | (imm1 << 5);  // Replace imm16
-  instructions[1] = movk_inst1;
+  // expected instruction sequence of a value-producing patch point's call:
+  //   movz   x16, #addr[15:0]
+  //   movk   x16, #addr[31:16], lsl #16
+  //   movk   x16, #addr[47:32], lsl #32
+  //   blr    x16
+  // BLR (register) 64-bit: 0xD63F0000 | (Rn << 5)
+  uint32_t rn = (blr_inst >> 5) & 0x1F;
+  assert(rn != 31, "blr from register 31 cannot be a patch point target");
 
-  // Patch second movk (bits 47-32, lsl #32)
-  // MOVK 64-bit: 0xF2800000 | (imm16 << 5) | (shift << 21) | rd
-  // shift #32 = 0b10 = 2
-  uint32_t movk_inst2 = instructions[2];
-  assert((movk_inst2 & MOVK_MASK) == MOVK_PATTERN_64 && ((movk_inst2 >> 21) & 0x3) == 2,
-         "Expected movk instruction with lsl #32");
-  movk_inst2 = (movk_inst2 & ~(0xFFFF << 5)) | (imm2 << 5);  // Replace imm16
-  instructions[2] = movk_inst2;
+  // The register being branched to already holds the value the patch point is
+  // supposed to produce, so the call only has to become a move into x0.
+  // MOV (register) is ORR (shifted register) with xzr as first operand and no
+  // shift: orr x0, xzr, xRn -> 0xAA0003E0 | (Rm << 16) | Rd, and the pattern
+  // already encodes Rd = 0 because the result must land in x0.
+  blr_instr[0] = 0xAA0003E0 | (rn << 16);
+  return true;
 }

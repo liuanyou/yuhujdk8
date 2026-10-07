@@ -434,7 +434,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                                   YuhuStack::oopmap_slot_munge(arg_count));
 
         if (call_site_entry->call_site_type != CallSiteType::unwind_call &&
-            call_site_entry->call_site_type != CallSiteType::leaf_call) {
+            call_site_entry->call_site_type != CallSiteType::leaf_call &&
+            call_site_entry->call_site_type != CallSiteType::metadata_call) {
             assert(contains_stack_map_instruction_offset(return_pc_offset), "Call site should contain stack map");
 
             if (YuhuTraceOffset) {

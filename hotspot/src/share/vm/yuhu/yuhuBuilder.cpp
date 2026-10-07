@@ -59,9 +59,7 @@ YuhuBuilder::YuhuBuilder(YuhuCodeBuffer* code_buffer, YuhuFunction* function)
     _code_buffer(code_buffer),
     _function(function),
     _pending_oops(new GrowableArray<jobject>(100)),
-    _next_oop_id(0),
-    _pending_metadata(new GrowableArray< ::Metadata*>(100)),
-    _next_metadata_id(0) {
+    _next_oop_id(0) {
 }
 
 // Helpers for accessing structures
@@ -657,36 +655,6 @@ CallInst* YuhuBuilder::CreateReadThreadRegister() {
   return CreateCall(asm_type, asm_func, std::vector<Value*>(), "rthread");
 }
 
-void YuhuBuilder::CreateSaveX0ToX22() {
-  // Create inline assembly: "mov x22, x0"
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::void_type(), false);
-  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
-    asm_type,
-    "mov x22, x0",  // Move x0 to x22
-    "~{x22}",             // No outputs
-    true,           // Has side effects
-    false,          // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
-  
-  CreateCall(asm_type, asm_func);
-}
-
-CallInst* YuhuBuilder::CreateReadX22Register() {
-  // Create inline assembly: "mov $0, x22"
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
-  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
-    asm_type,
-    "mov $0, x22",  // Move x22 to output register
-    "=r",          // Output constraint: =r means output to a register
-    false,         // Has side effects: no
-    false,         // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
-  
-  return CreateCall(asm_type, asm_func, std::vector<Value*>(), "p7_saved");
-}
-
 CallInst* YuhuBuilder::CreateReadX0Register() {
     // Create inline assembly: "mov $0, x0"
     llvm::FunctionType* asm_type = llvm::FunctionType::get(YuhuType::intptr_type(), false);
@@ -722,42 +690,6 @@ CallInst *YuhuBuilder::CreateReadCurrentPC() {
             llvm::InlineAsm::AD_ATT);
 
     return CreateCall(asm_type, asm_func, std::vector<Value*>());
-}
-
-void YuhuBuilder::CreateWriteStackPointer(Value* new_sp) {
-  // Write SP register (x31) on AArch64 using inline assembly
-  // This is needed to actually modify the SP register, not just calculate a value
-  // LLVM's write_register intrinsic doesn't support SP register modification in the same way
-  // So we use inline assembly to directly modify the register
-  YuhuContext& ctx = YuhuContext::current();
-  
-  // Create inline assembly: "mov sp, $0"
-  // $0 is the input operand (new SP value)
-  // "r" means input from a general-purpose register
-  // SP (x31) is a special register, but "mov sp, xN" is a valid AArch64 instruction
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-    llvm::Type::getVoidTy(ctx),
-    {YuhuType::intptr_type()},  // Input: new SP value
-    false);
-  
-  // Create inline assembly: "mov sp, $0"
-  // $0 is the input operand (new SP value)
-  // Constraint string: "r" means input from a general-purpose register
-  // For InlineAsm::get, the constraint string format is: "output_constraints,input_constraints"
-  // Since we have no output (void return) and one input, the constraint string is "r"
-  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
-    asm_type,
-    "mov sp, $0",  // AArch64 assembly: move input to SP register (x31)
-    "r,~{sp}",           // Constraint: "r" means input from a general-purpose register
-    true,          // Has side effects: yes (modifies SP)
-    true,         // Is align stack: no
-    llvm::InlineAsm::AD_ATT    // Dialect: AT&T style (but for AArch64, this is ignored)
-  );
-  
-  // LLVM 20+ requires FunctionType for CreateCall
-  std::vector<Value*> args;
-  args.push_back(new_sp);
-  CreateCall(asm_type, asm_func, args);
 }
 
 CallInst* YuhuBuilder::CreateReadRegister(const char* reg_name) {
@@ -1136,72 +1068,59 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   assert(metadata != NULL, "inlined metadata must not be NULL");
   assert(metadata->is_metaspace_object(), "sanity check");
 
-  Module* mod = YuhuContext::current().module();
+  Module* mod = GetInsertBlock()->getModule();
   LLVMContext& ctx = mod->getContext();
 
-  // Allocate unique metadata_id and record the Metadata* in pending_metadata.
-  // The marker scanner later uses metadata_id (in w19) to look up the entry,
-  // verifies that the placeholder address matches, and emits a
-  // metadata_Relocation::spec(metadata_index) at the placeholder PC.
-  int metadata_id = _next_metadata_id++;
-  while (_pending_metadata->length() <= metadata_id) {
-    _pending_metadata->append(NULL);
-  }
-  _pending_metadata->at_put(metadata_id, metadata);
-
-  // Use the Metadata* address directly in the placeholder (no temp_placeholder).
-  // Metaspace addresses are stable and fit within 48 bits on AArch64, so the
-  // 3-instruction mov/movk/movk sequence is sufficient.
-  uint64_t metadata_addr = (uint64_t)(uintptr_t)metadata;
+  // The patch point's target operand carries the Metadata* itself, so LLVM
+  // materializes the address as movz + movk(lsl #16) + movk(lsl #32) and then
+  // branches to it. Staying below 48 bits is what pins that materialization to
+  // exactly 3 instructions, which is the layout the patch stage walks.
+  auto metadata_addr = (uint64_t)(uintptr_t)metadata;
   assert((metadata_addr & 0xFFFF000000000000ULL) == 0,
          "metadata address must fit in 48 bits");
 
-  // Generate marker + placeholder using inline assembly.
-  // Pattern (mirrors CreateInlineOop, but with 0xDEAD low marker for metadata):
-  //   mov  w19, #0xDEAD                  ; marker low  (distinguishes metadata from oop)
-  //   movk w19, #0xBABE, lsl #16         ; marker high
-  //   mov  w19, #metadata_id             ; index into _pending_metadata
-  //   nop
-  //   nop
-  //   mov  xN,  #addr[15:0]              ; placeholder = real Metadata* (48 bits)
-  //   movk xN,  #addr[31:16], lsl #16
-  //   movk xN,  #addr[47:32], lsl #32
-  // Total: 8 instructions (3 marker + 2 nops + 3 placeholder).
-  // High 16 bits of the placeholder are zero (asserted above), matching
-  // the existing scanner contract for 48-bit mov/movk/movk sequences.
-  char asm_string[512];
-  snprintf(asm_string, sizeof(asm_string),
-           "mov w19, #0xDEAD\n"
-           "movk w19, #0xBABE, lsl #16\n"
-           "mov w19, #%d\n"                    // metadata_id
-           "nop\n"
-           "nop\n"
-           "mov ${0:x}, #0x%04lx\n"
-           "movk ${0:x}, #0x%04lx, lsl #16\n"
-           "movk ${0:x}, #0x%04lx, lsl #32",
-           metadata_id & 0xFFFF,                      // metadata_id for marker
-           (metadata_addr >> 0)  & 0xFFFFULL,         // low 16 bits
-           (metadata_addr >> 16) & 0xFFFFULL,         // mid-low 16 bits
-           (metadata_addr >> 32) & 0xFFFFULL);        // mid-high 16 bits
+  // Two ids, same split as the unwind patch point in handle_return: the call
+  // site entry carries the metadata payload, the patch point entry links to it.
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+  uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
 
-  llvm::FunctionType* asm_type = llvm::FunctionType::get(
-    llvm::Type::getInt64Ty(ctx), {}, false);
+  // current_method/bci are never consulted: a metadata call site does not get
+  // an OopMap, because its stackmap record is keyed by the patch point id, so
+  // the call site/stackmap pairing in the recorder never matches it up.
+  YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                          NULL,
+                                                          metadata_addr,
+                                                          CallSiteType::metadata_call,
+                                                          -2,
+                                                          0);
 
-  llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
-    asm_type,
-    asm_string,
-    "=r,~{w19},~{memory}",  // Output + clobbers (w19 hold marker)
-    true,            // Has side effects: yes (prevent CSE/DCE)
-    false,           // Is align stack: no
-    llvm::InlineAsm::AD_ATT
-  );
+  llvm::Value* call_target = LLVMValue::jlong_constant(metadata_addr);
+  llvm::FunctionType* metadata_ftype = llvm::FunctionType::get(YuhuType::Metadata_type(), false);
+  llvm::Value* callee = CreateIntToPtr(call_target, PointerType::getUnqual(metadata_ftype));
 
-  // Emit the marker + placeholder, then cast i64 result to the requested
-  // metadata pointer type so callers see the same value type as before.
-  return CreateIntToPtr(
-    CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
-    type,
-    name);
+    llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
+            mod, llvm::Intrinsic::experimental_patchpoint, { YuhuType::Metadata_type() });
+
+    // patchpoint.void(id, numBytes, target, numArgs, ...)
+    llvm::Value* pp_args[] = {
+            LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
+            llvm::ConstantInt::get(YuhuType::jint_type(), 16),              // numBytes: reserved region size
+            callee, // target: raw i64
+            llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
+    };
+
+    // register patch point
+    YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 16, statepoint_id);
+
+    llvm::CallInst* call = CreateCall(pp_intrinsic, pp_args);
+
+    llvm::LLVMContext &Ctx = getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+
+    return call;
 }
 
 // Helpers for creating basic blocks.
@@ -1323,13 +1242,9 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     };
 
     int marker_count = 0;
-    int metadata_marker_count = 0;
-    int movz_movk_count = 0;
-    int adrp_count = 0;
-    int blr_count = 0;
+    int metadata_patch_count = 0;
 
     ResourceMark rm;
-    GrowableArray<uint64_t> processed_llvm_blr_offsets;
     GrowableArray<RelocEntry> reloc_entries;
     GrowableArray<uint64_t> copied_const_srcs; // const_symbol_entry->start
     GrowableArray<uint64_t> copied_const_dsts; // address in cb->consts()
@@ -1376,54 +1291,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             reloc_entries.append(reloc_entry);
 
             marker_count++;
-        } else if (YuhuVirtualAddressScanner::is_metadata_marker_pattern(llvm_instr)) {
-            // Metadata marker handling.
-            // Unlike oops, the placeholder already holds the real Metadata*
-            // address (CreateInlineMetadata embeds the address directly).
-            // We therefore only need to:
-            //   1. extract metadata_id from w19
-            //   2. look up the Metadata* in _pending_metadata
-            //   3. sanity-check that the placeholder address matches
-            //   4. allocate a metadata_index and emit metadata_Relocation
-            // The instruction stream is NOT patched (the immediate is already correct).
-            int metadata_id = YuhuVirtualAddressScanner::extract_mov_imm16(
-                    llvm_instr);  // same imm16-from-w19 extraction
-
-            assert(metadata_id >= 0 && metadata_id < _pending_metadata->length(), "metadata_id out of range");
-            ::Metadata *metadata = _pending_metadata->at(metadata_id);
-            assert(metadata != NULL, "metadata must not be NULL");
-            assert(metadata->is_metaspace_object(), "sanity check");
-
-            // Placeholder is immediately after the 5-instruction marker block.
-            uint32_t *llvm_placeholder_instrs = llvm_instr + 5;
-            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(llvm_placeholder_instrs), "should be followed by mov/movk sequence");
-
-            // Locate the matching placeholder in the actual CodeBuffer.
-            uint32_t *instr = (uint32_t *) (code_start + i * 4 + adapter_size);
-            assert(YuhuVirtualAddressScanner::is_metadata_marker_pattern(instr), "should be metadata marker pattern");
-            uint32_t *placeholder_instrs = instr + 5;
-            assert(YuhuVirtualAddressScanner::is_mov_movk_sequence(placeholder_instrs), "should be mov/movk sequences");
-
-            // Verify the embedded address matches the recorded Metadata*.
-            // The placeholder encodes 48 bits; metaspace addresses fit in 48 bits.
-            uint64_t embedded_addr = YuhuVirtualAddressScanner::extract_from_movk_sequence(placeholder_instrs);
-            uint64_t expected_addr = (uint64_t) (uintptr_t) metadata;
-            assert((expected_addr & 0xFFFF000000000000ULL) == 0, "metadata address must fit in 48 bits");
-            assert(embedded_addr == expected_addr, "placeholder address must match recorded Metadata*");
-
-            // Allocate a metadata_index from the OopRecorder. Note:
-            // metadata_Relocation::spec(idx) requires idx > 0 (idx==0 is reserved
-            // for unrecorded). allocate_metadata_index() returns indices >= 1.
-            int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
-            assert(metadata_index > 0, "metadata_index must be > 0");
-
-            RelocEntry reloc_entry{};
-            reloc_entry.offset = (i + 5) * 4 + adapter_size;
-            reloc_entry.reloc_type = relocInfo::relocType::metadata_type;
-            reloc_entry.spec_index = metadata_index;
-            reloc_entries.append(reloc_entry);
-
-            metadata_marker_count++;
         }
     }
 
@@ -1443,6 +1310,47 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 uint64_t unwind_handler_address = (uint64_t) (code_start + adapter_size + llvm_code_size);
                 bool branch_unwind_handler_patched = patch_branch_unwind_handler(patchpoint_addr, unwind_handler_address);
                 assert(branch_unwind_handler_patched, "should patch successfully");
+            } else if (call_site_type == CallSiteType::metadata_call) {
+                // The patch point's target operand is the Metadata* address, so LLVM
+                // has already materialized it into a register (movz/movk) and branches
+                // to it. The stackmap offset points at the start of that materialization,
+                // so the blr is the instruction right after the 3-word sequence.
+                // Rewriting the blr as "mov x0, xN" hands the same address to whoever
+                // consumes the patch point result, without transferring control.
+                assert(YuhuVirtualAddressScanner::is_mov_64_or_movz_64(patchpoint_addr[0]), "should be target materialization");
+                uint32_t* blr_instr = patchpoint_addr + 3;
+                assert(YuhuVirtualAddressScanner::is_blr_pattern(blr_instr), "should be blr instruction");
+                bool blr_patched = YuhuVirtualAddressScanner::patch_blr_to_mov_x0(blr_instr);
+                assert(blr_patched, "should patch blr into mov x0, xN successfully");
+
+                // Recover the Metadata* from the call site this patch point belongs
+                // to: CreateInlineMetadata recorded it as the call target, so there is
+                // no side table to keep in sync with the IR.
+                CallSiteEntry* metadata_call_site = recorder->get_call_site_by_statepoint_id(patchpoint->patchpoint_entry->call_site_statepoint_id);
+                assert(metadata_call_site != NULL && metadata_call_site->call_site_type == CallSiteType::metadata_call, "metadata call site should be registered");
+                ::Metadata* metadata = (::Metadata*)(uintptr_t) metadata_call_site->call_target;
+                assert(metadata != NULL && metadata->is_metaspace_object(), "metadata must be a metaspace object");
+
+                // allocate_metadata_index() deduplicates, so several uses of the same
+                // Metadata* share one pool entry while each keeps its own relocation.
+                int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
+                assert(metadata_index > 0, "metadata_index must be > 0");
+
+                // The anchored PC is informational only: a pool-indexed
+                // metadata_Relocation resolves through nmethod::metadata_addr_at(),
+                // never through the instruction sitting at the PC.
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = adapter_size + offset_in_func;
+                reloc_entry.reloc_type = relocInfo::relocType::metadata_type;
+                reloc_entry.spec_index = metadata_index;
+                reloc_entries.append(reloc_entry);
+
+                metadata_patch_count++;
+
+                if (YuhuTraceOffset) {
+                    tty->print_cr("Yuhu: patched metadata patch point at offset %d: blr -> mov x0, x%d, metadata_index %d",
+                                  offset_in_func, (blr_instr[0] >> 16) & 0x1F, metadata_index);
+                }
             } else {
                 ShouldNotReachHere();
             }
@@ -1450,6 +1358,18 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             ShouldNotReachHere();
         }
     }
+
+    // Every registered metadata constant must have found its patch point. A lost
+    // stackmap record would leave the blr live, i.e. the method would branch into
+    // metaspace instead of producing a value. Duplicated machine code can make
+    // this 1:M (one patch point, several stackmap records), hence ">=".
+    int registered_metadata_anchors = 0;
+    for (int i = 0; i < recorder->get_call_site_count(); ++i) {
+        if (recorder->get_call_site_type_by_statepoint_id(recorder->get_call_site_statepoint_id(i)) == CallSiteType::metadata_call) {
+            registered_metadata_anchors++;
+        }
+    }
+    assert(metadata_patch_count >= registered_metadata_anchors, "some metadata patch points were not patched");
 
     // process edge entries
     auto edge_entries = recorder->edge_entries();
@@ -1569,17 +1489,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     if (YuhuTraceOffset) {
         tty->print_cr("Yuhu: Found %d oop markers and generated %d relocation records",
                       marker_count, marker_count);
-        tty->print_cr("Yuhu: Found %d metadata markers and generated %d relocation records",
-                      metadata_marker_count, metadata_marker_count);
-        tty->print_cr("Yuhu: Found %d movz/movk instructions and generated %d relocation records",
-                      movz_movk_count, movz_movk_count);
-        tty->print_cr("Yuhu: Found %d adrp instructions and generated %d relocation records",
-                      adrp_count, adrp_count);
-        tty->print_cr("Yuhu: Found %d blr instructions and generated %d relocation records",
-                      blr_count, blr_count);
-        for (int i = 0; i < processed_llvm_blr_offsets.length(); ++i) {
-            tty->print_cr("Yuhu: index %d - processed llvm blr offset %d", i, processed_llvm_blr_offsets.at(i));
-        }
+        tty->print_cr("Yuhu: Patched %d metadata patch points and generated %d relocation records",
+                      metadata_patch_count, metadata_patch_count);
         tty->flush();
     }
 }

@@ -277,6 +277,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                     assert(call_site_type != CallSiteType::none, "call site type should not be none");
                     if (call_site_type == CallSiteType::unwind_call) {
                         // patch to unwind handler, should do it in YuhuBuilder::scan_and_generate_all_relocations
+                    } else if (call_site_type == CallSiteType::metadata_call) {
+                        // patch to metadata address, should do it in YuhuBuilder::scan_and_generate_all_relocations
                     }
                 }
             }

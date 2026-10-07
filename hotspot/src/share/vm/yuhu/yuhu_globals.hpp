@@ -115,13 +115,6 @@ const uint32_t BLR_PATTERN = 0xD63F0000;
 const uint32_t B_MASK = 0xFC000000;
 const uint32_t B_PATTERN = 0x14000000;
 
-// Virtual address magic numbers for placeholder identification
-const uint64_t LAST_JAVA_PC_MAGIC = 0xDEAD0000;
-const uint64_t CALL_TARGET_MAGIC = 0xBEEF;
-
-// deopt statepoint id
-const uint64_t DEOPT_STATEPOINT_ID = 4096;
-
 const uint64_t EXTENDED_SP_ALLOCA_STATEPOINT_ID = 1024;
 
 const uint64_t X0_SP_ALLOCA_STATEPOINT_ID = 1028;

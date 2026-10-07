@@ -21,7 +21,9 @@ enum class CallSiteType : uint8_t {
     java_call = 3,
     deopt_call = 4,
     unwind_call = 5,
-    leaf_call = 6
+    leaf_call = 6,
+    oop_call = 7,
+    metadata_call = 8
 };
 
 enum class EdgeTargetType : uint8_t {
@@ -66,8 +68,9 @@ public:
 class PatchPointEntry : public ResourceObj {
 public:
     uint64_t statepoint_id;
-    uint32_t reserved_bytes;
-    uint64_t call_site_statepoint_id;
+    uint32_t reserved_bytes = 0;
+    uint64_t call_site_statepoint_id = 0;
+
 };
 
 class SymbolEntry : public ResourceObj {
@@ -269,6 +272,17 @@ public:
       });
       if (index == -1) return CallSiteType::none;
       return _call_site_entries->at(index)->call_site_type;
+  }
+
+  // Full entry lookup, for call sites whose payload lives in the entry itself
+  // (e.g. a metadata patch point, whose Metadata* is recorded as call_target).
+  CallSiteEntry* get_call_site_by_statepoint_id(uint64_t statepoint_id) const {
+      if (!_call_site_entries) return NULL;
+      int index = _call_site_entries->find(&statepoint_id, [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->statepoint_id;
+      });
+      if (index == -1) return NULL;
+      return _call_site_entries->at(index);
   }
 
   SymbolEntry* get_const_symbol_by_addr(uint64_t addr) const {

@@ -51,14 +51,21 @@ static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
 // Scanner for finding dual virtual address placeholders in machine code
 class YuhuVirtualAddressScanner : public AllStatic {
  public:
-  
-  // Patch call target movz/movk instructions with a new 64-bit value
-  // Handles 3-instruction pattern: movz (lsl #48) + movk (lsl #16) + movk (no shift)
-  static void patch_call_target_instructions(
-    uint8_t* code_buffer,
-    uint64_t movz_offset,
-    uint64_t new_value
-  );
+  /**
+   * Rewrite a value-producing patch point's call instruction as a register move.
+   *
+   * LLVM materializes a patch point's target operand into a register right
+   * before the call (a movz/movk sequence followed by "blr xN").  For an
+   * inlined metadata constant the target operand *is* the Metadata* address,
+   * so instead of transferring control we turn "blr xN" into "mov x0, xN":
+   * the address already sitting in xN is delivered through x0, which is where
+   * the AArch64 calling convention puts a call's result and therefore where
+   * the IR consumer of the patch point reads it.
+   *
+   * @param blr_instr  the "blr xN" instruction of the patch point
+   * @return false if the instruction is not a blr, true once it is rewritten
+   */
+  static bool patch_blr_to_mov_x0(uint32_t* blr_instr);
 
   /**
    * extract target address from b instruction
@@ -183,23 +190,6 @@ class YuhuVirtualAddressScanner : public AllStatic {
         return false;
     };
 
-    // metadata_relocation marker pattern
-    // Same shape as oop marker but with low immediate 0xDEAD (vs 0xCAFE).
-    //   [0] mov  w19, #0xDEAD            → 0x529BD5B3
-    //   [1] movk w19, #0xBABE, lsl #16   → 0x72B757D3
-    //   [2] mov  w20, #metadata_id       → 0x528xxxxxB4 (bits 5-20 = metadata_id)
-    //   [3] nop, [4] nop
-    // Distinguished from last_Java_pc marker (which has 0xDEAD in the HIGH 16 bits).
-    static bool is_metadata_marker_pattern(uint32_t* instr) {
-        if (instr[0] == 0x529BD5B3 &&  // mov w19, #0xDEAD
-            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
-            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop
-            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
-            return true;
-        }
-        return false;
-    };
-
     // Helper function to check if 3 instructions form a mov/movk sequence
     static bool is_mov_movk_sequence(uint32_t* instr) {
         // Check for mov/movk sequence (C1 compatible format):
@@ -258,8 +248,12 @@ class YuhuVirtualAddressScanner : public AllStatic {
         // mov    x8, #0xbeef
         // movk   x8, #0x20, lsl #16
         // movk   x8, #0x20, lsl #32
+        // the movz may carry any shift: llvm starts materializing at the lowest
+        // non-zero 16-bit chunk, so an address with zero low chunks begins with
+        // movz xN, #imm, lsl #16 (or #32), which is still the sequence head.
+        // MOVZ_MASK leaves the hw bits [22:21] out of the comparison already.
         bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
-        bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64) && ((inst >> 21) & 0x3) == 0;
+        bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64);
         return is_mov_64 || is_movz_64;
     };
 };

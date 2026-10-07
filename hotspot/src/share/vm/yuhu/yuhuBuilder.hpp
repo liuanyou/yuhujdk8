@@ -227,12 +227,9 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadMethodRegister(); // Read rmethod register (x12) on AArch64
   llvm::CallInst* CreateReadThreadRegister(); // Read rthread register (x28) on AArch64
   llvm::CallInst* CreateReadCurrentPC(); // Read current pc on AArch64
-  void CreateSaveX0ToX22();  // Save x0 to x22 (reserved register) to preserve p7 parameter
-  llvm::CallInst* CreateReadX22Register();  // Read x22 register (holds saved p7 parameter)
   llvm::CallInst* CreateReadX0Register();  // Read x0 register (holds saved p7 parameter)
   llvm::LoadInst* CreateLoadX0Slot();
   llvm::CallInst* CreateReadRegister(const char* reg_name); // Generic register reader
-  void CreateWriteStackPointer(llvm::Value* new_sp); // Write SP register (x31) on AArch64 using inline assembly
   llvm::CallInst* CreateMemset(llvm::Value* dst,
                                llvm::Value* value,
                                llvm::Value* len,
@@ -260,15 +257,7 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   GrowableArray<jobject>* _pending_oops;  // Indexed by oop_id
   int _next_oop_id;                       // Next unique oop_id to assign
 
-  // Pending metadata management for deferred metadata_Relocation generation.
-  // Mirrors the oop scheme: each CreateInlineMetadata() emits a marker block
-  // that the post-codegen scanner later turns into a metadata_Relocation.
-  // Unlike oops, the placeholder holds the metadata address directly
-  // (no temp_placeholder indirection) because Metadata* is stable.
-  GrowableArray< ::Metadata*>* _pending_metadata;  // Indexed by metadata_id
-  int _next_metadata_id;                            // Next unique metadata_id to assign
-  
- public:
+  public:
   llvm::Value* CreateInlineOop(ciObject* object, const char* name = "");
 
   public:
@@ -276,6 +265,11 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Static field access using CP index (like C1)
   llvm::Value* CreateInlineOopForStaticField(ciField* field, const char* name = "oop");
 
+  // Emits a value-producing patch point whose target operand is the Metadata*
+  // address itself. scan_and_generate_all_relocations() later rewrites the
+  // patch point's "blr xN" as "mov x0, xN" and attaches a metadata_Relocation,
+  // so the nmethod keeps the Metadata* in its metadata pool instead of relying
+  // only on the address baked into the instruction stream.
   llvm::Value* CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name = "");
   llvm::Value* CreateInlineMetadata(ciMetadata* metadata, llvm::PointerType* type, const char* name = "") {
     return CreateInlineMetadata(metadata->constant_encoding(), type, name);
