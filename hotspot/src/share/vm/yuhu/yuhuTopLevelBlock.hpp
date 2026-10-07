@@ -279,10 +279,13 @@ class YuhuTopLevelBlock : public YuhuBlock {
     EX_CHECK_NO_CATCH = EAM_CHECK,
     EX_CHECK_FULL     = EAM_CHECK | EAM_HANDLE
   };
-  void check_pending_exception(int action);
-  void handle_exception(llvm::Value* exception, int action);
+  void check_pending_exception(int action, YuhuState* throw_state);
+  void handle_exception(llvm::Value* exception, int action, YuhuState* throw_state);
   void marshal_exception_fast(int num_options);
-  void marshal_exception_slow(int num_options);
+  // Variant-2 dispatch for exception tables with unloaded catch klasses:
+  // inline-check the loaded prefix, then deopt for interpreter re-dispatch.
+  void marshal_exception_mixed(int first_unloaded, YuhuState* throw_state);
+  void emit_handler_checks(int count);
   llvm::BasicBlock* handler_for_exception(int index);
 
   // VM calls
@@ -348,9 +351,15 @@ class YuhuTopLevelBlock : public YuhuBlock {
       res->setAttributes(Attrs);
 #endif
 
+    // Snapshot the pre-call interpreter frame before the result is cached:
+    // if this method's exception table has an unloaded catch klass, the
+    // dispatch path may deopt with Action_reinterpret at this bci and needs
+    // the caller's operands in the deopt bundle, not the post-call state.
+    YuhuState* throw_state =
+      (exception_action & EAM_HANDLE) ? current_state()->copy() : NULL;
     cache_after_VM_call();
     if (exception_action & EAM_CHECK) {
-      check_pending_exception(exception_action);
+      check_pending_exception(exception_action, throw_state);
       current_state()->set_has_safepointed(true);
     }
     return res;
@@ -393,8 +402,7 @@ class YuhuTopLevelBlock : public YuhuBlock {
     return call_vm(callee, args, args + 3, exception_action, return_type);
   }
 
-  // Overload with 4 args + explicit return type (added for Option A:
-  // find_exception_handler now takes Method*, oop, int*, int).
+  // Overload with 4 args + explicit return type.
   llvm::CallInst* call_vm(llvm::Value* callee,
                           llvm::Value* arg1,
                           llvm::Value* arg2,

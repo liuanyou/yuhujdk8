@@ -83,25 +83,6 @@ class YuhuCodeBuffer : public StackObj {
   int current_offset() const {
     return masm().offset();
   }
-
-  // Inline a block of non-oop data into the buffer and return its offset.
-  // Data is placed in consts section for better separation from instructions.
- public:
-  int inline_data(void *src, size_t size) const {
-    // Switch to consts section
-    address const_addr = masm().start_a_const(size, BytesPerWord);
-    int offset = masm().offset();
-    
-    // Copy data to consts section
-    memcpy(const_addr, src, size);
-
-    masm().code_section()->set_end(const_addr + size);
-    
-    // Switch back to insts section
-    masm().end_a_const();
-    
-    return offset;
-  }
 };
 
 #endif // SHARE_VM_YUHU_YUHUCODEBUFFER_HPP

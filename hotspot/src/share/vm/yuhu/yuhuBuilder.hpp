@@ -142,7 +142,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   //   therefore throw exceptions.  VM calls require of setup and
   //   teardown, and must be called with YuhuTopLevelBlock::call_vm.
  public:
-  llvm::Value* find_exception_handler();
   llvm::Value* monitorenter();
   llvm::Value* monitorexit();
   llvm::Value* new_instance();
@@ -281,10 +280,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* CreateInlineMetadata(ciMetadata* metadata, llvm::PointerType* type, const char* name = "") {
     return CreateInlineMetadata(metadata->constant_encoding(), type, name);
   }
-  llvm::Value* CreateInlineData(void*             data,
-                                size_t            size,
-                                llvm::Type* type,
-                                const char*       name = "");
 
   // hotspot stores relocation points in unsigned short.
   // Layout:

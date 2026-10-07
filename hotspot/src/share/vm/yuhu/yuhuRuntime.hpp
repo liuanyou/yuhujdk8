@@ -110,7 +110,6 @@ class YuhuRuntime : public AllStatic {
   static address _monitorenter_stub;
   static address _monitorexit_stub;
   static address _register_finalizer_stub;
-  static address _find_exception_handler_stub;
   static address _throw_ArithmeticException_stub;
   static address _throw_ArrayIndexOutOfBoundsException_stub;
   static address _throw_ClassCastException_stub;
@@ -139,7 +138,6 @@ class YuhuRuntime : public AllStatic {
   static address monitorenter_stub() { return _monitorenter_stub; }
   static address monitorexit_stub() { return _monitorexit_stub; }
   static address register_finalizer_stub() { return _register_finalizer_stub; }
-  static address find_exception_handler_stub() { return _find_exception_handler_stub; }
   static address throw_ArithmeticException_stub() { return _throw_ArithmeticException_stub; }
   static address throw_ArrayIndexOutOfBoundsException_stub() { return _throw_ArrayIndexOutOfBoundsException_stub; }
   static address throw_ClassCastException_stub() { return _throw_ClassCastException_stub; }
@@ -208,11 +206,6 @@ class YuhuRuntime : public AllStatic {
     // current Method* / cp index by walking the caller frame, because the
     // RuntimeStub wrapper makes the youngest frame a non-nmethod CodeBlob.
     // The JIT now passes the resolved Method* / Klass* / oop directly.
-    static int find_exception_handler(JavaThread* thread,
-                                      Method*     method,
-                                      oop         exception,
-                                      int*        indexes,
-                                      int         num_indexes);
 
     static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
 

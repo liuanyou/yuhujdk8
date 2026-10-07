@@ -373,6 +373,9 @@ void YuhuTopLevelBlock::zero_check_value(YuhuValue* value,
     builder()->CreateICmpNE(a, b), continue_block, zero_block);
 
   builder()->SetInsertPoint(zero_block);
+  // Interpreter frame as the checked bytecode sees it. If handler dispatch
+  // has to deopt (unloaded catch klass) its bundle is built from this state.
+  YuhuState *throw_state = current_state()->copy();
   if (value->is_jobject()) {
     call_vm(
       builder()->throw_NullPointerException(),
@@ -394,7 +397,7 @@ void YuhuTopLevelBlock::zero_check_value(YuhuValue* value,
 
   Value *pending_exception = get_pending_exception();
   clear_pending_exception();
-  handle_exception(pending_exception, EX_CHECK_FULL);
+  handle_exception(pending_exception, EX_CHECK_FULL, throw_state);
 }
 
 void YuhuTopLevelBlock::check_bounds(YuhuValue* array, YuhuValue* index) {
@@ -421,14 +424,14 @@ void YuhuTopLevelBlock::check_bounds(YuhuValue* array, YuhuValue* index) {
 
   Value *pending_exception = get_pending_exception();
   clear_pending_exception();
-  handle_exception(pending_exception, EX_CHECK_FULL);
+  handle_exception(pending_exception, EX_CHECK_FULL, saved_state);
 
   set_current_state(saved_state);
 
   builder()->SetInsertPoint(in_bounds);
 }
 
-void YuhuTopLevelBlock::check_pending_exception(int action) {
+void YuhuTopLevelBlock::check_pending_exception(int action, YuhuState* throw_state) {
   assert(action & EAM_CHECK, "should be");
 
   BasicBlock *exception    = function()->CreateBlock("exception");
@@ -449,7 +452,10 @@ void YuhuTopLevelBlock::check_pending_exception(int action) {
     action ^= EAM_MONITOR_FUDGE;
   }
   clear_pending_exception();
-  handle_exception(pending_exception, action);
+  // throw_state is the caller's pre-call frame (captured before the result
+  // was cached); it is what a re-executing deopt must describe, not the
+  // post-call state this block currently holds.
+  handle_exception(pending_exception, action, throw_state);
   set_current_state(saved_state);
 
   builder()->SetInsertPoint(no_exception);
@@ -504,7 +510,7 @@ void YuhuTopLevelBlock::compute_exceptions() {
   }
 }
 
-void YuhuTopLevelBlock::handle_exception(Value* exception, int action) {
+void YuhuTopLevelBlock::handle_exception(Value* exception, int action, YuhuState* throw_state) {
   if (action & EAM_HANDLE && num_exceptions() != 0) {
     // Clear the stack and push the exception onto it
     while (xstack_depth())
@@ -519,18 +525,29 @@ void YuhuTopLevelBlock::handle_exception(Value* exception, int action) {
 
     // Marshal any non-catch-all handlers
     if (num_options > 0) {
-      bool all_loaded = true;
+      // Find the first handler whose catch klass is not loaded at compile
+      // time. Table order gives every earlier entry precedence over the later
+      // ones, so once an entry is unresolvable no entry after it may be
+      // checked against it either: only the interpreter, which resolves catch
+      // klasses lazily, can decide the rest of the table.
+      int first_unloaded = num_options;
       for (int i = 0; i < num_options; i++) {
         if (!exc_handler(i)->catch_klass()->is_loaded()) {
-          all_loaded = false;
+          first_unloaded = i;
           break;
         }
       }
 
-      if (all_loaded)
+      if (first_unloaded == num_options) {
         marshal_exception_fast(num_options);
-      else
-        marshal_exception_slow(num_options);
+      }
+      else {
+        // Test the resolvable prefix inline, then deopt if nothing matched.
+        // The catch-all is deliberately not installed here: an unloaded entry
+        // takes precedence over it, so the interpreter has to make that call.
+        marshal_exception_mixed(first_unloaded, throw_state);
+        return;
+      }
     }
 
     // Install the catch-all handler, if present
@@ -549,10 +566,17 @@ void YuhuTopLevelBlock::handle_exception(Value* exception, int action) {
 }
 
 void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
+  emit_handler_checks(num_options);
+}
+
+// Emit the inline handler tests (exact klass match, then is_subtype_of) for
+// handlers [0, count). Every catch klass in the range must be loaded at
+// compile time, since it is inlined as a metadata constant.
+void YuhuTopLevelBlock::emit_handler_checks(int count) {
   Value *exception_klass = builder()->load_klass_from_object(
     xstack(0)->jobject_value());
 
-  for (int i = 0; i < num_options; i++) {
+  for (int i = 0; i < count; i++) {
     Value *check_klass =
       builder()->CreateInlineMetadata(exc_handler(i)->catch_klass(), YuhuType::klass_type());
 
@@ -610,42 +634,33 @@ void YuhuTopLevelBlock::marshal_exception_fast(int num_options) {
   }
 }
 
-void YuhuTopLevelBlock::marshal_exception_slow(int num_options) {
-  // Option A: pass Method* and the exception oop explicitly so the C helper
-  // does not need to walk the caller frame. The catch-klass cp indexes
-  // remain (the slow path is precisely the case where at least one catch
-  // klass is *not* loaded, so they cannot be pre-resolved at JIT time).
-  int *indexes = NEW_RESOURCE_ARRAY(int, num_options);
-  for (int i = 0; i < num_options; i++)
-    indexes[i] = exc_handler(i)->catch_klass_index();
+// Variant-2 marshalling for tables that contain catch klasses which are not
+// loaded at compile time. The loaded prefix [0, first_unloaded) is tested
+// inline; if none of it matches we must not test the remaining entries either
+// (the unresolvable entry at first_unloaded takes precedence over everything
+// after it), so the rest of the dispatch deoptimizes with
+// Action_reinterpret at the throw bci and lets the interpreter re-run the
+// whole search -- AbstractInterpreter::find_handler() resolves catch klasses
+// lazily and also decides catch-all precedence for us.
+//
+// do_trap() builds the deopt bundle from current_state(), which
+// handle_exception() has already clobbered to [exception] for the in-method
+// handler branches, so restore the throw-site frame before emitting the trap.
+void YuhuTopLevelBlock::marshal_exception_mixed(int first_unloaded, YuhuState* throw_state) {
+  assert(throw_state != NULL, "caller must supply the throw-site state");
 
-  Value *method_const = builder()->CreateInlineMetadata(
-    target(), YuhuType::klass_type());
-  Value *exception_oop = xstack(0)->jobject_value();
+  emit_handler_checks(first_unloaded);
 
-  Value *index = call_vm(
-    builder()->find_exception_handler(),
-    method_const,
-    exception_oop,
-    builder()->CreateInlineData(
-      indexes,
-      num_options * sizeof(int),
-      PointerType::getUnqual(YuhuType::jint_type())),
-    LLVMValue::jint_constant(num_options),
-    EX_CHECK_NO_CATCH,
-    YuhuType::jint_type());  // find_exception_handler returns int
+  BasicBlock *deopt_block = function()->CreateBlock("exc_dispatch_deopt");
+  builder()->CreateBr(deopt_block);
+  builder()->SetInsertPoint(deopt_block);
 
-  BasicBlock *no_handler = function()->CreateBlock("no_handler");
-  SwitchInst *switchinst = builder()->CreateSwitch(
-    index, no_handler, num_options);
-
-  for (int i = 0; i < num_options; i++) {
-    switchinst->addCase(
-      LLVMValue::jint_constant(i),
-      handler_for_exception(i));
-  }
-
-  builder()->SetInsertPoint(no_handler);
+  set_current_state(throw_state);
+  do_trap(
+    Deoptimization::make_trap_request(
+      Deoptimization::Reason_unloaded,
+      Deoptimization::Action_reinterpret,
+      exc_handler(first_unloaded)->catch_klass_index()));
 }
 
 BasicBlock* YuhuTopLevelBlock::handler_for_exception(int index) {
@@ -1109,9 +1124,12 @@ void YuhuTopLevelBlock::do_return(BasicType type) {
 }
 
 void YuhuTopLevelBlock::do_athrow() {
+  // Snapshot before popping: a re-executing deopt from handler dispatch has
+  // to show the interpreter frame with the exception still on the stack.
+  YuhuState *throw_state = current_state()->copy();
   YuhuValue *exception = pop();
   check_null(exception);
-  handle_exception(exception->jobject_value(), EX_CHECK_FULL);
+  handle_exception(exception->jobject_value(), EX_CHECK_FULL, throw_state);
 }
 
 void YuhuTopLevelBlock::do_goto() {
@@ -1720,10 +1738,14 @@ void YuhuTopLevelBlock::do_call() {
   // We use YuhuJavaCallDecacher again to create an OopMap at this return point.
   YuhuJavaCallDecacher(function(), bci(), call_method).scan(current_state());
 
+  // Pre-call interpreter frame: if handler dispatch deopts for an unloaded
+  // catch klass, the re-executed invoke needs its operands, not the result.
+  YuhuState *throw_state = current_state()->copy();
+
   cache_after_Java_call(call_method, call_result);  // ← Pass call_result here!
 
   // Check for pending exceptions
-  check_pending_exception(EX_CHECK_FULL);
+  check_pending_exception(EX_CHECK_FULL, throw_state);
 
   // Mark that a safepoint check has occurred
   current_state()->set_has_safepointed(true);
@@ -1963,7 +1985,7 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
 
     Value *pending_exception = get_pending_exception();
     clear_pending_exception();
-    handle_exception(pending_exception, EX_CHECK_FULL);
+    handle_exception(pending_exception, EX_CHECK_FULL, saved_state);
 
     set_current_state(saved_state);
     builder()->SetInsertPoint(success);

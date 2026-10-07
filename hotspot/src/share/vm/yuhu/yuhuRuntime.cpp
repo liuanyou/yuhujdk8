@@ -373,31 +373,6 @@ JRT_ENTRY(void, YuhuRuntime::register_finalizer(JavaThread* thread,
   InstanceKlass::register_finalizer(instanceOop(object), CHECK);
 JRT_END
 
-JRT_ENTRY(int, YuhuRuntime::find_exception_handler(JavaThread* thread,
-                                                   Method*     caller_method,
-                                                   oop         exception,
-        int*        indexes,
-        int         num_indexes))
-    // Option A: caller passes Method* and the exception oop explicitly.
-    // The constant pool comes from the caller Method* (the JIT-compiled
-    // Yuhu method that threw / re-dispatched the exception).
-    constantPoolHandle pool(thread, caller_method->constants());
-    KlassHandle exc_klass(thread, exception->klass());
-
-    for (int i = 0; i < num_indexes; i++) {
-        Klass* tmp = pool->klass_at(indexes[i], CHECK_0);
-        KlassHandle chk_klass(thread, tmp);
-
-        if (exc_klass() == chk_klass())
-            return i;
-
-        if (exc_klass()->is_subtype_of(chk_klass()))
-            return i;
-    }
-
-    return -1;
-JRT_END
-
 // ------
 // current_time_millis - os::javaTimeMillis
 // ------
@@ -1700,7 +1675,6 @@ address YuhuRuntime::_multianewarray_stub = NULL;
 address YuhuRuntime::_monitorenter_stub = NULL;
 address YuhuRuntime::_monitorexit_stub = NULL;
 address YuhuRuntime::_register_finalizer_stub = NULL;
-address YuhuRuntime::_find_exception_handler_stub = NULL;
 address YuhuRuntime::_throw_ArithmeticException_stub = NULL;
 address YuhuRuntime::_throw_ArrayIndexOutOfBoundsException_stub = NULL;
 address YuhuRuntime::_throw_ClassCastException_stub = NULL;
@@ -1812,7 +1786,6 @@ void YuhuRuntime::initialize_vm_stubs() {
   _monitorenter_stub = generate_vm_stub("yuhu_monitorenter_stub", (address) YuhuRuntime::monitorenter);
   _monitorexit_stub = generate_vm_stub("yuhu_monitorexit_stub", (address) YuhuRuntime::monitorexit);
   _register_finalizer_stub = generate_vm_stub("yuhu_register_finalizer_stub", (address) YuhuRuntime::register_finalizer);
-  _find_exception_handler_stub = generate_vm_stub("yuhu_find_exception_handler_stub", (address) YuhuRuntime::find_exception_handler);
   _throw_ArithmeticException_stub = generate_vm_stub("yuhu_throw_ArithmeticException_stub", (address) YuhuRuntime::throw_ArithmeticException);
   _throw_ArrayIndexOutOfBoundsException_stub = generate_vm_stub("yuhu_throw_ArrayIndexOutOfBoundsException_stub", (address) YuhuRuntime::throw_ArrayIndexOutOfBoundsException);
   _throw_ClassCastException_stub = generate_vm_stub("yuhu_throw_ClassCastException_stub", (address) YuhuRuntime::throw_ClassCastException);
@@ -1832,7 +1805,6 @@ void YuhuRuntime::initialize_vm_stubs() {
     tty->print_cr("  monitorenter_stub:           " PTR_FORMAT,                  p2i(_monitorenter_stub));
     tty->print_cr("  monitorexit_stub:            " PTR_FORMAT,                  p2i(_monitorexit_stub));
     tty->print_cr("  register_finalizer_stub:     " PTR_FORMAT,                  p2i(_register_finalizer_stub));
-    tty->print_cr("  find_exception_handler_stub: " PTR_FORMAT,                  p2i(_find_exception_handler_stub));
     tty->print_cr("  throw_ArithmeticException_stub:    " PTR_FORMAT,            p2i(_throw_ArithmeticException_stub));
     tty->print_cr("  throw_ArrayIndexOutOfBoundsException_stub:    " PTR_FORMAT, p2i(_throw_ArrayIndexOutOfBoundsException_stub));
     tty->print_cr("  throw_ClassCastException_stub:    " PTR_FORMAT,             p2i(_throw_ClassCastException_stub));

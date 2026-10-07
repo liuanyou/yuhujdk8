@@ -277,14 +277,6 @@ Value* YuhuBuilder::make_function(address     func,
 
 // VM calls
 
-Value* YuhuBuilder::find_exception_handler() {
-  // Option A signature: (JavaThread*, Method*, oop, int*, int) -> int
-  // T = thread, K = Method* (metadata pointer), O = oop (exception),
-  // I = int* (cp index array), i = int (num_indexes)
-  return make_function(
-    YuhuRuntime::find_exception_handler_stub(), "TKOIi", "i");
-}
-
 Value* YuhuBuilder::monitorenter() {
   return make_function(YuhuRuntime::monitorenter_stub(), "TM", "v");
 }
@@ -1208,16 +1200,6 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   // metadata pointer type so callers see the same value type as before.
   return CreateIntToPtr(
     CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>()),
-    type,
-    name);
-}
-
-Value* YuhuBuilder::CreateInlineData(void*       data,
-                                      size_t      size,
-                                      llvm::Type* type,
-                                      const char* name) {
-  return CreateIntToPtr(
-    code_buffer_address(code_buffer()->inline_data(data, size)),
     type,
     name);
 }
