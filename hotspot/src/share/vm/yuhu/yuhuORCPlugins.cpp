@@ -295,9 +295,12 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                 auto Kind = Edge.getKind();
                 uint64_t target_addr = Edge.getTarget().getAddress().getValue();
                 auto section_name = Edge.getTarget().getSection().getName();
-                errs() << "Getting " << G.getEdgeKindName(Kind) << ", " << target_addr << ", " << section_name << " edge at "
-                       << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
-                       << formatv("{0:x}", Edge.getOffset()) << ")\n";
+                if (YuhuTraceMachineCode) {
+                    errs() << "Getting " << G.getEdgeKindName(Kind) << ", " << target_addr << ", " << section_name
+                           << " edge at "
+                           << Block->getFixupAddress(Edge) << " (" << Block->getAddress() << " + "
+                           << formatv("{0:x}", Edge.getOffset()) << ")\n";
+                }
 
                 int index = got_symbol_entries.find(&target_addr, [](void* token, const SymbolEntry entry) -> bool {
                     return *((uint64_t*)token) == entry.addr;
