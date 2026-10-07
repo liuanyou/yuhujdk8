@@ -1708,17 +1708,45 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
             assert(YuhuVirtualAddressScanner::is_adrp_got_pattern(edge_instr), "should be adrp got instructions");
             uint64_t function_address = *(uint64_t*)(edge->target_address);
-            bool new_adrp_patched = patch_new_adrp(edge_instr, function_address);
-            assert(new_adrp_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
+            if (recorder->contains_call_target(function_address)) {
+                bool new_adrp_patched = patch_new_adrp(edge_instr, function_address);
+                assert(new_adrp_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
-            RelocEntry reloc_entry{};
-            reloc_entry.offset = adapter_size + offset_in_func;
-            reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
-            reloc_entries.append(reloc_entry);
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = adapter_size + offset_in_func;
+                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                reloc_entries.append(reloc_entry);
+            } else {
+                auto const_symbol_entry = recorder->get_const_symbol_by_range_addr(function_address);
+                assert(const_symbol_entry != NULL, "Const symbol should exist");
+
+                address new_table_addr;
+                int idx = copied_const_srcs.find(const_symbol_entry->start);
+                if (idx >= 0) {
+                    new_table_addr = (address)copied_const_dsts.at(idx);
+                } else {
+                    new_table_addr = cb->consts()->end();
+                    size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
+                    memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
+                    cb->consts()->set_end(new_table_addr + symbol_size);
+                    copied_const_srcs.append(const_symbol_entry->start);
+                    copied_const_dsts.append((uint64_t)new_table_addr);
+                }
+
+                // get new function address with offset
+                address new_target_address = (function_address - const_symbol_entry->start) + new_table_addr;
+                bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
+                assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
+
+                RelocEntry reloc_entry{};
+                reloc_entry.offset = adapter_size + offset_in_func;
+                reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
+                reloc_entry.target = (uint64_t)new_target_address;
+                reloc_entries.append(reloc_entry);
+            }
         } else if (edge->edge_target_type == EdgeTargetType::const_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
-            assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(edge_instr) || YuhuVirtualAddressScanner::is_adrp_got_pattern(edge_instr),
-                   "should be direct or indirect jump table pattern");
+            assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(edge_instr), "should be direct jump table pattern");
 
             auto const_symbol_entry = recorder->get_const_symbol_by_range_addr(edge->target_address);
             assert(const_symbol_entry != NULL, "Const symbol should exist");

@@ -207,7 +207,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             uint64_t target_addr = Sym->getAddress().getValue();
             uint64_t function_address = *(uint64_t*)target_addr;
             assert(function_address != 0, "function address should be valid");
-            assert(recorder->contains_call_target(function_address), "addr should be call target");
+            assert(recorder->contains_call_target(function_address) || recorder->get_const_symbol_by_range_addr(function_address),
+                   "addr should be call target or const address");
 
             SymbolEntry entry{};
             entry.addr = target_addr;
@@ -243,7 +244,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                     errs() << "[CallSite Extractor] Sym: " << *(Sym->getName())
                            << ", address: " << Sym->getAddress().getValue()
                            << ", start: " << Sym->getRange().Start.getValue()
-                           << ", end: " << Sym->getRange().End.getValue() << "\n";
+                           << ", end: " << Sym->getRange().End.getValue()
+                           << ", section name: " << Section.getName() << "\n";;
 
                     Disassembler::decode((address)Sym->getRange().Start.getValue(), (address)Sym->getRange().End.getValue(), tty);
                 }
@@ -310,182 +312,6 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                     ShouldNotReachHere();
                 }
             }
-        }
-
-        // Iterate over all blocks in this section
-        for (auto *Block : Section.blocks()) {
-            // Get mutable content so we can patch it
-            auto Content = Block->getMutableContent(G);
-            uint64_t BaseAddr = Block->getAddress().getValue();
-            size_t Size = Block->getSize();
-
-            if (Size < 32) continue;  // Need at least 8 instructions for dual placeholders, 5 for last java pc and 3 for call target
-
-            if (!(BaseAddr >= found_func->getRange().Start.getValue() && (BaseAddr + Block->getSize()) <= found_func->getRange().End.getValue())) {
-                // Skip if block doesn't fall into the function code range
-                continue;
-            }
-
-            size_t block_offset = BaseAddr - found_func->getRange().Start.getValue();
-
-            uint8_t* CodeData = reinterpret_cast<uint8_t*>(Content.data());
-
-//            for (size_t offset = 0; offset + 4 <= Size; offset += 4) {
-//
-//                // Let's scan forward. Coz sometime llvm uses b instruction to jump to common machine code in order to share machine code for multiple call targets,
-//                // and blr instruction is not always right after movz/movk sequences.
-//                // Need 2 instructions at least.
-//                if (offset + 8 <= Size &&
-//                    (YuhuVirtualAddressScanner::is_call_site_with_call_target_marker_pattern((uint32_t*)(CodeData + offset)) ||
-//                    YuhuVirtualAddressScanner::is_call_site_without_call_target_marker_pattern((uint32_t*)(CodeData + offset)))) {
-//                    VirtualAddressMatch match;
-//
-//                    bool found = YuhuVirtualAddressScanner::scan_forwards_for_call_targets(
-//                            CodeData,
-//                            offset,
-//                            Size,
-//                            match);
-//
-//                    if (YuhuTraceMachineCode) {
-//                        errs() << "[CallSite Extractor] INFO: offset=" << format_hex(offset, 8)
-//                               << " , virtual_offset=" << match.virtual_offset
-//                               << " , last_java_pc_va=" << match.last_java_pc_va
-//                               << " , last_java_pc_placeholder_offset=" << match.last_java_pc_placeholder_offset
-//                               << " , call_target_va=" << match.call_target_va
-//                               << " , call_target_placeholder_offset=" << match.call_target_placeholder_offset
-//                               << " , call_target_blr_offset=" << match.call_target_blr_offset
-//                               << " , call_target_type=" << static_cast<uint64_t>(match.call_target_type) << "\n";
-//                    }
-//
-//                    if (found && match.call_target_va != 0) {
-//                        // vm call or java call has call_target_va
-//                        // Validate 1-1-1 relationship
-//                        assert(match.last_java_pc_va != 0 && match.call_target_va != 0, "both placeholder and call target should exist");
-//
-//                        // Extract virtual_offset and validate
-//                        uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
-//                        uint64_t ct_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_call_target(match.call_target_va);
-//
-//                        assert(ljpc_offset == ct_offset, "placeholder virtual offset should be the same as call target offset");
-//
-//                        uint64_t virtual_offset = ljpc_offset;
-//
-//                        // Calculate actual offsets for patching
-//                        // The return address is the instruction AFTER the bl
-//                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
-//                        uint64_t return_pc_offset = match.call_target_blr_offset + 4;
-//
-//                        // Look up the actual helper address from virtual_offset mapping
-//                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset);
-//                        assert(helper_addr != 0, "helper address should be valid address");
-//                        if (helper_addr == 0) {
-//                            if (YuhuTraceMachineCode) {
-//                                errs() << "[CallSite Extractor] ERROR: No helper address for virtual_offset "
-//                                       << virtual_offset << "\n";
-//                            }
-//                            continue;
-//                        }
-//
-//                        // update return_pc_offset by virtual_offsets
-//                        YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets(virtual_offset,
-//                                                                                                   block_offset + return_pc_offset,
-//                                                                                                   block_offset + match.call_target_blr_offset,
-//                                                                                                   block_offset + match.call_target_placeholder_offset);
-//
-//                        if (YuhuTraceMachineCode) {
-//                            errs() << "  [OK] Updated machine code offsets with: virtual_offset=" << virtual_offset
-//                                    << " , return_pc_offset=" << block_offset + return_pc_offset
-//                                    << " , blr_offset=" << block_offset + match.call_target_blr_offset
-//                                    << " , call_target_offset=" << block_offset + match.call_target_placeholder_offset << "\n";
-//                        }
-//
-//                        YuhuVirtualAddressScanner::patch_call_target_instructions(CodeData, match.call_target_placeholder_offset,
-//                                                                                  YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset(virtual_offset));
-//
-//                        if (YuhuTraceMachineCode) {
-//                            errs() << "  [OK] Patched call_target with helper: " << format_hex(helper_addr, 16) << "\n";
-//                        }
-//                    } else if (found && match.call_target_type == CallTargetType::deopt) {
-//                        assert(match.last_java_pc_va != 0, "placeholder should exist");
-//                        uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
-//                        uint64_t virtual_offset = ljpc_offset;
-//
-//                        // Calculate actual offsets for patching
-//                        // The return address is the instruction AFTER the bl
-//                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
-//                        uint64_t return_pc_offset = match.call_target_blr_offset + 4;
-//
-//                        // Look up the actual helper address from virtual_offset mapping
-//                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-//                        assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
-//
-//                        // update return_pc_offset by virtual_offsets
-//                        YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets((int) virtual_offset,
-//                                                                                                   block_offset + return_pc_offset,
-//                                                                                                   block_offset + match.call_target_blr_offset,
-//                                                                                                   block_offset + match.call_target_placeholder_offset);
-//
-//                        if (YuhuTraceMachineCode) {
-//                            errs() << "  [OK] Updated machine code offsets with: virtual_offset=" << virtual_offset
-//                                   << " , return_pc_offset=" << block_offset + return_pc_offset
-//                                   << " , blr_offset=" << block_offset + match.call_target_blr_offset
-//                                   << " , call_target_offset=" << block_offset + match.call_target_placeholder_offset << "\n";
-//                        }
-//                    } else if (found) {
-//                        // The third scenario: not sure if this could happen that two deoptimization calls share the same adrp instructions,
-//                        // and here
-//                        // we are catching the second deoptimization call. We don't expect the very rare scenario that three deoptimization
-//                        // calls share the same adrp instructions.
-//                        assert(match.last_java_pc_va != 0, "placeholder should exist");
-//                        uint64_t ljpc_offset = YuhuVirtualAddressScanner::extract_virtual_offset_from_virtual_last_java_pc(match.last_java_pc_va);
-//                        uint64_t virtual_offset = ljpc_offset;
-//
-//                        uint64_t helper_addr = YuhuDebugInformationRecorder::get()->get_call_site_helper_address_by_offset((int)virtual_offset);
-//                        assert(helper_addr == (uint64_t)&handle_deoptimization, "helper address should be deoptimization call");
-//
-//                        assert(match.call_target_blr_offset != 0, "blr offset should exist");
-//                        uint64_t return_pc_offset = match.call_target_blr_offset + 4;
-//                        YuhuDebugInformationRecorder::get()->update_call_site_machine_code_offsets((int) virtual_offset,
-//                                                                                                   block_offset + return_pc_offset,
-//                                                                                                   block_offset + match.call_target_blr_offset);
-//
-//                        if (YuhuTraceMachineCode) {
-//                            errs() << "  [OK] Updated machine code offsets with: virtual_offset=" << virtual_offset
-//                                   << " , return_pc_offset=" << block_offset + return_pc_offset
-//                                   << " , blr_offset=" << block_offset + match.call_target_blr_offset << "\n";
-//                        }
-//                    }
-//                } else if (YuhuVirtualAddressScanner::is_adrp_jump_table_pattern((uint32_t *) (CodeData + offset))) {
-//                    uint32_t* instr = (uint32_t *) (CodeData + offset);
-//                    int64_t page_offset = YuhuVirtualAddressScanner::extract_page_offset(instr);
-//                    uint64_t pc_page = ((uint64_t)instr) & ~0xFFFULL;
-//                    uint64_t target_page = pc_page + page_offset;
-//
-//                    uint32_t imm12 = (instr[1] >> 10) & 0xFFF;
-//                    uint64_t target_address = target_page + imm12;
-//                    assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(target_address) != NULL, "Jump table should exist");
-//                } else if (YuhuVirtualAddressScanner::is_adrp_got_pattern((uint32_t *) (CodeData + offset))) {
-//                    uint32_t* instr = (uint32_t *) (CodeData + offset);
-//                    // Locate target page
-//                    int64_t page_offset = YuhuVirtualAddressScanner::extract_page_offset(instr);
-//                    uint64_t pc_page = ((uint64_t)instr) & ~0xFFFULL;
-//                    uint64_t target_page = pc_page + page_offset;
-//
-//                    uint32_t imm12 = (instr[1] >> 10) & 0xFFF;
-//                    uint64_t offset_within_page = imm12 << 3;
-//
-//                    uint64_t target_address = target_page + offset_within_page;
-//
-//                    uint64_t function_address = *(uint64_t*)target_address;
-//
-//                    if (function_address != (uint64_t)&handle_deoptimization) {
-//                        // if it is not deopt call, then it must be indirect jump table
-//                        assert(YuhuDebugInformationRecorder::get()->get_const_symbol_by_range_addr(function_address) != NULL, "Should be indirect jump table");
-//                    }
-//                } else if (YuhuVirtualAddressScanner::is_unknown_adrp_pattern((uint32_t *) (CodeData + offset))) {
-//                    ShouldNotReachHere();
-//                }
-//            }
         }
     }
 
