@@ -2286,192 +2286,41 @@ void YuhuTopLevelBlock::do_monitorexit() {
   release_lock(EX_CHECK_NO_CATCH);
 }
 
+// Correctness-first implementation: always drop into the runtime for both
+// monitorenter and monitorexit. The runtime's ObjectSynchronizer::fast_enter
+// and ObjectSynchronizer::fast_exit already implement the inline biased-lock
+// check, thin-lock CAS, recursive-owner detection (including HotSpot's
+// monitor_chunks walk) and inflation. Duplicating a narrower version of that
+// fast path in Yuhu's IR caused semantic divergence with HotSpot (e.g.,
+// Yuhu's inline is_lock_owned check only tested the raw stack range, while
+// JavaThread::is_lock_owned additionally walks monitor_chunks) and produced
+// "must not re-lock the same lock" assertion failures under class loading.
+// Performance can be recovered later with a correct inline fast path.
 void YuhuTopLevelBlock::acquire_lock(Value *lockee, int exception_action) {
-  BasicBlock *try_recursive = function()->CreateBlock("try_recursive");
-  BasicBlock *got_recursive = function()->CreateBlock("got_recursive");
-  BasicBlock *not_recursive = function()->CreateBlock("not_recursive");
-  BasicBlock *acquired_fast = function()->CreateBlock("acquired_fast");
-  BasicBlock *lock_acquired = function()->CreateBlock("lock_acquired");
-
   int monitor = num_monitors();
   Value *monitor_addr        = stack()->monitor_addr(monitor);
   Value *monitor_object_addr = stack()->monitor_object_addr(monitor);
-  Value *monitor_header_addr = stack()->monitor_header_addr(monitor);
 
-  // Store the object and mark the slot as live
+  // Store the object into the BasicObjectLock slot so the runtime's
+  // YuhuRuntime::monitorenter can read it back via lock->obj().
   builder()->CreateStore(lockee, monitor_object_addr);
   set_num_monitors(monitor + 1);
 
-  // Try a simple lock
-  Value *mark_addr = builder()->CreateAddressOfStructEntry(
-    lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),
-    PointerType::getUnqual(YuhuType::intptr_type()),
-    "mark_addr");
-
-  Value *mark = builder()->CreateLoad(YuhuType::intptr_type(), mark_addr, "mark");
-  // Unlike c1's biased_locking_enter is doing biased lock, yuhu doesn't implement
-  // the same in IR, it relies on runtime monitorenter method to do biased lock,
-  // it is losing performance, but it makes IR easier.
-  // Neutralize displaced header: clear biased lock bits, then set unlocked bit.
-  // This ensures the displaced header stored in BasicLock is always neutral,
-  // so move_to() correctly calls inflate_helper() during deoptimization.
-  Value *disp = builder()->CreateOr(
-    builder()->CreateAnd(mark, LLVMValue::intptr_constant(~markOopDesc::biased_lock_mask_in_place)),
-    LLVMValue::intptr_constant(markOopDesc::unlocked_value),
-    "disp");
-  builder()->CreateStore(disp, monitor_header_addr);
-
-  Value *lock = builder()->CreatePtrToInt(
-    monitor_header_addr, YuhuType::intptr_type());
-  // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
-#if LLVM_VERSION_MAJOR >= 20
-  Value *check = builder()->CreateAtomicCmpXchg(
-    mark_addr, disp, lock,
-    llvm::MaybeAlign(HeapWordSize),  // Alignment
-    llvm::AtomicOrdering::Acquire,  // Success ordering
-    llvm::AtomicOrdering::Acquire);  // Failure ordering
-#else
-  Value *check = builder()->CreateAtomicCmpXchg(mark_addr, disp, lock, llvm::AtomicOrdering::Acquire);
-#endif
-    Value *success = builder()->CreateExtractValue(check, 1);
-    builder()->CreateCondBr(success, acquired_fast, try_recursive);
-
-  // Locking failed, but maybe this thread already owns it
-  builder()->SetInsertPoint(try_recursive);
-  Value *addr = builder()->CreateAnd(
-    disp,
-    LLVMValue::intptr_constant(~markOopDesc::lock_mask_in_place));
-
-  // NB we use the entire stack, but JavaThread::is_lock_owned()
-  // uses a more limited range.  I don't think it hurts though...
-  Value *stack_limit = builder()->CreateValueOfStructEntry(
-    thread(), Thread::stack_base_offset(),
-    YuhuType::intptr_type(),
-    "stack_limit");
-
-  assert(sizeof(size_t) == sizeof(intptr_t), "should be");
-  Value *stack_size = builder()->CreateValueOfStructEntry(
-    thread(), Thread::stack_size_offset(),
-    YuhuType::intptr_type(),
-    "stack_size");
-
-  Value *stack_start =
-    builder()->CreateSub(stack_limit, stack_size, "stack_start");
-
-  builder()->CreateCondBr(
-    builder()->CreateAnd(
-      builder()->CreateICmpUGE(addr, stack_start),
-      builder()->CreateICmpULT(addr, stack_limit)),
-    got_recursive, not_recursive);
-
-  builder()->SetInsertPoint(got_recursive);
-  builder()->CreateStore(LLVMValue::intptr_constant(0), monitor_header_addr);
-  builder()->CreateBr(acquired_fast);
-
-  // Create an edge for the state merge
-  builder()->SetInsertPoint(acquired_fast);
-  YuhuState *fast_state = current_state()->copy();
-  builder()->CreateBr(lock_acquired);
-
-  // It's not a recursive case so we need to drop into the runtime
-  builder()->SetInsertPoint(not_recursive);
+  // Always go through the runtime stub; no inline fast path here.
   call_vm(
     builder()->monitorenter(), monitor_addr,
     exception_action | EAM_MONITOR_FUDGE);
-  BasicBlock *acquired_slow = builder()->GetInsertBlock();
-  builder()->CreateBr(lock_acquired);
-
-  // All done
-  builder()->SetInsertPoint(lock_acquired);
-  current_state()->merge(fast_state, acquired_fast, acquired_slow);
 }
 
 void YuhuTopLevelBlock::release_lock(int exception_action) {
-  BasicBlock *not_recursive = function()->CreateBlock("not_recursive");
-  BasicBlock *try_thin_unlock = function()->CreateBlock("try_thin_unlock");
-  BasicBlock *released_fast = function()->CreateBlock("released_fast");
-  BasicBlock *slow_path     = function()->CreateBlock("slow_path");
-  BasicBlock *lock_released = function()->CreateBlock("lock_released");
-
   int monitor = num_monitors() - 1;
-  Value *monitor_addr        = stack()->monitor_addr(monitor);
-  Value *monitor_object_addr = stack()->monitor_object_addr(monitor);
-  Value *monitor_header_addr = stack()->monitor_header_addr(monitor);
+  Value *monitor_addr = stack()->monitor_addr(monitor);
 
-  Value *lockee = builder()->CreateLoad(YuhuType::oop_addrspace1_type(), monitor_object_addr);
-
-  // Handle biased locking: if object is still biased, unlock is a no-op
-  if (UseBiasedLocking) {
-    BasicBlock *check_bias = function()->CreateBlock("check_bias");
-    builder()->CreateBr(check_bias);
-    builder()->SetInsertPoint(check_bias);
-
-    Value *mark_addr = builder()->CreateAddressOfStructEntry(
-      lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),
-      PointerType::getUnqual(YuhuType::intptr_type()),
-      "mark_addr");
-
-    Value *mark = builder()->CreateLoad(YuhuType::intptr_type(), mark_addr, "mark");
-    Value *bias_bits = builder()->CreateAnd(
-      mark, LLVMValue::intptr_constant(markOopDesc::biased_lock_mask_in_place), "bias_bits");
-    Value *is_biased = builder()->CreateICmpEQ(
-      bias_bits, LLVMValue::intptr_constant(markOopDesc::biased_lock_pattern), "is_biased");
-    builder()->CreateCondBr(is_biased, released_fast, not_recursive);
-  } else {
-    builder()->CreateBr(not_recursive);
-  }
-
-  // If it is recursive then we're already done
-  builder()->SetInsertPoint(not_recursive);
-  Value *disp = builder()->CreateLoad(YuhuType::intptr_type(), monitor_header_addr);
-  builder()->CreateCondBr(
-    builder()->CreateICmpEQ(disp, LLVMValue::intptr_constant(0)),
-    released_fast, try_thin_unlock);
-
-  // Try a simple unlock
-  builder()->SetInsertPoint(try_thin_unlock);
-  Value *lock = builder()->CreatePtrToInt(
-    monitor_header_addr, YuhuType::intptr_type());
-
-  Value *mark_addr = builder()->CreateAddressOfStructEntry(
-    lockee, in_ByteSize(oopDesc::mark_offset_in_bytes()),
-    PointerType::getUnqual(YuhuType::intptr_type()),
-    "mark_addr");
-
-  // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
-#if LLVM_VERSION_MAJOR >= 20
-    // successOrdering	        allowedFailureOrdering
-    // Monotonic	            Monotonic
-    // Acquire	                Monotonic, Acquire
-    // Release	                Monotonic（only this one）
-    // AcquireRelease	        Monotonic, Acquire
-    // SequentiallyConsistent	Monotonic, Acquire, SequentiallyConsistent
-  Value *check = builder()->CreateAtomicCmpXchg(
-    mark_addr, lock, disp,
-    llvm::MaybeAlign(HeapWordSize),  // Alignment
-    llvm::AtomicOrdering::Release,  // Success ordering
-    llvm::AtomicOrdering::Monotonic);  // Failure ordering
-#else
-  Value *check = builder()->CreateAtomicCmpXchg(mark_addr, lock, disp, llvm::AtomicOrdering::Release);
-#endif
-    Value *success = builder()->CreateExtractValue(check, 1);
-    builder()->CreateCondBr(success, released_fast, slow_path);
-
-  // Create an edge for the state merge
-  builder()->SetInsertPoint(released_fast);
-  YuhuState *fast_state = current_state()->copy();
-  builder()->CreateBr(lock_released);
-
-  // Need to drop into the runtime to release this one
-  builder()->SetInsertPoint(slow_path);
-  call_vm(builder()->monitorexit(), monitor_addr, exception_action);
-  BasicBlock *released_slow = builder()->GetInsertBlock();
-  builder()->CreateBr(lock_released);
-
-  // All done
-  builder()->SetInsertPoint(lock_released);
-  current_state()->merge(fast_state, released_fast, released_slow);
-
-  // The object slot is now dead
+  // Always go through the runtime stub. ObjectSynchronizer::fast_exit
+  // handles the biased-lock case, the displaced-header==0 recursive case,
+  // the thin-lock CAS, and inflation internally.
+  // The object slot is now dead -- decrement before the call so the
+  // exception action's monitor-fudge bookkeeping stays consistent.
   set_num_monitors(monitor);
+  call_vm(builder()->monitorexit(), monitor_addr, exception_action);
 }

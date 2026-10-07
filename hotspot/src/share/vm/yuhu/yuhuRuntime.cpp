@@ -67,6 +67,27 @@ static void yuhu_stack_map_log_init() {
         } \
     } while(0)
 
+// File-based logging for YuhuRuntime monitor tracing.
+// Fixed path so the trace can always be captured without needing an extra
+// VM flag; the write is a small fprintf + fflush, negligible next to the
+// runtime-call cost of the enter/exit stubs themselves. Kept separate from
+// the stack-map log so the hot enter/exit stream does not interleave with
+// compiler-side trace lines.
+static FILE* yuhu_monitor_log = NULL;
+static void yuhu_monitor_log_init() {
+    if (yuhu_monitor_log == NULL) {
+        yuhu_monitor_log = fopen("/tmp/yuhu_monitor.log", "a");
+    }
+}
+#define YUHU_MONITOR_LOG(fmt, ...) \
+    do { \
+        yuhu_monitor_log_init(); \
+        if (yuhu_monitor_log) { \
+            fprintf(yuhu_monitor_log, fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_monitor_log); \
+        } \
+    } while(0)
+
 JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, Klass* k_oop))
   // Option A: JIT passes resolved Klass* directly (embedded as a
   // metadata-relocated constant in the nmethod). No frame walk needed.
@@ -127,11 +148,136 @@ JRT_ENTRY(void, YuhuRuntime::monitorenter(JavaThread*      thread,
 
     Handle object(thread, lock->obj());
     assert(Universe::heap()->is_in_reserved_or_null(object()), "should be");
+
+    // ----- monitor-trace: pre-enter snapshot ------------------------------------
+    // Purpose: catch the exact state that would make ObjectSynchronizer::slow_enter
+    // hit "assert(lock != mark->locker(), 'must not re-lock the same lock')". That
+    // assert fires iff (a) the object's mark word is a thin-lock (low 2 bits == 00)
+    // pointing at some BasicLock, (b) that BasicLock is on this thread's stack,
+    // and (c) the BasicLock is at exactly the same address as the one we are
+    // passing in as `lock`. We log all three signals here so a single line in
+    // the trace shows whether this call is about to trip the assert.
+    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+        ResourceMark rm;
+        char buf[512];
+        markOop   pre     = object()->mark();
+        BasicLock* blk    = lock->lock();
+        uintptr_t mv      = p2i(pre);
+        address   locker  = pre->has_locker() ? (address)pre->locker() : (address)NULL;
+        address   stk_lo  = (address)thread->stack_base() - thread->stack_size();
+        address   stk_hi  = (address)thread->stack_base();
+        address   sp      = (address)thread->last_Java_sp();
+        const char* cls   = object()->klass()->external_name();
+        int n = snprintf(buf, sizeof(buf),
+                         "[yuhu-enter ] t=%p tid=%d obj=%p cls=%s lock=%p mon=%p "
+                         "mark=0x%016lx state=%s",
+                         (void*)thread,
+                         thread->osthread() ? thread->osthread()->thread_id() : -1,
+                         (void*)object(),
+                         cls ? cls : "?",
+                         (void*)blk, (void*)lock, mv,
+                         pre->has_bias_pattern() ? "BIASED" :
+                         pre->has_locker()       ? "THIN"   :
+                         pre->has_monitor()      ? "FAT"    :
+                         pre->is_neutral()       ? "NEUTRAL":
+                                                   "OTHER");
+        if (pre->has_locker() && n < (int)sizeof(buf)) {
+            n += snprintf(buf + n, sizeof(buf) - n,
+                          " locker=%p on_stack=%s same_as_lock=%s%s",
+                          (void*)locker,
+                          (locker >= stk_lo && locker < stk_hi) ? "yes" : "no",
+                          locker == (address)blk ? "YES" : "no",
+                          (locker == (address)blk) ? " <<< WILL FIRE must-not-re-lock ASSERT"
+                                                   : "");
+        }
+        if (pre->has_bias_pattern() && n < (int)sizeof(buf)) {
+            n += snprintf(buf + n, sizeof(buf) - n,
+                          " bias_epoch=%d biased_locker=%p self=%p %s",
+                          pre->bias_epoch(),
+                          (void*)pre->biased_locker(),
+                          (void*)thread,
+                          pre->biased_locker() == thread ? "biased-to-self" :
+                          pre->biased_locker() == NULL   ? "anonymous-bias" :
+                                                           "biased-to-OTHER");
+        }
+        if (n < (int)sizeof(buf)) {
+            snprintf(buf + n, sizeof(buf) - n,
+                     " stack=[%p,%p) sp=%p", (void*)stk_lo, (void*)stk_hi, (void*)sp);
+        }
+        YUHU_MONITOR_LOG("%s", buf);
+    }
+
+    // ----- biased fast path: self-biased with current epoch ---------------------
+    // Mirrors MacroAssembler::biased_locking_enter's inline check (see
+    // macroAssembler_aarch64.cpp:439-449). If the object is already biased
+    // toward the current thread with a valid epoch, the enter is a no-op: the
+    // mark word stays biased-to-self and we must NOT write displaced_header.
+    // The matching exit is handled by YuhuRuntime::monitorexit's biased
+    // short-circuit (added earlier).
+    //
+    // Without this fast path, falling into ObjectSynchronizer::fast_enter for
+    // a self-biased object triggers BiasedLocking::revoke_and_rebias's
+    // HR_SINGLE_REVOKE branch (biasedLocking.cpp:595-613), which walks this
+    // thread's stack via get_or_compute_monitor_info(). Because Yuhu's
+    // acquire_lock pre-stores lockee into monitor_object_addr before calling
+    // this stub, the walker sees our current slot as the "holder", transfers
+    // the bias into a thin lock at THIS EXACT BasicLock address
+    // (biasedLocking.cpp:232-237), and returns BIAS_REVOKED. fast_enter then
+    // falls through to slow_enter, whose CAS re-reads the mark word, sees
+    // THIN with locker == our BasicLock, and hits:
+    //     assert(lock != mark->locker(), "must not re-lock the same lock")
+    // at synchronizer.cpp:240. This is what caused the pid39843 / pid61732 /
+    // pid61839 / pid79304 / pid83731 crashes.
+    if (UseBiasedLocking) {
+        markOop m     = object()->mark();
+        markOop proto = object()->klass()->prototype_header();
+        // Guard order mirrors BiasedLocking::revoke_and_rebias: biasedLocking.cpp:551
+        // checks prototype->has_bias_pattern() BEFORE any bias_epoch() comparison,
+        // because BiasedLocking bulk-revoke clears the bias pattern from the klass
+        // prototype without walking the heap. Stale self-biased object marks then
+        // still satisfy m->has_bias_pattern(), and calling proto->bias_epoch() on
+        // the now-unbiased prototype aborts markOopDesc::bias_epoch()'s own
+        // assert(has_bias_pattern()) at markOop.hpp:197 (pid98635 crash). And
+        // semantically, when the class is no longer biasable the mark represents
+        // no real lock, so we must fall through to fast_enter, which CAS-revokes
+        // the stale bias (biasedLocking.cpp:551-561) and returns BIAS_REVOKED
+        // without a stack walk.
+        if (m->has_bias_pattern() &&
+            proto->has_bias_pattern() &&
+            m->biased_locker() == thread &&
+            m->bias_epoch() == proto->bias_epoch()) {
+            YUHU_MONITOR_LOG("[yuhu-enter+] t=%p obj=%p BIASED-HIT (returned early, epoch=%d matches)",
+                             (void*)thread, (void*)object(), m->bias_epoch());
+            return;
+        }
+    }
+
     if (UseBiasedLocking) {
         // Retry fast entry if bias is revoked to avoid unnecessary inflation
         ObjectSynchronizer::fast_enter(object, lock->lock(), true, CHECK);
     } else {
         ObjectSynchronizer::slow_enter(object, lock->lock(), CHECK);
+    }
+
+    // ----- monitor-trace: post-enter snapshot -----------------------------------
+    // The post-mark tells us which path was actually taken: BIASED after enter
+    // means fast_enter returned via BIAS_REVOKED_AND_REBIASED and did NOT touch
+    // lock->displaced_header() (so dhw on the BasicLock slot is uninitialised
+    // garbage from the frame stack). THIN means the CAS ran and displaced_header
+    // was written with the pre-enter mark. FAT means we inflated.
+    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+        markOop   post = object()->mark();
+        BasicLock* blk = lock->lock();
+        YUHU_MONITOR_LOG("[yuhu-enter+] t=%p obj=%p post-mark=0x%016lx post-state=%s dhw=0x%016lx",
+                           (void*)thread,
+                           (void*)object(),
+                           p2i(post),
+                           post->has_bias_pattern() ? "BIASED" :
+                           post->has_locker()       ? "THIN"   :
+                           post->has_monitor()      ? "FAT"    :
+                           post->is_neutral()       ? "NEUTRAL":
+                                                      "OTHER",
+                           p2i(blk->displaced_header()));
     }
     assert(Universe::heap()->is_in_reserved_or_null(lock->obj()), "should be");
 JRT_END
@@ -143,7 +289,77 @@ JRT_ENTRY(void, YuhuRuntime::monitorexit(JavaThread*      thread,
     if (lock == NULL || object()->is_unlocked()) {
         THROW(vmSymbols::java_lang_IllegalMonitorStateException());
     }
-    ObjectSynchronizer::slow_exit(object(), lock->lock(), thread);
+
+    // ----- monitor-trace: pre-exit snapshot -------------------------------------
+    // The critical field is dhw (displaced_header). A legitimate exit from a
+    // THIN-locked state must have dhw set to the mark that slow_enter stashed
+    // (nonzero, neutral). If dhw is 0, this was a recursive enter (slow_enter
+    // line 243 wrote NULL). If dhw looks like garbage, either fast_enter took
+    // the biased short-circuit AND a safepoint revoked the bias in between
+    // (so slow_enter never ran to set dhw), or the frame's BasicLock slot was
+    // reused by an activation whose enter-side never wrote it.
+    markOop   pre_exit = object()->mark();
+    BasicLock* blk     = lock->lock();
+    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+        char buf[512];
+        uintptr_t mv     = p2i(pre_exit);
+        markOop   dhw    = blk->displaced_header();
+        address   locker = pre_exit->has_locker() ? (address)pre_exit->locker() : (address)NULL;
+        int n = snprintf(buf, sizeof(buf),
+                         "[yuhu-exit  ] t=%p tid=%d obj=%p lock=%p mon=%p "
+                         "mark=0x%016lx state=%s",
+                         (void*)thread,
+                         thread->osthread() ? thread->osthread()->thread_id() : -1,
+                         (void*)object(),
+                         (void*)blk, (void*)lock, mv,
+                         pre_exit->has_bias_pattern() ? "BIASED" :
+                         pre_exit->has_locker()       ? "THIN"   :
+                         pre_exit->has_monitor()      ? "FAT"    :
+                         pre_exit->is_neutral()       ? "NEUTRAL":
+                                                        "OTHER");
+        if (pre_exit->has_locker() && n < (int)sizeof(buf)) {
+            snprintf(buf + n, sizeof(buf) - n,
+                     " locker=%p same_as_lock=%s dhw=0x%016lx dhw_null=%s dhw_neutral=%s",
+                     (void*)locker,
+                     locker == (address)blk ? "yes" : "NO <<<",
+                     p2i(dhw),
+                     dhw == NULL ? "yes(recursive)" : "no",
+                     (dhw != NULL && dhw->is_neutral()) ? "yes" : "NO(garbage?)");
+        }
+        YUHU_MONITOR_LOG("%s", buf);
+    }
+
+    // Mirrors MacroAssembler::biased_locking_exit (see macroAssembler_aarch64.cpp):
+    // if the object is still biased when monitorexit runs, releasing the lock
+    // is a no-op -- the bias will be revoked at the next safepoint if needed.
+    // Falling through to ObjectSynchronizer::fast_exit here would trip its
+    // "assert(!object->mark()->has_bias_pattern(), should not see bias pattern here)".
+    // We do NOT need to check the bias owner thread id, for the same reasons
+    // spelled out in biased_locking_exit's comment: (a) IMS is checked at a
+    // higher level, and (b) if the bias was revoked while we held the lock,
+    // the object could not be rebiased toward another thread, so the bias
+    // bit would already be clear.
+    if (UseBiasedLocking && pre_exit->has_bias_pattern()) {
+        { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+            YUHU_MONITOR_LOG("[yuhu-exit+] t=%p obj=%p BIASED-NOOP (returned early)",
+                               (void*)thread, (void*)object());
+        }
+        return;
+    }
+    ObjectSynchronizer::slow_exit(object(), blk, thread);
+
+    { // monitor-trace block (unconditional; writes to /tmp/yuhu_monitor.log)
+        markOop   post = object()->mark();
+        YUHU_MONITOR_LOG("[yuhu-exit+] t=%p obj=%p post-mark=0x%016lx post-state=%s",
+                           (void*)thread,
+                           (void*)object(),
+                           p2i(post),
+                           post->has_bias_pattern() ? "BIASED" :
+                           post->has_locker()       ? "THIN"   :
+                           post->has_monitor()      ? "FAT"    :
+                           post->is_neutral()       ? "NEUTRAL":
+                                                      "OTHER");
+    }
 JRT_END
 
 JRT_ENTRY(void, YuhuRuntime::register_finalizer(JavaThread* thread,
