@@ -171,47 +171,6 @@ class YuhuVirtualAddressScanner : public AllStatic {
         return (inst & BLR_MASK) == BLR_PATTERN;
     }
 
-    // oop_relocation related functions
-    // Helper function to check if instruction sequence matches marker pattern
-    static bool is_oop_marker_pattern(uint32_t* instr) {
-        // Check instruction encoding (little-endian):
-        // [0] mov w19, #0xCAFE       → 0x52995FD3
-        // [1] movk w19, #0xBABE, lsl #16 → 0x72B757D3
-        // [2] mov w20, #imm16        → 0x528xxxxxB4 (bits 5-20 contain imm16)
-        // [3] nop                    → 0xD503201F
-        // [4] nop                    → 0xD503201F
-
-        if (instr[0] == 0x52995FD3 &&  // mov w19, #0xCAFE
-            instr[1] == 0x72B757D3 &&  // movk w19, #0xBABE, lsl #16
-            (instr[3] & 0xFFFFFFF0) == 0xD5032010 &&  // nop (allow low 4 bits variation)
-            (instr[4] & 0xFFFFFFF0) == 0xD5032010) {  // nop
-            return true;
-        }
-        return false;
-    };
-
-    // Helper function to check if 3 instructions form a mov/movk sequence
-    static bool is_mov_movk_sequence(uint32_t* instr) {
-        // Check for mov/movk sequence (C1 compatible format):
-        // [0] mov xN, #imm16         → 0xD28xxxxx (bit 31-23 = 0b110100101)
-        // [1] movk xN, #imm16, lsl #16 → 0xF2Axxxxx (bit 31-23 = 0b1111001010)
-        // [2] movk xN, #imm16, lsl #32 → 0xF2Cxxxxx (bit 31-23 = 0b1111001011)
-
-        // All must be AArch64 mov/movk immediate instructions
-        if ((instr[0] & 0xFF800000) != 0xD2800000 ||  // mov xN, #imm16
-            (instr[1] & 0xFFE00000) != 0xF2A00000 ||  // movk xN, #imm16, lsl #16
-            (instr[2] & 0xFFE00000) != 0xF2C00000) {  // movk xN, #imm16, lsl #32
-            return false;
-        }
-
-        // Verify all 3 instructions use the same destination register
-        int rd0 = instr[0] & 0x1F;  // bits 4-0
-        int rd1 = instr[1] & 0x1F;
-        int rd2 = instr[2] & 0x1F;
-
-        return (rd0 == rd1 && rd1 == rd2);
-    };
-
     // Helper function to extract oop_id from marker
     static int extract_mov_imm16(uint32_t* instr) {
         // Extract imm16 from: mov w19, #imm16

@@ -250,12 +250,6 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   // Helpers for accessing the code buffer.
  public:
   llvm::Value* code_buffer_address(int offset);
-  
-  // Pending oop management for deferred oop_index allocation
-  // See: Defer oop_index allocation to relocation phase using pending-oop registry
- private:
-  GrowableArray<jobject>* _pending_oops;  // Indexed by oop_id
-  int _next_oop_id;                       // Next unique oop_id to assign
 
   public:
   llvm::Value* CreateInlineOop(ciObject* object, const char* name = "");

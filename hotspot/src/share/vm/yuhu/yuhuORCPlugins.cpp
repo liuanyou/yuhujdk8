@@ -279,6 +279,10 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                         // patch to unwind handler, should do it in YuhuBuilder::scan_and_generate_all_relocations
                     } else if (call_site_type == CallSiteType::metadata_call) {
                         // patch to metadata address, should do it in YuhuBuilder::scan_and_generate_all_relocations
+                    } else if (call_site_type == CallSiteType::oop_call) {
+                        // patch to oop address, should do it in YuhuBuilder::scan_and_generate_all_relocations
+                    } else {
+                        ShouldNotReachHere();
                     }
                 }
             }

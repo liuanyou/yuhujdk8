@@ -70,7 +70,7 @@ public:
     uint64_t statepoint_id;
     uint32_t reserved_bytes = 0;
     uint64_t call_site_statepoint_id = 0;
-
+    jobject oop = NULL;
 };
 
 class SymbolEntry : public ResourceObj {
@@ -274,6 +274,20 @@ public:
       return _call_site_entries->at(index)->call_site_type;
   }
 
+  CallSiteType get_call_site_type_by_patchpoint_statepoint_id(uint64_t patchpoint_statepoint_id) const {
+      if (!_patchpoint_entries) return CallSiteType::none;
+      if (!_call_site_entries) return CallSiteType::none;
+      int patchpoint_index = _patchpoint_entries->find(&patchpoint_statepoint_id, [](void* token, PatchPointEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->statepoint_id;
+      });
+      if (patchpoint_index == -1) return CallSiteType::none;
+      int index = _call_site_entries->find(&(_patchpoint_entries->at(patchpoint_index)->call_site_statepoint_id), [](void* token, CallSiteEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->statepoint_id;
+      });
+      if (index == -1) return CallSiteType::none;
+      return _call_site_entries->at(index)->call_site_type;
+    }
+
   // Full entry lookup, for call sites whose payload lives in the entry itself
   // (e.g. a metadata patch point, whose Metadata* is recorded as call_target).
   CallSiteEntry* get_call_site_by_statepoint_id(uint64_t statepoint_id) const {
@@ -325,7 +339,7 @@ public:
 
   void register_deopt_bundle_expression_stack_data(uint64_t statepoint_id, uint8_t basic_type);
 
-  void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id);
+  void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj = NULL);
 
   void register_const_symbol(uint64_t address, uint64_t start, uint64_t end);
 

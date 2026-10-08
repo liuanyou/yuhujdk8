@@ -279,7 +279,7 @@ void YuhuDebugInformationRecorder::register_deopt_bundle_expression_stack_data(u
     bundle->expression_stacks->append(basic_type);
 }
 
-void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id) {
+void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj) {
     int index = _patchpoint_entries->find(&statepoint_id, [](void* token, PatchPointEntry* entry) -> bool {
         return *((uint64_t*)token) == entry->statepoint_id;
     });
@@ -291,6 +291,7 @@ void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, 
     patch_point_entry->statepoint_id = statepoint_id;
     patch_point_entry->reserved_bytes = reserved_bytes;
     patch_point_entry->call_site_statepoint_id = call_site_statepoint_id;
+    patch_point_entry->oop = jobj;
     _patchpoint_entries->append(patch_point_entry);
 }
 
@@ -435,7 +436,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
 
         if (call_site_entry->call_site_type != CallSiteType::unwind_call &&
             call_site_entry->call_site_type != CallSiteType::leaf_call &&
-            call_site_entry->call_site_type != CallSiteType::metadata_call) {
+            call_site_entry->call_site_type != CallSiteType::metadata_call &&
+            call_site_entry->call_site_type != CallSiteType::oop_call) {
             assert(contains_stack_map_instruction_offset(return_pc_offset), "Call site should contain stack map");
 
             if (YuhuTraceOffset) {
