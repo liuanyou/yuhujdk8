@@ -59,10 +59,11 @@ fi
 
 echo ""
 echo "=== 测试 1: 强制使用 Yuhu 编译器 ==="
-echo "命令: $JAVA -XX:+UseYuhuCompiler -XX:+YuhuTraceInstalls -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply com.example.Reproducer"
+echo "命令: $JAVA -XX:+UseYuhuInt -XX:+UseYuhuCompiler -XX:+YuhuTraceInstalls -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply com.example.Reproducer"
 echo ""
 
-"$JAVA" -XX:+UseYuhuInt -XX:+UseYuhuCompiler \
+"$JAVA" -XX:+UseYuhuInt \
+     -XX:+UseYuhuCompiler \
      -XX:+YuhuTraceInstalls \
      -XX:TieredStopAtLevel=6 \
      -XX:CompileCommand=yuhuonly,java/util/concurrent/ConcurrentHashMap.putVal \
@@ -85,7 +86,7 @@ echo "如果看到 'Register method *** successfully'，说明方法被 Yuhu 编
 echo ""
 echo "=== 完整输出（不筛选）==="
 echo "运行完整命令查看所有输出:"
-echo "  $JAVA -XX:+UseYuhuCompiler \\
+echo "  $JAVA -XX:+UseYuhuInt -XX:+UseYuhuCompiler \\
                    -XX:+YuhuTraceInstalls \\
                    -XX:TieredStopAtLevel=6 \\
                    -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \\
