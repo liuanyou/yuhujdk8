@@ -231,23 +231,60 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
   return true;
 }
 
-// Detailed eligibility check for the LLVM-IR inlining path (M0).
+// Detailed eligibility check for the LLVM-IR inlining path (M0/M1).
 //
 // A method qualifies only if:
 //   - it passes the quick may_be_inlinable() screen (size limit,
 //     no monitors / exception handlers / jsrs / native / abstract / initializer),
-//   - its control-flow graph is acyclic (no loops: a backedge would make
-//     YuhuTopLevelBlock::maybe_add_backedge_safepoint insert a safepoint poll,
-//     which needs a frame anchor and so must not happen inside an inlinee),
 //   - it actually has control flow (at least one branch instruction); a
 //     straight-line method should go through the existing bytecode inliner,
 //     which never builds a separate LLVM Function for it,
-//   - every one of its bytecodes is in the small "quiescent" whitelist below:
-//     constants, local/stack manipulation, arithmetic that cannot trap,
-//     conversions, comparisons and forward branches.  Anything that can
-//     null-check, bounds-check, throw, allocate, or call into the VM is
-//     rejected outright, since the inlinee deliberately has no frame to
-//     support traps, oop-maps or deoptimization at this stage.
+//   - every one of its bytecodes is in the whitelist below: constants,
+//     local/stack manipulation, arithmetic that cannot trap, conversions,
+//     comparisons, branches (forward or back), and the invoke family
+//     (invokestatic / invokespecial / invokevirtual / invokeinterface /
+//     invokedynamic).  Anything that can allocate, do field/array access,
+//     throw explicitly, run idiv/ldiv/irem/lrem (which can trap on zero),
+//     do monitor ops, or use invokehandle (MethodHandle.invoke/invokeExact
+//     rewritten by rewriter.cpp with a polymorphic signature and appendix
+//     CP entry, for which Yuhu's stub-based frame layout has no DeoptMH
+//     entry point) is still rejected outright.
+//
+// Loops ARE permitted since M1.  A backedge inside the inlinee triggers
+// YuhuTopLevelBlock::maybe_add_backedge_safepoint on the inlinee's own
+// block hierarchy; the resulting statepoint inherits the inlinee's
+// YuhuInlineNodeOrMethod scope chain (installed by build_inlinee via
+// YuhuFunction's inline_node ctor arg) and travels through AlwaysInlinerPass
+// into the caller's merged IR with its statepoint-id preserved intact.
+//
+// Invokes ARE permitted since M1 (including invokedynamic).  Inside a
+// Path B inlinee, do_invoke runs the same routing as for a top-level
+// block: if the target is marked for depth-2 LLVM-inline in the caller's
+// inline tree, do_llvm_inline_call handles it; if it is a straight-line
+// trivial method, Path A's attempt_inline bytecode-inlines it into the
+// inlinee's own llvm::Function; otherwise do_call emits a normal stub-
+// based compiled call whose call-site statepoint carries the inlinee's
+// YuhuInlineNodeOrMethod.  All three flows survive AlwaysInlinerPass.
+// For virtual / interface sites, check_null on the receiver emits a
+// null-check trap inside the inlinee's IR; post-inline that trap lives in
+// the caller's function and its statepoint-id still resolves through the
+// inlinee's scope chain.  For invokedynamic sites, the CallSite target
+// MethodHandle is dispatched at runtime via Yuhu's dynamic-call stub
+// path; scan_for_traps treats invokedynamic separately from the four
+// resolved-target invokes (does not apply the compiled-lambda-form / MH-
+// intrinsic bail to an indy site).  invokehandle (bytecode 0xf8) remains
+// rejected -- polymorphic-signature dispatch requires DeoptMH entry-point
+// machinery incompatible with Yuhu's stub-based frame layout.
+//
+// Known M1 gap: the deopt bundle attached to any safepoint or trap inside
+// an inlinee captures only the inlinee's current_state(), not the caller's
+// virtual state at the inline call site.  Safe under normal workloads --
+// safepoint stop-and-resume works, GC-live reporting on the merged frame
+// via RS4GC is correct, non-deopt paths (interpreter re-execution) still
+// work through the statepoint-id + inline-node sender chain -- but a
+// deopt landing inside an inlinee's loop or on an inlinee's null-check
+// trap reconstructs a partial virtual frame.  Full multi-level bundle
+// capture is the immediate follow-up subtask.
 bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
   if (!may_be_inlinable(target))
     return false;
@@ -367,9 +404,12 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_i2b: case Bytecodes::_i2c: case Bytecodes::_i2s:
       break;
 
-      // ---- forward branches: this is what makes the method interesting for
-      //      the LLVM-IR path rather than the bytecode path, but see the
-      //      acyclicity check below for why loops are still forbidden ----
+      // ---- branches (forward AND back): this is what makes the method
+      //      interesting for the LLVM-IR path rather than the bytecode
+      //      path.  Backedges are permitted since M1 -- the backedge
+      //      safepoint poll inside an inlinee inherits the inlinee's
+      //      YuhuInlineNodeOrMethod scope chain (see the function-level
+      //      doc above for the M1 deopt-bundle caveat). ----
     case Bytecodes::_ifeq: case Bytecodes::_ifne: case Bytecodes::_iflt:
     case Bytecodes::_ifge: case Bytecodes::_ifgt: case Bytecodes::_ifle:
     case Bytecodes::_if_icmpeq: case Bytecodes::_if_icmpne: case Bytecodes::_if_icmplt:
@@ -386,9 +426,45 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_dreturn: case Bytecodes::_areturn:
       break;
 
-      // Everything else (invoke*, get*/put*, arraylength, *aload/*astore,
-      // athrow, new*, instanceof, checkcast, idiv/ldiv/irem/lrem, monitor*)
-      // can trap, call into the VM or otherwise needs a frame: reject.
+      // ---- invokes (M1) ----
+      // YuhuTopLevelBlock::do_invoke runs the same routing here as for
+      // a top-level block's own calls: depth-2 LLVM-inline target
+      // (find_child_by_bci) -> do_llvm_inline_call; Path A straight-line
+      // target -> attempt_inline; anything else -> do_call.  Call-site
+      // safepoint polls and pending-exception checks are registered
+      // against the inlinee's YuhuInlineNodeOrMethod and survive
+      // AlwaysInlinerPass as ordinary CallInst instructions with their
+      // statepoint-id attribute intact.
+      // invokespecial to <init> is filtered upstream by may_be_inlinable
+      // (constructor-target check).
+      // invokedynamic dispatches through the CallSite's target Method-
+      // Handle at runtime; scan_for_traps treats it separately from the
+      // four resolved-target invokes (only checks holder-is-linked, does
+      // NOT apply the is_method_handle_intrinsic / is_compiled_lambda_form
+      // bail at yuhuTopLevelBlock.cpp:103).  do_call at yuhuTopLevelBlock
+      // handles the is_dynamic case (appendix push + CallSite-based
+      // dispatch) identically whether the site lives in a top-level
+      // function or in a Path B inlinee; post-inline the call survives
+      // AlwaysInlinerPass as an ordinary CallInst.
+      // invokehandle (bytecode 0xf8, produced by rewriter.cpp when a call
+      // targets MethodHandle.invoke / invokeExact) stays rejected: its
+      // polymorphic signature + DeoptMH entry-point requirement is not
+      // compatible with Yuhu's stub-based frame layout (see memory
+      // "DeoptMH handler requirement for nmethods with method handle
+      // invokes").
+    case Bytecodes::_invokestatic:
+    case Bytecodes::_invokespecial:
+    case Bytecodes::_invokevirtual:
+    case Bytecodes::_invokeinterface:
+    case Bytecodes::_invokedynamic:
+      break;
+
+      // Everything else (invokehandle, get*/put*, arraylength,
+      // *aload/*astore, athrow, new*, instanceof, checkcast,
+      // idiv/ldiv/irem/lrem, monitor*) can trap on null / bounds /
+      // arithmetic, allocate, use MH polymorphic signatures, or
+      // otherwise needs runtime support not yet provided for Path B
+      // inlinees: reject.
     default:
       return false;
     }
@@ -398,28 +474,35 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
   if (!saw_branch)
     return false;
 
-  // Acyclic control flow only: a backedge would trigger a safepoint poll
-  // (see YuhuTopLevelBlock::maybe_add_backedge_safepoint) inside the inlinee,
-  // which is not allowed since the inlinee has no frame anchor of its own.
-  for (int i = 0; i < flow->block_count(); i++) {
-    if (flow->pre_order_at(i)->is_loop_head())
-      return false;
-  }
+  // Loops are permitted since M1 (see function-level doc).  A backedge
+  // inside the inlinee causes maybe_add_backedge_safepoint to fire on the
+  // inlinee's own block hierarchy; the emitted statepoint call carries
+  // the inlinee's YuhuInlineNodeOrMethod, and after AlwaysInlinerPass
+  // flattens the callee, the call is relocated into the caller's merged
+  // function with its statepoint-id attribute intact so RS4GC and the
+  // debug-info recorder keep working.
 
   return true;
 }
 
-// Full-on detailed check, for methods that pass the quick checks
-// Inlined methods have no stack frame, so we can't do anything
-// that would require one.  This means no safepoints (and hence
-// no loops) and no VM calls.  No VM calls means, amongst other
-// things, that no exceptions can be created, which means no null
-// checks or divide-by-zero checks are allowed.  The lack of null
-// checks in particular would eliminate practically everything,
-// but we can get around that restriction by relying on the zero-
-// check eliminator to strip the checks.  To do that, we need to
-// walk through the method, tracking which values are and are not
-// zero-checked.
+// Full-on detailed check for the bytecode-level inliner (Path A).  These
+// rules apply to Path A only; the LLVM-IR inliner (Path B, checked by
+// is_llvm_inlineable above) is more permissive -- since M1 it allows both
+// loops AND the invoke family (invokestatic / invokespecial / invokevirtual
+// / invokeinterface / invokedynamic), because a Path B inlinee gets a real
+// llvm::Function with its own block hierarchy and its safepoint-poll /
+// call-site metadata flows through AlwaysInlinerPass via the statepoint-id
+// attribute.  invokehandle (bytecode 0xf8) is still excluded from Path B.
+//
+// Under Path A, an inlined method has no stack frame of its own and its
+// IR is emitted directly into the caller's llvm::Function.  That means no
+// safepoints (and hence no loops) and no VM calls.  No VM calls means,
+// amongst other things, that no exceptions can be created, which means no
+// null checks or divide-by-zero checks are allowed.  The lack of null
+// checks in particular would eliminate practically everything, but we
+// can get around that restriction by relying on the zero-check eliminator
+// to strip the checks.  To do that, we need to walk through the method,
+// tracking which values are and are not zero-checked.
 bool YuhuInlinerHelper::is_inlinable() {
   ResourceMark rm;
   initialize_for_check();
