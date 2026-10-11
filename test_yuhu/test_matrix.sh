@@ -66,6 +66,7 @@ echo ""
      -XX:+UseYuhuCompiler \
      -XX:+YuhuTraceInstalls \
      -XX:TieredStopAtLevel=6 \
+     -XX:+YuhuLLVMInlining \
      -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \
      -XX:CompileCommand=exclude,*.* \
      -XX:CompileCommand=compileonly,com/example/Matrix.multiply \
@@ -78,7 +79,7 @@ echo "如果看到 'Register method *** successfully'，说明方法被 Yuhu 编
 echo ""
 echo "=== 完整输出（不筛选）==="
 echo "运行完整命令查看所有输出:"
-echo "  $JAVA -XX:+UseYuhuInt -XX:+UseYuhuCompiler \\
+echo "  $JAVA -XX:+UseYuhuInt -XX:+YuhuLLVMInlining -XX:+UseYuhuCompiler \\
                    -XX:+YuhuTraceInstalls \\
                    -XX:TieredStopAtLevel=6 \\
                    -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply \\
