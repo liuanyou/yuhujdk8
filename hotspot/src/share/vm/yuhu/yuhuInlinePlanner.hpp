@@ -12,6 +12,7 @@
 #include "ci/ciStreams.hpp"
 #include "yuhu/yuhuInlineTree.hpp"
 #include "yuhu/yuhuInliner.hpp"
+#include "yuhu/yuhuCompiler.hpp"
 #include "yuhu/yuhu_globals.hpp"
 
 // Planner for inlining decisions - does a pre-pass before IR generation
@@ -19,9 +20,17 @@ class YuhuInlinePlanner : public StackObj {
  public:
   // Plan inlining for a method, building an inline tree
   static YuhuInlineTree* plan_inlining(ciMethod* root_method) {
-    YuhuInlineTree* tree = new YuhuInlineTree(root_method);
-    YuhuInlinePlanner planner(tree);
-    planner.walk_bytecodes(tree->root(), 0);
+      // Path B is offered for this whole compilation only when the develop flag is
+      // on AND the root (caller) method has not been backed off by a previous
+      // flatten-miss (see YuhuCompiler::disable_llvm_inline).  When false, no
+      // candidate is ever marked llvm_inline, so the caller falls back to the
+      // existing bytecode/do_call path on retry.
+      bool llvm_inline_allowed = YuhuLLVMInlining && !YuhuCompiler::llvm_inline_disabled(root_method->get_Method());
+    YuhuInlineTree* tree = new YuhuInlineTree(root_method, llvm_inline_allowed);
+    if (llvm_inline_allowed) {
+        YuhuInlinePlanner planner(tree);
+        planner.walk_bytecodes(tree->root(), 0);
+    }
     
     if (YuhuTraceInlining) {
       tree->print();
@@ -36,7 +45,7 @@ class YuhuInlinePlanner : public StackObj {
 
   YuhuInlinePlanner(YuhuInlineTree* tree)
     : _tree(tree),
-      _max_inline_depth(YuhuMaxInlineLevel) {}
+      _max_inline_depth(YuhuMaxInlineLevel) { }
 
   // Walk bytecodes of a method to find inlining opportunities
   void walk_bytecodes(YuhuInlineNode* parent_node, int current_depth) {
@@ -66,9 +75,10 @@ class YuhuInlinePlanner : public StackObj {
         
         if (will_link && target != NULL) {
           // Check if we should inline this method
-          if (should_inline(target, current_depth, bci)) {
+          if (should_inline(target, current_depth, bci) && YuhuInliner::is_llvm_inlineable(target)) {
+
             // Create a new inline node for this method
-            YuhuInlineNode* child = new YuhuInlineNode(target, bci, current_depth + 1);
+            YuhuInlineNode* child = new YuhuInlineNode(target, bci, current_depth + 1, parent_node);
             parent_node->add_child(child);
             
             // Recursively walk the inlined method's bytecodes
@@ -89,11 +99,6 @@ class YuhuInlinePlanner : public StackObj {
 
   // Decide whether to inline a method
   bool should_inline(ciMethod* target, int current_depth, int bci) {
-    // Use existing YuhuInliner checks
-    if (!YuhuInliner::may_be_inlinable(target)) {
-      return false;
-    }
-
     // For depth 2, we also need to check if the method itself is inlinable
     // This is a simplified check - in the future, we might want more sophisticated logic
     if (current_depth + 1 < _max_inline_depth) {
@@ -102,8 +107,7 @@ class YuhuInlinePlanner : public StackObj {
       return true;
     }
 
-    // At max depth, only inline if the method is simple
-    return YuhuInliner::may_be_inlinable(target);
+    return false;
   }
 };
 

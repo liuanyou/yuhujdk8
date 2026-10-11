@@ -49,7 +49,7 @@ static void yuhu_stack_map_log_init() {
         } \
     } while(0)
 
-void YuhuStack::initialize(Value* method, ciMethod* target) {
+void YuhuStack::initialize(Value* method, YuhuInlineNodeOrMethod* inline_node_or_method, bool is_inlinee) {
   int locals_words  = max_locals();
   // For AArch64, header_words includes all frame header metadata:
   //   - oop_tmp (1 word)
@@ -68,6 +68,7 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
   // No need to align 16 bytes here, llvm will handle it
 
     ResourceMark rm;
+    ciMethod* target = inline_node_or_method->target();
   if (YuhuTraceInstalls) {
       if (YuhuStackMapFile != NULL) {
           YUHU_STACK_MAP_LOG("Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
@@ -84,19 +85,18 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
                   header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
       }
   }
-  YuhuDebugInformationRecorder::get()->register_frame_layout_info_with_frame_fields(header_words,
-                                                                                    monitor_words,
-                                                                                    stack_words,
-                                                                                    locals_words,
-                                                                                    _extended_frame_size);
+
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+  YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+  recorder->register_frame_layout_frame_fields(statepoint_id, inline_node_or_method, header_words, monitor_words, stack_words, locals_words, _extended_frame_size);
 
   llvm::AllocaInst* extended_sp = builder()->CreateAlloca(YuhuType::intptr_type(),
                                                           ConstantInt::get(YuhuType::intptr_type(), _extended_frame_size),
                                                           "extended_sp");
 
-    std::vector<llvm::Value*> live_values;
-    live_values.push_back(extended_sp);
-    builder()->CreateStackMap(EXTENDED_SP_ALLOCA_STATEPOINT_ID, 0, live_values); // create stack map to locate the offset from sp/fp
+  std::vector<llvm::Value*> live_values;
+  live_values.push_back(extended_sp);
+  builder()->CreateStackMap(statepoint_id, 0, live_values); // create stack map to locate the offset from sp/fp
 
   // Create the frame, but don't clear memory to zero, will call CreateMemset if necessary
   _frame = builder()->CreateBitCast(
@@ -134,9 +134,22 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
 
   // Frame header
   // For AArch64, we use a simple frame marker (not Zero-specific)
-  // Use a recognizable marker value for debugging
+  // Use a recognizable marker value for debugging.
+  // 0xDEADBEEF: a plain Yuhu frame (bytecode-level inlining only, or no
+  //              inlining at all).
+  // 0xDEADBABE: a Yuhu frame whose compilation unit at least one Path-B
+  //              (LLVM-IR / alwaysinline) callee was flattened into.  This is
+  //              an end-to-end runtime signal that Path B actually engaged --
+  //              stronger than the compile-time YuhuTraceInlining planner line,
+  //              because it survives into a live stack dump and would visibly
+  //              fall back to 0xDEADBEEF after the per-method flatten-miss
+  //              back-off disables Path B on retry.  Only the caller's marker
+  //              slot is observable to a runtime frame walker; an inlinee's
+  //              own alloca-slot is dead after AlwaysInlinerPass merges allocas,
+  //              so is_inlinee=true always keeps 0xDEADBEEF.
+  const intptr_t frame_marker = !is_inlinee ? (intptr_t)0xDEADBABE : (intptr_t)0xDEADBEEF;
   builder()->CreateStore(
-    LLVMValue::intptr_constant(0xDEADBEEF), slot_addr(offset++)); // Frame marker (YUHU_FRAME equivalent)
+    LLVMValue::intptr_constant(frame_marker), slot_addr(offset++)); // Frame marker (YUHU_FRAME equivalent)
   Value *fp = slot_addr(offset++);
   _frame_pointer_addr = fp;  // Store frame pointer address
 
@@ -151,10 +164,16 @@ void YuhuStack::initialize(Value* method, ciMethod* target) {
 
   // Store previous FP to frame pointer slot for frame pointer chain
   builder()->CreateStore(current_fp, fp);
-  
-  // Update frame pointer to point to this frame
-  CreateStoreFramePointer(
-    builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
+
+  // Update frame pointer to point to this frame.  This also writes
+  // thread->last_Java_fp (see CreateStoreFramePointer), which is a
+  // per-compilation singleton side effect: an inlinee must not touch it,
+  // since its own frame is a private alloca that gets merged into the
+  // caller's frame by LLVM's inliner well before anything walks last_Java_fp.
+  if (!is_inlinee) {
+    CreateStoreFramePointer(
+      builder()->CreatePtrToInt(current_fp, YuhuType::intptr_type()));
+  }
 }
 
 llvm::LoadInst* YuhuStack::CreateLoadFramePointer(const char *name) {
@@ -257,106 +276,6 @@ void YuhuStack::CreateResetLastJavaFrame() {
     builder()->CreateStore(LLVMValue::intptr_constant(0), last_Java_pc_addr());
 }
 
-/**
- * It returns i64 value. And caller must convert return value to function type when doing CreateCall.
- *
- * @param virtual_address
- * @param call_target_va
- * @return
- */
-llvm::Value* YuhuStack::CreateCallSitePlaceholderWithCallTarget(uint64_t virtual_address, uint64_t call_target_va, CallSiteType call_site_type) {
-    // Extract virtual_offset from the virtual address (low 16 bits)
-    int virtual_offset = virtual_address & 0xFFFF;
-    int call_site_kind = (static_cast<uint8_t>(call_site_type)) & 0xFFFF;
-
-    // Generate inline asm with marker + adr instruction
-    // The marker embeds virtual_offset for correlation during patching
-    // asm template:
-    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
-    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
-
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    llvm::LLVMContext& ctx = mod->getContext();
-
-    // Inline asm string with marker and adr (no label needed)
-    // Use virtual_offset in the marker for identification during patching
-    char asm_string[512];
-    snprintf(asm_string, sizeof(asm_string),
-             "mov w19, #%d\n"
-             "movk w19, #0xDEAD, lsl #16\n"
-             "mov w19, #%d\n"
-             "nop\n"
-             "nop\n"
-             "movz ${0:x}, #0x%04lx, lsl #0\n"
-             "movk ${0:x}, #0x%04lx, lsl #16\n"
-             "movk ${0:x}, #0x%04lx, lsl #32",
-             virtual_offset,  // virtual_offset
-             call_site_kind,  // call_site_type
-             (call_target_va >> 0) & 0xFFFF,   // low 16 bits
-             (call_target_va >> 16) & 0xFFFF,  // mid-low 16 bits
-             (call_target_va >> 32) & 0xFFFF); // mid-high 16 bits
-
-    llvm::FunctionType* asm_type = llvm::FunctionType::get(
-            llvm::Type::getInt64Ty(ctx), {}, false);
-
-    llvm::InlineAsm* marker_asm = llvm::InlineAsm::get(
-            asm_type,
-            asm_string,
-            "=r,~{w19},~{memory}",  // Output + clobbers
-            true,            // Has side effects: yes (to prevent optimization)
-            false,           // Is align stack: no
-            llvm::InlineAsm::AD_ATT
-    );
-
-    // Create the inline asm call
-    return builder()->CreateCall(asm_type, marker_asm, std::vector<llvm::Value*>());
-}
-
-void YuhuStack::CreateCallSitePlaceholder(uint64_t virtual_address) {
-    // Extract virtual_offset from the virtual address (low 16 bits)
-    int virtual_offset = virtual_address & 0xFFFF;
-
-    // Generate inline asm with marker + adr instruction
-    // The marker embeds virtual_offset for correlation during patching
-    // asm template:
-    //   mov w19, #0xDEAD              - Marker magic (identifies this as last_Java_pc marker)
-    //   movk w19, #virtual_offset, lsl #16 - Virtual offset for correlation
-
-    llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-    llvm::LLVMContext& ctx = mod->getContext();
-
-    // Create function type for inline asm: void (ptr)
-    llvm::FunctionType* asm_type = llvm::FunctionType::get(
-            llvm::Type::getVoidTy(ctx),
-            {},
-            false);
-
-    // Inline asm string with marker and adr (no label needed)
-    // Use virtual_offset in the marker for identification during patching
-    char asm_buf[256];
-    snprintf(asm_buf, sizeof(asm_buf),
-             "mov w19, #%d\n" // Virtual offset (embedded for correlation)
-             "movk w19, #0xDEAD, lsl #16\n"           // Marker magic
-             "nop\n" // insert 2 nop instructions, but without mov w20, #%d
-             "nop\n", // make some differences with CreateCallSitePlaceholderWithCallTarget
-             virtual_offset);
-
-    std::string asm_string(asm_buf);
-
-    // Constraints: "r" means input operand goes to a general register
-    // $0 will be replaced with the last_Java_pc address
-    llvm::InlineAsm* asm_inst = llvm::InlineAsm::get(
-            asm_type,
-            asm_string,
-            "~{w19},~{memory}",  // Constraint string
-            true, // hasSideEffects
-            false  // isAlignStack
-    );
-
-    // Create the inline asm call
-    builder()->CreateCall(asm_inst, {});
-}
-
 Value* YuhuStack::slot_addr(int         offset,
                              llvm::Type* type,  // Use llvm::Type to avoid conflict with HotSpot's Type class
                              const char* name) const {
@@ -385,8 +304,9 @@ Value* YuhuStack::slot_addr(int         offset,
 // The bits that differentiate stacks with normal and native frames on top
 
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuFunction* function,
-                                                Value*         method) {
-  return new YuhuStackWithNormalFrame(function, method);
+                                                Value*         method,
+                                                bool           is_inlinee) {
+  return new YuhuStackWithNormalFrame(function, method, is_inlinee);
 }
 YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
                                                 Value*              method) {
@@ -394,13 +314,14 @@ YuhuStack* YuhuStack::CreateBuildAndPushFrame(YuhuNativeWrapper* wrapper,
 }
 
 YuhuStackWithNormalFrame::YuhuStackWithNormalFrame(YuhuFunction* function,
-                                                     Value*         method)
+                                                     Value*         method,
+                                                     bool           is_inlinee)
   : YuhuStack(function), _function(function) {
   // For normal frames, the stack pointer and the method slot will
   // be set during each decache, so it is not necessary to do them
   // at the time the frame is created.  However, we set them for
   // non-PRODUCT builds to make crash dumps easier to understand.
-  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), function->target_method());
+  initialize(PRODUCT_ONLY(NULL) NOT_PRODUCT(method), function->inline_node_or_method(), is_inlinee);
 }
 YuhuStackWithNativeFrame::YuhuStackWithNativeFrame(YuhuNativeWrapper* wrp,
                                                      Value*              method)

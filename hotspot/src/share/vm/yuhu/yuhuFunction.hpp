@@ -49,21 +49,49 @@ class YuhuFunction : public YuhuTargetInvariants {
   static llvm::Function* build(ciEnv*        env,
                                YuhuBuilder* builder,
                                ciTypeFlow*   flow,
-                               const char*   name) {
-    YuhuFunction function(env, builder, flow, name);
+                               const char*   name,
+                               YuhuInlineTree* inline_tree) {
+    auto inline_node_or_method = new YuhuInlineNodeOrMethod(flow->method());
+    if (inline_tree->llvm_inline_allowed()) {
+        inline_node_or_method = new YuhuInlineNodeOrMethod(inline_tree->root());
+    }
+    YuhuFunction function(env, builder, flow, name, inline_tree, inline_node_or_method, false);
     return function.function();
+  }
+
+  // M0 of LLVM-IR inlining: build a callee's IR as a real (but private,
+  // alwaysinline) llvm::Function in the same module as the caller, instead
+  // of merging its bytecodes into the caller's blocks the way the bytecode
+  // inliner does.  The resulting YuhuFunction must outlive this call (it is
+  // heap-allocated off the compilation's ResourceArea, not a stack temporary
+  // like build()'s), since get_or_build_inlinee() caches and reuses it for
+  // every call site that resolves to the same target.  Unlike build(), this
+  // does NOT run any of the four frame/global-registration side effects that
+  // only the outermost function is allowed to perform (see the "_is_inlinee"
+  // checks sprinkled through initialize()).
+  static YuhuFunction* build_inlinee(ciEnv*        env,
+                                     YuhuBuilder* builder,
+                                     ciTypeFlow*   flow,
+                                     const char*   name,
+                                     YuhuInlineTree* inline_tree,
+                                     YuhuInlineNode* inline_node) {
+    return new YuhuFunction(env, builder, flow, name, inline_tree, new YuhuInlineNodeOrMethod(inline_node), true);
   }
 
  private:
   YuhuFunction(ciEnv*        env,
                 YuhuBuilder* builder,
                 ciTypeFlow*   flow,
-                const char*   name)
-    : YuhuTargetInvariants(env, builder, flow) { initialize(name); }
+                const char*   name,
+                YuhuInlineTree* inline_tree,
+                YuhuInlineNodeOrMethod* inline_node_or_method,
+                bool          is_inlinee)
+    : YuhuTargetInvariants(env, builder, inline_node_or_method, flow),
+      _inline_tree(inline_tree),
+      _is_inlinee(is_inlinee) { initialize(name); }
 
  private:
   void initialize(const char* name);
-  void collect_handler_blocks_and_insert_stackmap();
 
  private:
   llvm::Function*                   _function;
@@ -74,6 +102,27 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::BasicBlock*                _unified_exit_block;  // Unified exit block for all returns
   llvm::Value*                     _return_slot;         // Return slot (pc_slot in frame header)
   llvm::Value*                     _x0_slot; // 8th int-like argument
+  bool                             _is_inlinee;  // True for a callee built as a separate, alwaysinline llvm::Function
+
+  // Inlinees built for this (non-inlinee) function's call sites, keyed by
+  // target method, so that two call sites invoking the same method share one
+  // llvm::Function instead of each building a fresh duplicate.  Empty on an
+  // inlinee itself, since an inlinee is guaranteed (by YuhuInliner::
+  // is_llvm_inlineable) to contain no call sites at all.
+  GrowableArray<YuhuFunction*> _inlinees;
+
+ public:
+  bool is_inlinee() const {
+    return _is_inlinee;
+  }
+
+  // Find an already-built inlinee for this target, or build and cache a new
+  // one.  Must be called with the builder's insert point/position already
+  // set up for the eventual `call` instruction; this function saves and
+  // restores the builder's global state around the (potentially long-running)
+  // nested inlinee build so that the caller's own IR construction can safely
+  // resume exactly where it left off afterwards.
+  YuhuFunction* get_or_build_inlinee(YuhuInlineTree* inline_tree, YuhuInlineNode* inline_node, const char* name);
 
  public:
   llvm::Function* function() const {
@@ -118,13 +167,23 @@ class YuhuFunction : public YuhuTargetInvariants {
   //   Static:   (dummy_x0, params...) -> return_type
   // The OSR adapter is responsible for extracting locals from the OSR buffer
   // and placing them into the same registers as normal entry.
+  //
+  // An inlinee is different: it is never entered from generated code directly
+  // (the AlwaysInliner pass always eliminates the call before codegen), so it
+  // does not need to mirror the AArch64 HotSpot calling convention's dummy-x0
+  // slot.  Its signature is just the natural Java-level one.
   llvm::FunctionType* entry_point_type() const {
-    return generate_normal_entry_point_type();
+    return _is_inlinee ? generate_inlinee_entry_point_type()
+                        : generate_normal_entry_point_type();
   }
   
  private:
   // Generate function signature for normal entry based on Java method parameters
   llvm::FunctionType* generate_normal_entry_point_type() const;
+
+  // Generate the (simpler) signature used by an alwaysinline callee: no dummy
+  // x0 slot, just (this?, params...) -> return_type.  See above.
+  llvm::FunctionType* generate_inlinee_entry_point_type() const;
 
   // Block management
  private:

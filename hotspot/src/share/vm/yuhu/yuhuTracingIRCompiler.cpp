@@ -176,7 +176,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                 }
             }
 
-            if (EXTENDED_SP_ALLOCA_STATEPOINT_ID == StatepointID) {
+            if (recorder->is_frame_layout_statepoint_id(StatepointID)) {
                 bool found_offset = false;
                 for (auto LocationRecord: StatepointRecord.locations()) {
                     auto Kind = LocationRecord.getKind();
@@ -196,7 +196,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                                        << DwarfRegNum << " , Kind: " << static_cast<uint32_t>(Kind) << "\n";
                             }
                         }
-                        recorder->register_frame_layout_info_with_stack_map_fields(DwarfRegNum, static_cast<uint8_t>(Kind), Offset);
+                        recorder->register_frame_layout_stack_map_fields(StatepointID, DwarfRegNum, static_cast<uint8_t>(Kind), Offset);
                         break;
                     }
                 }

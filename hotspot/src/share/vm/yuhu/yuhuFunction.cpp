@@ -91,6 +91,60 @@ llvm::FunctionType* YuhuFunction::generate_normal_entry_point_type() const {
   return FunctionType::get(ret_llvm, params, false);
 }
 
+// Inlinee signature: no dummy x0 slot, since an inlinee is never called from
+// generated code directly (AlwaysInlinerPass always flattens the call away
+// before codegen), so it doesn't need to match the AArch64 HotSpot calling
+// convention's register layout -- just the natural Java-level parameter list.
+llvm::FunctionType* YuhuFunction::generate_inlinee_entry_point_type() const {
+  std::vector<llvm::Type*> params;
+
+  if (!is_static()) {
+    params.push_back(YuhuType::oop_addrspace1_type());  // this
+  }
+
+  ciSignature* sig = target()->signature();
+  int param_count = sig->count();
+  for (int i = 0; i < param_count; i++) {
+    ciType* param_type = sig->type_at(i);
+    params.push_back(YuhuType::to_stackType(param_type));
+  }
+
+  BasicType ret_basic = target()->return_type()->basic_type();
+  llvm::Type* ret_llvm = (ret_basic == T_VOID)
+                            ? YuhuType::void_type()
+                            : YuhuType::to_stackType(ret_basic);
+  return FunctionType::get(ret_llvm, params, false);
+}
+
+// Find an already-built inlinee for `target` among this function's cached
+// inlinees, or build (and cache) a fresh one.  Building an inlinee runs a
+// full nested YuhuFunction::initialize() -- which repurposes the single,
+// compilation-wide YuhuBuilder instance -- so the builder's insert position
+// and "current function" pointer must be saved and restored around the call,
+// otherwise the caller's own IR would be emitted into the wrong function /
+// at the wrong place when control returns here.
+YuhuFunction* YuhuFunction::get_or_build_inlinee(YuhuInlineTree* inline_tree, YuhuInlineNode* inline_node, const char* name) {
+  assert(!_is_inlinee, "only the outermost function may hold inlinees");
+  ciMethod* target = inline_node->method();
+
+  for (int i = 0; i < _inlinees.length(); i++) {
+    if (_inlinees.at(i)->target_method() == target) {
+      return _inlinees.at(i);
+    }
+  }
+
+  llvm::IRBuilder<>::InsertPoint saved_ip = builder()->saveIP();
+  YuhuFunction* saved_function = builder()->function();
+
+  YuhuFunction* inlinee = YuhuFunction::build_inlinee(env(), builder(), target->get_flow_analysis(), name, inline_tree, inline_node);
+
+  builder()->restoreIP(saved_ip);
+  builder()->set_function(saved_function);
+
+  _inlinees.append(inlinee);
+  return inlinee;
+}
+
 void YuhuFunction::initialize(const char *name) {
   // Set the function pointer in builder so it can access deoptimization stub
   builder()->set_function(this);
@@ -103,6 +157,15 @@ void YuhuFunction::initialize(const char *name) {
                                 // Use Function::ExternalLinkage instead of GlobalVariable::ExternalLinkage
     name,
     YuhuContext::current().module());  // Pass Module so Function is added automatically
+
+  if (_is_inlinee) {
+    // An inlinee is a private helper that always gets flattened into its
+    // caller before codegen, so it must NOT be exported to the symbol table
+    // (unlike the outermost function above) and must carry the alwaysinline
+    // hint that YuhuCompiler::compile_method's AlwaysInlinerPass relies on.
+    _function->setLinkage(Function::InternalLinkage);
+    _function->addFnAttr(Attribute::AlwaysInline);
+  }
 
   // CRITICAL: Force LLVM to generate frame pointer (x29) setup
   // Without this, LLVM only saves x29/x30 but doesn't set x29 = sp
@@ -125,7 +188,9 @@ void YuhuFunction::initialize(const char *name) {
   
   // Verify linkage was set correctly
   // Note: In some LLVM versions, ExternalLinkage might be 0, but we want ExternalLinkage
-  if (_function->getLinkage() != Function::ExternalLinkage) {
+  // (Skipped for inlinees, whose InternalLinkage was just set deliberately above
+  // and must not be reverted.)
+  if (!_is_inlinee && _function->getLinkage() != Function::ExternalLinkage) {
     // If linkage is not ExternalLinkage, explicitly set it
     _function->setLinkage(Function::ExternalLinkage);
     if (YuhuTraceFunction) {
@@ -178,10 +243,15 @@ void YuhuFunction::initialize(const char *name) {
       function());
     builder()->SetInsertPoint(early_entry_block);
 
-    llvm::Value *p7_arg = builder()->CreateReadX0Register(); // 8th int argument
+    // Skip the dummy-x0 save for inlinees: their signature has no dummy x0
+    // slot at all (see generate_inlinee_entry_point_type), and the fixed-ID
+    // X0_SP_ALLOCA_STATEPOINT_ID stackmap below is a compilation-wide
+    // singleton that must belong to the outermost function only.
+    if (!_is_inlinee) {
+      llvm::Value *p7_arg = builder()->CreateReadX0Register(); // 8th int argument
 
-     // Have to save 8th int-like argument immediately at beginning to entry
-     // Can't wait in CreateBuildAndPushFrame method, so create new alloca here to save x0
+      // Have to save 8th int-like argument immediately at beginning to entry
+      // Can't wait in CreateBuildAndPushFrame method, so create new alloca here to save x0
       _x0_slot = builder()->CreateAlloca(YuhuType::intptr_type(), ConstantInt::get(YuhuType::intptr_type(), 1), "x0_sp");
 
       std::vector<llvm::Value*> live_values;
@@ -189,6 +259,7 @@ void YuhuFunction::initialize(const char *name) {
       builder()->CreateStackMap(X0_SP_ALLOCA_STATEPOINT_ID, 0, live_values); // create stack map to locate the offset from sp/fp
 
       builder()->CreateStore(p7_arg, _x0_slot);
+    }
 
     // Create thread_ptr in this entry block
     llvm::Value *thread_int = builder()->CreateReadThreadRegister();
@@ -306,13 +377,9 @@ void YuhuFunction::initialize(const char *name) {
     }
   }
   
-  // Phase 1: Plan inlining decisions before creating stack frame
-  // This allows us to calculate the total frame size needed for all inlined methods
-  _inline_tree = YuhuInlinePlanner::plan_inlining(target());
-  
   // Now create YuhuStack - at this point, _thread should be set for both OSR and normal entry
   // The stack will use the inline tree to calculate total frame size
-  _stack = YuhuStack::CreateBuildAndPushFrame(this, method);
+  _stack = YuhuStack::CreateBuildAndPushFrame(this, method, _is_inlinee);
 
   // Set return slot to pc_slot in frame header (for non-void methods)
   // This applies to both normal and OSR compilation.
@@ -363,12 +430,19 @@ void YuhuFunction::initialize(const char *name) {
   // Resetting them here would overwrite the correct values.
 
   // Create the entry state
-  // Normal entry: YuhuNormalEntryState (only parameter locals are live)
-  // OSR entry: YuhuOSREntryState (all live locals, including non-parameters)
-  // For OSR, the adapter extracts locals from the OSR buffer and stores them
-  // into the Yuhu frame slots; YuhuOSREntryState reads them back.
+  // Path B inlinee: YuhuInlineEntryState binds parameters directly to the
+  //   inlinee's llvm::Argument* list -- the inlinee's function signature
+  //   (generate_inlinee_entry_point_type) has no dummy x0 and no AArch64
+  //   caller-ABI layout, so YuhuNormalEntryCacher's register/x0-spill/stack-
+  //   arg reads do not apply (see hs_err_pid64956.log -- reusing the normal
+  //   cacher walked arg_iterator past the true end and crashed inside
+  //   llvm::Type::getTypeID() with a garbage Type*).
+  // Normal entry: YuhuNormalEntryState (parameter locals, bound via ABI).
+  // OSR entry:    YuhuOSREntryState (all live locals, read from frame slots).
   YuhuState *entry_state;
-  if (is_osr()) {
+  if (_is_inlinee) {
+    entry_state = new YuhuInlineEntryState(start_block, method);
+  } else if (is_osr()) {
     entry_state = new YuhuOSREntryState(start_block, method);
   } else {
     entry_state = new YuhuNormalEntryState(start_block, method);
@@ -392,7 +466,12 @@ void YuhuFunction::initialize(const char *name) {
     // Method entry safepoint poll: inserted after final SP allocation, last_Java_sp setup,
     // and argument copying — before transitioning into bytecode blocks.
     // This matches C2's sequence: build_frame() -> set_frame_complete() -> safepoint_poll.
-    if (!is_osr()) {
+    // Not applicable to an inlinee: it has no frame anchor of its own (see the
+    // "is_inlinee" note in YuhuStack::CreateBuildAndPushFrame) so it must never
+    // poll; YuhuInliner::is_llvm_inlineable also guarantees B has no loops, so
+    // the only other place a poll could sneak in (maybe_add_backedge_safepoint)
+    // can't trigger either.
+    if (!is_osr() && !_is_inlinee) {
         start_block->maybe_add_safepoint(true);
     }
 

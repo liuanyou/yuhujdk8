@@ -45,6 +45,7 @@
 //       - YuhuFunctionEntryCacher
 //         - YuhuNormalEntryCacher
 //         - YuhuOSREntryCacher
+//         - YuhuInlineEntryCacher   // Path B LLVM-IR inlinee entry binder
 
 class YuhuCacherDecacher : public YuhuStateScanner {
  protected:
@@ -388,6 +389,39 @@ class YuhuOSREntryCacher : public YuhuFunctionEntryCacher {
 
  protected:
   void process_monitor(int index, int box_offset, int obj_offset);
+};
+
+// ---------------------------------------------------------------------------
+// YuhuInlineEntryCacher -- Path B (LLVM-IR inlining) inlinee entry binder.
+//
+// A Path B inlinee's LLVM function is built by generate_inlinee_entry_point_type
+// (see yuhuFunction.cpp), whose signature is the plain Java parameter list:
+//   non-static:  (this, arg0, arg1, ...)         -- NO dummy x0 slot
+//   static:      (arg0, arg1, ...)               -- NO dummy x0 slot
+// This differs from a normal entry (generate_normal_entry_point_type) which
+// always prepends an intptr dummy to line up with HotSpot's AArch64 Java ABI
+// (x0 reserved, x1..x7 for receiver + first 7 params, x0 reused as the 8th
+// int arg, deeper args on the caller's stack).
+//
+// Because the inlinee is never called through that ABI -- AlwaysInlinerPass
+// flattens every call before codegen and substitutes each formal Argument*
+// with the caller's actual Value -- the whole x0-spill / stack-arg machinery
+// in YuhuNormalEntryCacher is inapplicable.  Reusing it caused the crash in
+// hs_err_pid64956.log (bogus llvm::Type* dereference in process_local_slot's
+// type-match chain, because get_function_arg skipped an argument that doesn't
+// exist on an inlinee's LLVM function).
+//
+// This class binds Java bytecode parameter slots to llvm::Argument* directly,
+// by formal-parameter index -- no register reads, no stack-arg reads, no
+// x0-slot special case.
+class YuhuInlineEntryCacher : public YuhuFunctionEntryCacher {
+ public:
+  YuhuInlineEntryCacher(YuhuFunction* function,
+                        llvm::Value*   method)
+    : YuhuFunctionEntryCacher(function, method) {}
+
+ protected:
+  void process_local_slot(int index, YuhuValue** addr, int offset);
 };
 
 #endif // SHARE_VM_YUHU_YUHUCACHEDECACHE_HPP

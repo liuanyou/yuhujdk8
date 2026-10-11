@@ -23,7 +23,8 @@ enum class CallSiteType : uint8_t {
     unwind_call = 5,
     leaf_call = 6,
     oop_call = 7,
-    metadata_call = 8
+    metadata_call = 8,
+    inlinee_call = 9
 };
 
 enum class EdgeTargetType : uint8_t {
@@ -35,11 +36,10 @@ enum class EdgeTargetType : uint8_t {
 class CallSiteEntry : public ResourceObj {
 public:
     uint64_t statepoint_id; // generated at IR phase - assigned
-    ciMethod* current_method;
+    YuhuInlineNodeOrMethod* inline_node_or_method;
     uint64_t call_target; // generated at IR phase - stub or target address or 0
     CallSiteType call_site_type; // generated at IR phase
     int bci; // generated at IR phase
-    int num_monitors; // generated at IR phase
 };
 
 class StackMapLocation : public ResourceObj {
@@ -63,6 +63,7 @@ public:
     uint64_t statepoint_id;
     GrowableArray<uint8_t>* locals; // list of locals with basic type only...from 0 to max_locals-1
     GrowableArray<uint8_t>* expression_stacks; // list of expression stacks with basic type only...from 0 to stack_depth-1
+    int num_monitors;
 };
 
 class PatchPointEntry : public ResourceObj {
@@ -88,10 +89,10 @@ public:
     uint64_t target_address; // this is the address of got/const entry, not function address
 };
 
-class FrameLayoutInfo : public ResourceObj {
+class FrameLayoutEntry : public ResourceObj {
 public:
-    int total_frame_size_in_bytes = -1; // extracted from machine code's prologue
-    int num_of_prologue_registers = -1; // extracted from machine code's prologue
+    uint64_t statepoint_id;
+    YuhuInlineNodeOrMethod* inline_node_or_method;
     int header_words = -1; // initialized in YuhuStack::initialize method
     int monitor_words = -1; // initialized in YuhuStack::initialize method
     int stack_words = - 1; // initialized in YuhuStack::initialize method
@@ -116,17 +117,28 @@ class CallSiteInstructionHolder : public ResourceObj {
 public:
     CallSiteEntry* call_site_entry; // same IR may be duplicated in machine code, it is 1:M relations, same call site may have multiple stack map
     StackMapEntry* stack_map_entry;
-    DeoptBundle* deopt_bundle;
 
-    CallSiteInstructionHolder() : call_site_entry(nullptr), stack_map_entry(nullptr), deopt_bundle(nullptr) {}
+    CallSiteInstructionHolder() : call_site_entry(nullptr), stack_map_entry(nullptr) {}
 
     // explicitly set to nullptr, otherwise, it points to undefined area
-    CallSiteInstructionHolder(CallSiteEntry* call_site, DeoptBundle* dpt_bundle, StackMapEntry* stack_map) : call_site_entry(call_site), deopt_bundle(dpt_bundle), stack_map_entry(stack_map) {}
+    CallSiteInstructionHolder(CallSiteEntry* call_site, StackMapEntry* stack_map) : call_site_entry(call_site), stack_map_entry(stack_map) {}
 
     uint64_t instruction_offset() const {
         assert(stack_map_entry != NULL, "stack map should exist");
         return stack_map_entry->instruction_offset;
     }
+};
+
+class CallSiteDeoptBundleFrameHolder : public ResourceObj {
+public:
+    CallSiteEntry* call_site_entry;
+    DeoptBundle* deopt_bundle;
+    FrameLayoutEntry* frame_layout_entry;
+
+    CallSiteDeoptBundleFrameHolder(): call_site_entry(nullptr), deopt_bundle(nullptr), frame_layout_entry(nullptr) {}
+
+    CallSiteDeoptBundleFrameHolder(CallSiteEntry* call_site, DeoptBundle* bundle, FrameLayoutEntry* frame_layout):
+        call_site_entry(call_site), deopt_bundle(bundle), frame_layout_entry(frame_layout) {}
 };
 
 // YuhuDebugInformationRecorder: Thread-local recorder for collecting debug information
@@ -156,7 +168,10 @@ private:
   GrowableArray<EdgeEntry*>* _edge_entries;
 
   // frame layout information
-  FrameLayoutInfo* _frame_layout_info;
+  GrowableArray<FrameLayoutEntry*>* _frame_layout_entries;
+
+  int _total_frame_size_in_bytes = -1; // extracted from machine code's prologue
+  int _num_of_prologue_registers = -1; // extracted from machine code's prologue
 
   // Mangled function name
   std::string _mangled_func_name;
@@ -169,21 +184,43 @@ private:
   static int _tls_index;
 
   void check_frame_layout_info() const {
-      assert(_frame_layout_info->total_frame_size_in_bytes != -1 &&
-             _frame_layout_info->num_of_prologue_registers != -1 &&
-             _frame_layout_info->header_words != -1 &&
-             _frame_layout_info->monitor_words != -1 &&
-             _frame_layout_info->stack_words != -1 &&
-             _frame_layout_info->locals_words != -1 &&
-             _frame_layout_info->extended_frame_words != -1 &&
-             _frame_layout_info->extended_frame_reg_num != -1 &&
-             _frame_layout_info->extended_frame_kind != -1 &&
-             _frame_layout_info->extended_frame_offset != -1, "frame layout data is not initialized");
-      // Usually it should be fp register, sometimes it uses sp register,
-      // but don't know when, assume it is always fp register
-      assert(_frame_layout_info->extended_frame_reg_num == 29 &&
-             _frame_layout_info->extended_frame_offset < 0 &&
-             _frame_layout_info->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+      assert(_total_frame_size_in_bytes != -1 && _num_of_prologue_registers != -1, "prologue data is not initialized");
+      for (int i = 0; i < _frame_layout_entries->length(); ++i) {
+          auto frame_layout_entry = _frame_layout_entries->at(i);
+          assert(frame_layout_entry->header_words != -1 &&
+                 frame_layout_entry->monitor_words != -1 &&
+                 frame_layout_entry->stack_words != -1 &&
+                 frame_layout_entry->locals_words != -1 &&
+                 frame_layout_entry->extended_frame_words != -1 &&
+                 frame_layout_entry->extended_frame_reg_num != -1 &&
+                 frame_layout_entry->extended_frame_kind != -1 &&
+                 frame_layout_entry->extended_frame_offset != -1, "frame layout data is not initialized");
+          // Usually it should be fp register, sometimes it uses sp register,
+          // but don't know when, assume it is always fp register
+          assert(frame_layout_entry->extended_frame_reg_num == 29 &&
+                 frame_layout_entry->extended_frame_offset < 0 &&
+                 frame_layout_entry->extended_frame_offset % 8 == 0, "Should be valid fp offset");
+      }
+  }
+
+  /*
+   * Return topmost frame layout entry. If method is not inlined, just return the only frame, otherwise, return the frame of root method.
+   */
+  FrameLayoutEntry* get_topmost_frame_entry() const {
+      check_frame_layout_info();
+      if (_frame_layout_entries->length() == 1) {
+          return _frame_layout_entries->at(0);
+      }
+      for (int i = 0; i < _frame_layout_entries->length(); ++i) {
+          FrameLayoutEntry* entry = _frame_layout_entries->at(i);
+          YuhuInlineNode* inline_node = entry->inline_node_or_method->as_inline_node();
+          // Check root node and return its frame layout entry
+          if (inline_node->bci() == 0 && inline_node->inline_depth() == 0 && !inline_node->parent()) {
+              return entry;
+          }
+      }
+      ShouldNotReachHere();
+      return NULL;
   }
 
 public:
@@ -204,11 +241,10 @@ public:
 
   // Call site related functions
   void register_call_site(uint64_t statepoint_id,
-                          ciMethod* current_method,
+                          YuhuInlineNodeOrMethod* inline_node_or_method,
                           uint64_t call_target,
                           CallSiteType call_site_type,
-                          int bci,
-                          int num_monitors);
+                          int bci = -2);
 
   bool has_java_call_sites() const {
       CallSiteType java_call = CallSiteType::java_call;
@@ -330,14 +366,19 @@ public:
       return _edge_entries;
   }
 
+  bool is_frame_layout_statepoint_id(uint64_t statepoint_id) const {
+      int index = _frame_layout_entries->find(&statepoint_id, [](void* token, FrameLayoutEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->statepoint_id;
+      });
+      return index != -1;
+  }
+
   // stack map related functions
   void register_stack_map(uint64_t statepoint_id, uint32_t instruction_offset);
 
   void register_stack_map_location_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0);
 
-  void register_deopt_bundle_local_data(uint64_t statepoint_id, uint8_t basic_type);
-
-  void register_deopt_bundle_expression_stack_data(uint64_t statepoint_id, uint8_t basic_type);
+  void register_deopt_bundle(uint64_t statepoint_id, GrowableArray<uint8_t>* locals_basic_type_list, GrowableArray<uint8_t>* expressions_basic_type_list, int num_monitors);
 
   void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj = NULL);
 
@@ -345,76 +386,93 @@ public:
 
   void register_edge(uint32_t offset, EdgeTargetType edge_target_type, uint64_t target_address);
 
-  void register_frame_layout_info_with_frame_fields(int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
+  void register_frame_layout_frame_fields(uint64_t statepoint_id, YuhuInlineNodeOrMethod* inline_node_or_method,
+                                          int header_words, int monitor_words, int stack_words, int locals_words, int extended_frame_words);
 
-  void register_frame_layout_info_with_prologue_fields(int total_frame_size_in_bytes, int num_of_prologue_registers);
+  void register_prologue_fields(int total_frame_size_in_bytes, int num_of_prologue_registers);
 
-  void register_frame_layout_info_with_stack_map_fields(int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset);
+  void register_frame_layout_stack_map_fields(uint64_t statepoint_id, int extended_frame_reg_num, int extended_frame_kind, int extended_frame_offset);
 
+  /**
+   * Return topmost frame entry's max monitors.
+   *
+   * @return
+   */
   int max_monitors() const {
-      check_frame_layout_info();
+      FrameLayoutEntry* topmost_frame_entry = get_topmost_frame_entry();
 
-      int max_monitors = _frame_layout_info->monitor_words / 2;
+      int max_monitors = topmost_frame_entry->monitor_words / 2;
 
       return max_monitors;
   }
 
   /**
+   * Use topmost frame entry's data.
+   *
    * for T_LONG/T_DOUBLE type, local_index+1 has actual value and local_index has padding value.
    *
    * @param local_index
    * @return
    */
     int local_offset_in_bytes(int local_index) const {
-        check_frame_layout_info();
+        FrameLayoutEntry* topmost_frame_entry = get_topmost_frame_entry();
 
         // 2 words is for x29,x30 in prologue
-        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
-                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+        int adjust_words = _total_frame_size_in_bytes / wordSize - 2 - (-topmost_frame_entry->extended_frame_offset / wordSize);
 
-        assert(spill_words >= 0, "spill_words has invalid value");
+        assert(adjust_words >= 0, "adjust_words has invalid value");
 
-        assert(local_index < _frame_layout_info->locals_words, "local index is invalid value");
+        assert(local_index < topmost_frame_entry->locals_words, "local index is invalid value");
 
-        int offset_in_bytes = (spill_words + _frame_layout_info->stack_words + _frame_layout_info->monitor_words +
-                                     _frame_layout_info->header_words + _frame_layout_info->locals_words - 1 - local_index) * wordSize;
+        int offset_in_bytes = (adjust_words + topmost_frame_entry->stack_words + topmost_frame_entry->monitor_words +
+                topmost_frame_entry->header_words + topmost_frame_entry->locals_words - 1 - local_index) * wordSize;
         return offset_in_bytes;
     }
 
+    /**
+     * Use topmost frame entry's data.
+     *
+     * @param monitor_index
+     * @return
+     */
     int monitor_header_offset_in_bytes(int monitor_index) const {
-        check_frame_layout_info();
+        FrameLayoutEntry* topmost_frame_entry = get_topmost_frame_entry();
 
         // 2 words is for x29,x30 in prologue
-        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
-                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+        int adjust_words = _total_frame_size_in_bytes / wordSize - 2 - (-topmost_frame_entry->extended_frame_offset / wordSize);
 
-        assert(spill_words >= 0, "spill_words has invalid value");
+        assert(adjust_words >= 0, "adjust_words has invalid value");
 
-        int max_monitors = _frame_layout_info->monitor_words / 2;
+        int max_monitors = topmost_frame_entry->monitor_words / 2;
 
         assert(monitor_index < max_monitors, "monitor index is invalid value");
 
         int monitor_object_offset_in_bytes =
-                (spill_words + _frame_layout_info->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
+                (adjust_words + topmost_frame_entry->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
 
         return monitor_object_offset_in_bytes - wordSize;
     }
 
+    /**
+     * Use topmost frame entry's data.
+     *
+     * @param monitor_index
+     * @return
+     */
     int monitor_object_offset_in_bytes(int monitor_index) const {
-        check_frame_layout_info();
+        FrameLayoutEntry* topmost_frame_entry = get_topmost_frame_entry();
 
         // 2 words is for x29,x30 in prologue
-        int spill_words = _frame_layout_info->total_frame_size_in_bytes / wordSize - 2
-                          - (-_frame_layout_info->extended_frame_offset / wordSize);
+        int adjust_words = _total_frame_size_in_bytes / wordSize - 2 - (-topmost_frame_entry->extended_frame_offset / wordSize);
 
-        assert(spill_words >= 0, "spill_words has invalid value");
+        assert(adjust_words >= 0, "adjust_words has invalid value");
 
-        int max_monitors = _frame_layout_info->monitor_words / 2;
+        int max_monitors = topmost_frame_entry->monitor_words / 2;
 
         assert(monitor_index < max_monitors, "monitor index is invalid value");
 
         int monitor_object_offset_in_bytes =
-                (spill_words + _frame_layout_info->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
+                (adjust_words + topmost_frame_entry->stack_words + (max_monitors - monitor_index - 1) * 2 + 1) * wordSize;
 
         return monitor_object_offset_in_bytes;
     }

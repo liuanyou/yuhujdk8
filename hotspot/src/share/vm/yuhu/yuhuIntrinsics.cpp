@@ -204,8 +204,8 @@ void YuhuIntrinsics::do_Math_1to1(Value *function) {
     assert(helper_address != 0, "helper_address should have a value");
 
     YuhuDebugInformationRecorder::get()->register_call_site(
-            statepoint_id, target(), helper_address,
-            CallSiteType::leaf_call, bci(), state()->num_monitors());
+            statepoint_id, inline_node_or_method(), helper_address,
+            CallSiteType::leaf_call, bci());
 
   // LLVM 20+ requires FunctionType for CreateCall
   // Math 1to1 functions have signature "d" -> "d" (double -> double)
@@ -267,8 +267,8 @@ void YuhuIntrinsics::do_Math_2to1(Value *function) {
     assert(helper_address != 0, "helper_address should have a value");
 
     YuhuDebugInformationRecorder::get()->register_call_site(
-            statepoint_id, target(), helper_address,
-            CallSiteType::leaf_call, bci(), state()->num_monitors());
+            statepoint_id, inline_node_or_method(), helper_address,
+            CallSiteType::leaf_call, bci());
 
   // LLVM 20+ requires FunctionType for CreateCall
   // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "dd" -> "d"
@@ -323,8 +323,8 @@ void YuhuIntrinsics::do_System_currentTimeMillis() {
   assert(helper_address != 0, "helper_address should have a value");
 
     YuhuDebugInformationRecorder::get()->register_call_site(
-      statepoint_id, target(), helper_address,
-      CallSiteType::leaf_call, bci(), state()->num_monitors());
+      statepoint_id, inline_node_or_method(), helper_address,
+      CallSiteType::leaf_call, bci());
   
   // Create the call
 #if LLVM_VERSION_MAJOR >= 20

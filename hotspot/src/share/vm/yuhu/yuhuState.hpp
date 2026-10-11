@@ -190,6 +190,18 @@ class YuhuOSREntryState : public YuhuState {
                      llvm::Value*        method);
 };
 
+// YuhuInlineEntryState is the Path B (LLVM-IR inlining) counterpart of
+// YuhuNormalEntryState.  A Path B inlinee's llvm::Function has the plain Java
+// signature (no dummy x0, no caller-side AArch64 register layout), so its
+// entry state must be populated from the LLVM Argument* list rather than by
+// reading x0..x7 or spill slots off a caller frame.  Uses
+// YuhuInlineEntryCacher to do that binding.
+class YuhuInlineEntryState : public YuhuState {
+ public:
+  YuhuInlineEntryState(YuhuTopLevelBlock* block,
+                        llvm::Value*        method);
+};
+
 // YuhuPHIState objects are used to manage the entry state
 // for blocks with more than one entry path or for blocks
 // entered from blocks that will be compiled later.

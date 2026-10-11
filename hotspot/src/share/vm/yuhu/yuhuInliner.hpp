@@ -37,9 +37,21 @@ class YuhuTopLevelBlock;
 class YuhuInliner : public AllStatic {
  public:
   static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci);
-  static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci,
-                              YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block);
   static bool may_be_inlinable(ciMethod* target);
+
+  // M0 of LLVM-IR inlining: a callee is "llvm_inlineable" if it passes the
+  // quick may_be_inlinable() checks, has control flow (so the bytecode-level
+  // inliner could never handle it), yet is "quiescent": every instruction is
+  // straight dataflow (constants, local load/store, stack shuffling, arithmetic,
+  // conversions, comparisons) or a forward branch (if*/goto/tableswitch/
+  // lookupswitch) that does not form a loop.  In particular it contains no
+  // invoke/field-access/array-access/division/throw/new/instanceof/checkcast
+  // instruction -- each of those can trap or call into the VM and so would
+  // require a real frame, which an inlinee must not have.  See also the
+  // "Four things B must not do" list in the inlinee design: this eligibility
+  // check is what keeps B from ever reaching those code paths during its own
+  // YuhuFunction::initialize().
+  static bool is_llvm_inlineable(ciMethod* target);
 };
 
 #endif // SHARE_VM_YUHU_YUHUINLINER_HPP

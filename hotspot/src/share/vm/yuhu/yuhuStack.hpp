@@ -29,6 +29,7 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuInvariants.hpp"
 #include "yuhu/yuhuType.hpp"
+#include "yuhu/yuhuInlineTree.hpp"
 
 class YuhuFunction;
 class YuhuNativeWrapper;
@@ -38,8 +39,16 @@ enum class CallSiteType : uint8_t;
 
 class YuhuStack : public YuhuCompileInvariants {
  public:
+  // `is_inlinee` selects the reduced frame protocol used for a callee built
+  // as a separate alwaysinline llvm::Function (see YuhuFunction::
+  // build_inlinee): the frame's own alloca/layout is unchanged, but the three
+  // compilation-wide side effects -- the EXTENDED_SP fixed-ID stackmap, the
+  // register_frame_layout_info_with_frame_fields() registration and the
+  // final CreateStoreFramePointer() (which writes thread->last_Java_fp) --
+  // are skipped, because those are keyed once per compilation and must
+  // belong to the outermost function only.
   static YuhuStack* CreateBuildAndPushFrame(
-    YuhuFunction* function, llvm::Value* method);
+    YuhuFunction* function, llvm::Value* method, bool is_inlinee = false);
   static YuhuStack* CreateBuildAndPushFrame(
     YuhuNativeWrapper* wrapper, llvm::Value* method);
 
@@ -48,7 +57,7 @@ class YuhuStack : public YuhuCompileInvariants {
     : YuhuCompileInvariants(parent) {}
 
  protected:
-  void initialize(llvm::Value* method, ciMethod* target);
+  void initialize(llvm::Value* method, YuhuInlineNodeOrMethod* inline_node_or_method, bool is_inlinee = false);
 
   // Properties of the method being compiled
  protected:
@@ -96,10 +105,6 @@ class YuhuStack : public YuhuCompileInvariants {
   void CreateSetLastJavaFrame();
   
   void CreateResetLastJavaFrame();
-
-  void CreateCallSitePlaceholder(uint64_t virtual_address);
-
-  llvm::Value* CreateCallSitePlaceholderWithCallTarget(uint64_t virtual_address, uint64_t call_target_va, CallSiteType call_site_type);
 
  private:
   void CreateAssertLastJavaSPIsNull() const PRODUCT_RETURN;
@@ -207,7 +212,8 @@ class YuhuStackWithNormalFrame : public YuhuStack {
   friend class YuhuStack;
 
  protected:
-  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method);
+  YuhuStackWithNormalFrame(YuhuFunction* function, llvm::Value* method,
+                            bool is_inlinee = false);
 
  private:
   YuhuFunction* _function;

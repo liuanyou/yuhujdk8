@@ -35,6 +35,7 @@
 #include "memory/allocation.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuCodeBuffer.hpp"
+#include "yuhu/yuhuInlineTree.hpp"
 
 class YuhuBuilder;
 
@@ -120,21 +121,21 @@ class YuhuCompileInvariants : public ResourceObj {
 
 class YuhuTargetInvariants : public YuhuCompileInvariants {
  protected:
-  YuhuTargetInvariants(ciEnv* env, YuhuBuilder* builder, ciTypeFlow* flow)
+  YuhuTargetInvariants(ciEnv* env, YuhuBuilder* builder, YuhuInlineNodeOrMethod* inline_node_or_method, ciTypeFlow* flow)
     : YuhuCompileInvariants(env, builder),
-      _target(flow->method()),
+      _inline_node_or_method(inline_node_or_method),
       _flow(flow),
       _max_monitors(count_monitors()) {}
 
-  YuhuTargetInvariants(const YuhuCompileInvariants* parent, ciMethod* target)
+  YuhuTargetInvariants(const YuhuCompileInvariants* parent, YuhuInlineNodeOrMethod* inline_node_or_method)
     : YuhuCompileInvariants(parent),
-      _target(target),
+      _inline_node_or_method(inline_node_or_method),
       _flow(NULL),
       _max_monitors(count_monitors()) {}
 
   YuhuTargetInvariants(const YuhuTargetInvariants* parent)
     : YuhuCompileInvariants(parent),
-      _target(parent->_target),
+      _inline_node_or_method(parent->_inline_node_or_method),
       _flow(parent->_flow),
       _max_monitors(parent->_max_monitors) {}
 
@@ -142,14 +143,17 @@ class YuhuTargetInvariants : public YuhuCompileInvariants {
   int count_monitors();
 
  private:
-  ciMethod*   _target;
+  YuhuInlineNodeOrMethod* _inline_node_or_method;
   ciTypeFlow* _flow;
   int         _max_monitors;
 
   // The method being compiled.
  public:
   ciMethod* target() const {
-    return _target;
+    return _inline_node_or_method->is_inline_node() ? _inline_node_or_method->as_inline_node()->method() : _inline_node_or_method->as_method();
+  }
+  YuhuInlineNodeOrMethod* inline_node_or_method() const {
+      return _inline_node_or_method;
   }
 
   // Typeflow analysis of the method being compiled.

@@ -37,6 +37,7 @@
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
 #include "yuhu/yuhuCacheDecache.hpp"
+#include "yuhu/yuhuCompiler.hpp"
 #include "yuhu/yuhuConstant.hpp"
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
 #include "yuhu/yuhuFunction.hpp"
@@ -613,8 +614,8 @@ void YuhuTopLevelBlock::emit_handler_checks(int count) {
       assert(helper_address != 0, "helper_address should have a value");
 
       YuhuDebugInformationRecorder::get()->register_call_site(
-              statepoint_id, target(), helper_address,
-              CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+              statepoint_id, inline_node_or_method(), helper_address,
+              CallSiteType::leaf_call, bci());
 
       llvm::CallInst* call = builder()->CreateCall(func_type, callee, args);
 
@@ -687,11 +688,10 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     
     uint64_t helper_address = (uint64_t)YuhuRuntime::safepoint_poll_stub();
     YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            target(),
+                                                            inline_node_or_method(),
                                                             helper_address,
                                                             CallSiteType::safepoint_poll,
-                                                            is_method_entry_safepoint ? -1 : bci(),
-                                                            current_state()->num_monitors());
+                                                            is_method_entry_safepoint ? -1 : bci());
 
     llvm::Value* call_target = LLVMValue::jlong_constant(helper_address);
 
@@ -776,6 +776,8 @@ void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
   // Build deopt operand bundle with all live JVM state
   YuhuState* state = current_state();
   YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
+  GrowableArray<uint8_t> locals_basic_type_list;
+  GrowableArray<uint8_t> expressions_basic_type_list;
 
   // 1. Local variables (in order 0..max_locals-1)
   for (int i = 0; i < max_locals(); i++) {
@@ -787,13 +789,13 @@ void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
       if (local_val != NULL) {
           BasicType basic_type = local_val->basic_type();
 
-          recorder->register_deopt_bundle_local_data(statepoint_id, basic_type);
+          locals_basic_type_list.append(basic_type);
           if (basic_type == T_LONG || basic_type == T_DOUBLE) {
               assert(i + 1 < max_locals(), "padding slot should be next to T_LONG/T_DOUBLE");
               YuhuValue* next = state->local(i + 1);
               assert(next == NULL, "next must be padding value");
               BasicType padding_type = (basic_type == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
-              recorder->register_deopt_bundle_local_data(statepoint_id, padding_type);
+              locals_basic_type_list.append(padding_type);
               i++;
           }
           continue;
@@ -801,7 +803,7 @@ void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
     ciType* type = state->local_type_at(i);
     BasicType slot_type = type->basic_type();
     assert(slot_type == ciTypeFlow::StateVector::T_BOTTOM, "basic type should be T_CONFLICT");
-    recorder->register_deopt_bundle_local_data(statepoint_id, slot_type);
+    locals_basic_type_list.append(slot_type);
   }
   
   // 2. Expression stack (in order top..bottom)
@@ -815,14 +817,15 @@ void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
       YuhuValue* next = state->stack(i + 1);
       assert(next && next->is_two_word(), "next must be wide value");
       BasicType padding_type = (next->basic_type() == T_LONG) ? (BasicType)ciTypeFlow::StateVector::T_LONG2 : (BasicType)ciTypeFlow::StateVector::T_DOUBLE2;
-      recorder->register_deopt_bundle_expression_stack_data(statepoint_id, padding_type);
+      expressions_basic_type_list.append(padding_type);
       continue;
     }
     
     // Push type metadata first
     BasicType basic_type = stack_val->basic_type();
-    recorder->register_deopt_bundle_expression_stack_data(statepoint_id, basic_type);
+    expressions_basic_type_list.append(basic_type);
   }
+  recorder->register_deopt_bundle(statepoint_id, &locals_basic_type_list, &expressions_basic_type_list, state->num_monitors());
 }
 
 void YuhuTopLevelBlock::do_trap(int trap_request) {
@@ -832,13 +835,11 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
     // Build deopt operand bundle with all live JVM state
     register_deopt_bundle(statepoint_id);
 
-  // NEW: Register call site for later patching
   YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                          target(),
+                                                          inline_node_or_method(),
                                                           (uint64_t)YuhuRuntime::handle_deoptimization_stub(),
                                                           CallSiteType::deopt_call,
-                                                          bci(),
-                                                          current_state()->num_monitors());
+                                                          bci());
 
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
@@ -930,11 +931,10 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
 //      uint64_t helper_address = (uint64_t)&go_unwind;
       // call_target_va is not used in the CreateCall, just create one for no use
       YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                              target(),
+                                                              inline_node_or_method(),
                                                               0,
                                                               CallSiteType::unwind_call,
-                                                              bci(),
-                                                              current_state()->num_monitors());
+                                                              bci());
 
 //      llvm::Value* call_target = LLVMValue::jlong_constant(helper_address);
 //
@@ -1298,6 +1298,108 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   return NULL;
 }
 
+bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
+                                             YuhuInlineTree*      inline_tree,
+                                             YuhuInlineNode*      inline_node,
+                                             bool                 is_static) {
+    ciMethod* call_method = inline_node->method();
+  // Name the inlinee the same way YuhuCompiler::compile_method() names a
+  // top-level function, purely for readability in IR dumps; LLVM
+  // automatically uniquifies the name if it happens to collide with one
+  // already in the module.
+  const char* base_name = YuhuCompiler::methodname(
+    call_method->holder()->name()->as_utf8(),
+    call_method->name()->as_utf8());
+  const char* inlinee_name = YuhuCompiler::funcname(base_name);
+
+  YuhuFunction* inlinee = func->get_or_build_inlinee(inline_tree, inline_node, inlinee_name);
+
+  // Collect arguments in natural Java order (deepest slot first), matching
+  // the inlinee's own signature (see YuhuFunction::
+  // generate_inlinee_entry_point_type): no dummy x0, just (this?, params...).
+  // Unlike the real invoke path there is no register-vs-stack split to worry
+  // about -- this call is guaranteed to be flattened away by the AlwaysInliner
+  // pass long before it ever reaches a register allocator.
+  std::vector<llvm::Value*> call_args;
+  int arg_slots = call_method->arg_size();
+
+  int i = arg_slots - 1;
+  if (!is_static) {
+    YuhuValue* recv_val = xstack(i);
+    call_args.push_back(recv_val->jobject_value());
+    i--;
+  }
+  for (; i >= 0; i--) {
+    YuhuValue* v = xstack(i);
+    switch (v->basic_type()) {
+      case T_BOOLEAN:
+      case T_BYTE:
+      case T_CHAR:
+      case T_SHORT:
+      case T_INT:
+        call_args.push_back(v->jint_value());
+        break;
+      case T_LONG:
+        call_args.push_back(v->jlong_value());
+        i--;  // skip the padding slot of the two-word value
+        break;
+      case T_FLOAT:
+        call_args.push_back(v->jfloat_value());
+        break;
+      case T_DOUBLE:
+        call_args.push_back(v->jdouble_value());
+        i--;  // skip the padding slot of the two-word value
+        break;
+      case T_OBJECT:
+      case T_ARRAY:
+        call_args.push_back(v->jobject_value());
+        break;
+      default:
+        ShouldNotReachHere();
+    }
+  }
+
+  // Pop the receiver (if any) and the arguments off the expression stack.
+  // No decaching: an inlinee cannot trap or safepoint (see YuhuInliner::
+  // is_llvm_inlineable), and its call vanishes before codegen, so there is
+  // nothing for an OopMap or a deopt bundle to describe here.
+  for (int j = 0; j < arg_slots; j++)
+    xpop();
+
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    // must register deopt bundle after decache_for_Java_call pops values from expression stack
+    // bci here doesn't need to be re-executed
+    register_deopt_bundle(statepoint_id);
+    // register call site to form scope desc chain
+    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
+                                                            inline_node_or_method(),
+                                                            0,
+                                                            CallSiteType::inlinee_call,
+                                                            bci());
+
+  llvm::CallInst* call = builder()->CreateCall(inlinee->function(), call_args);
+
+  // Push the result back onto the expression stack, matching bytecode
+  // semantics (compare cache_after_Java_call(), minus its caching scan which
+  // is only needed for a call that can actually suspend or deoptimize).
+  if (call_method->return_type()->size()) {
+    ciType* type;
+    switch (call_method->return_type()->basic_type()) {
+      case T_BOOLEAN:
+      case T_BYTE:
+      case T_CHAR:
+      case T_SHORT:
+        type = ciType::make(T_INT);
+        break;
+      default:
+        type = call_method->return_type();
+    }
+    push(YuhuValue::create_generic(type, call, false));
+  }
+
+  return true;
+}
+
 void YuhuTopLevelBlock::do_call() {
   // Check raw bytecode for invokehandle (java_code() converts it to invokevirtual)
   Bytecodes::Code raw_bc = iter()->cur_bc_raw();
@@ -1404,21 +1506,30 @@ void YuhuTopLevelBlock::do_call() {
   // Try to inline the call
   if (!call_is_virtual && !is_dynamic && !is_invokehandle) {
     // Check if we have an inline tree and this BCI is marked for inlining
-    YuhuInlineNode* inline_node = NULL;
+    YuhuInlineNode* child_inline_node = NULL;
     YuhuFunction* func = function();
-    if (func != NULL && func->inline_tree() != NULL) {
-      inline_node = func->inline_tree()->root()->find_child_by_bci(bci());
+    if (func != NULL && func->inline_tree() != NULL && func->inline_tree()->llvm_inline_allowed() &&
+        func->inline_node_or_method() != NULL && func->inline_node_or_method()->is_inline_node()) {
+        child_inline_node = func->inline_node_or_method()->as_inline_node()->find_child_by_bci(bci());
     }
     
-    if (inline_node != NULL) {
+    if (child_inline_node != NULL) {
+        assert(call_method == child_inline_node->method(), "dest method should match");
       // This BCI is marked for inlining in the inline tree
       if (YuhuTraceInlining) {
         tty->print_cr("[Yuhu] Inlining %s at bci %d (depth %d)",
-                      call_method->name()->as_utf8(), bci(), inline_node->inline_depth());
+                      call_method->name()->as_utf8(), bci(), child_inline_node->inline_depth());
       }
-//      if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci(), inline_node, this)) {
-//        return;
-//      }
+
+      // M0 of LLVM-IR inlining: for a branchy-but-quiescent callee, build it
+      // as its own alwaysinline llvm::Function and emit a direct call to it
+      // (see YuhuFunction::build_inlinee) instead of the stub-based compiled
+      // call below.  AlwaysInlinerPass, run over the whole module in
+      // YuhuCompiler::compile_method() once A's IR is complete, flattens
+      // this call away before anything else looks at the IR.
+        bool inlined = do_llvm_inline_call(func, func->inline_tree(), child_inline_node, is_static);
+        assert(inlined, "just checking");
+        return;
     } else {
       // No inline tree or this BCI is not marked - use old single-level inlining
       if (YuhuInliner::attempt_inline(call_method, current_state(), stack(), bci())) {
@@ -1654,13 +1765,11 @@ void YuhuTopLevelBlock::do_call() {
 
   llvm::Value* call_target = LLVMValue::jlong_constant((uint64_t)compiled_entry_address);
 
-  // NEW: Register call site for later patching
   YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                          target(),
+                                                          inline_node_or_method(),
                                                           (uint64_t) compiled_entry_address,
                                                           CallSiteType::java_call,
-                                                          bci(),
-                                                          current_state()->num_monitors());
+                                                          bci());
 
   // Cast from_compiled_entry to a function pointer matching the callee's signature
   // We need to construct the callee's FunctionType based on its Java signature
@@ -1916,8 +2025,8 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
     assert(helper_address != 0, "helper_address should have a value");
 
     YuhuDebugInformationRecorder::get()->register_call_site(
-            statepoint_id, target(), helper_address,
-            CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+            statepoint_id, inline_node_or_method(), helper_address,
+            CallSiteType::leaf_call, bci());
 
   llvm::FunctionType* func_type = YuhuBuilder::make_ftype("KK", "c");
   std::vector<Value*> args;

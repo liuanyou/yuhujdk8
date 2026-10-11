@@ -24,6 +24,7 @@
  */
 
 #include "precompiled.hpp"
+#include "ci/ciConstant.hpp"
 #include "ci/ciField.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciStreams.hpp"
@@ -44,12 +45,10 @@ using namespace llvm;
 
 class YuhuInlineBlock : public YuhuBlock {
  public:
-  YuhuInlineBlock(ciMethod* target, YuhuState* state, YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block)
-    : YuhuBlock(state, target),
+  YuhuInlineBlock(ciMethod* target, YuhuState* state)
+    : YuhuBlock(state, new YuhuInlineNodeOrMethod(target)),
       _outer_state(state),
-      _entry_state(new YuhuState(this)),
-      _inline_node(inline_node),
-      _outer_block(outer_block) {
+      _entry_state(new YuhuState(this)) {
     for (int i = target->max_locals() - 1; i >= 0; i--) {
       YuhuValue *value = NULL;
       if (i < target->arg_size())
@@ -61,8 +60,6 @@ class YuhuInlineBlock : public YuhuBlock {
  private:
   YuhuState* _outer_state;
   YuhuState* _entry_state;
-  YuhuInlineNode* _inline_node;  // Inline tree node for this inlined method
-  YuhuTopLevelBlock* _outer_block;  // Outer block for delegating calls
 
  private:
   YuhuState* outer_state() {
@@ -70,12 +67,6 @@ class YuhuInlineBlock : public YuhuBlock {
   }
   YuhuState* entry_state() {
     return _entry_state;
-  }
-  YuhuInlineNode* inline_node() {
-    return _inline_node;
-  }
-  YuhuTopLevelBlock* outer_block() {
-    return _outer_block;
   }
 
  public:
@@ -96,19 +87,15 @@ class YuhuInlineBlock : public YuhuBlock {
 
 class YuhuInlinerHelper : public StackObj {
  public:
-  YuhuInlinerHelper(ciMethod* target, YuhuState* entry_state, YuhuInlineNode* inline_node, YuhuTopLevelBlock* outer_block)
+  YuhuInlinerHelper(ciMethod* target, YuhuState* entry_state)
     : _target(target),
       _entry_state(entry_state),
-      _iter(target),
-      _inline_node(inline_node),
-      _outer_block(outer_block) {}
+      _iter(target) {}
 
  private:
   ciBytecodeStream _iter;
   YuhuState*      _entry_state;
   ciMethod*        _target;
-  YuhuInlineNode*  _inline_node;  // Inline tree node for the method being inlined
-  YuhuTopLevelBlock* _outer_block;  // Outer block for delegating calls
 
  public:
   ciBytecodeStream* iter() {
@@ -202,7 +189,7 @@ class YuhuInlinerHelper : public StackObj {
   // Code generation
  public:
   void do_inline() {
-    (new YuhuInlineBlock(target(), entry_state(), _inline_node, _outer_block))->emit_IR();
+    (new YuhuInlineBlock(target(), entry_state()))->emit_IR();
   }
 };
 
@@ -240,6 +227,184 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
   // Should be caught by the above, but just in case...
   if (target->intrinsic_id() == vmIntrinsics::_Object_init)
     return false;
+
+  return true;
+}
+
+// Detailed eligibility check for the LLVM-IR inlining path (M0).
+//
+// A method qualifies only if:
+//   - it passes the quick may_be_inlinable() screen (size limit,
+//     no monitors / exception handlers / jsrs / native / abstract / initializer),
+//   - its control-flow graph is acyclic (no loops: a backedge would make
+//     YuhuTopLevelBlock::maybe_add_backedge_safepoint insert a safepoint poll,
+//     which needs a frame anchor and so must not happen inside an inlinee),
+//   - it actually has control flow (at least one branch instruction); a
+//     straight-line method should go through the existing bytecode inliner,
+//     which never builds a separate LLVM Function for it,
+//   - every one of its bytecodes is in the small "quiescent" whitelist below:
+//     constants, local/stack manipulation, arithmetic that cannot trap,
+//     conversions, comparisons and forward branches.  Anything that can
+//     null-check, bounds-check, throw, allocate, or call into the VM is
+//     rejected outright, since the inlinee deliberately has no frame to
+//     support traps, oop-maps or deoptimization at this stage.
+bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
+  if (!may_be_inlinable(target))
+    return false;
+
+  ciTypeFlow* flow = target->get_flow_analysis();
+  if (flow->failing())
+    return false;
+
+  if (YuhuCompiler::contains_incomplete_state_analysis(flow)) {
+      return false;
+  }
+
+  bool saw_branch = false;
+
+  ciBytecodeStream iter(target);
+  while (iter.next() != ciBytecodeStream::EOBC()) {
+    switch (iter.cur_bc()) {
+      // ---- constants ----
+    case Bytecodes::_nop:
+    case Bytecodes::_aconst_null:
+    case Bytecodes::_iconst_m1:
+    case Bytecodes::_iconst_0:
+    case Bytecodes::_iconst_1:
+    case Bytecodes::_iconst_2:
+    case Bytecodes::_iconst_3:
+    case Bytecodes::_iconst_4:
+    case Bytecodes::_iconst_5:
+    case Bytecodes::_lconst_0:
+    case Bytecodes::_lconst_1:
+    case Bytecodes::_fconst_0:
+    case Bytecodes::_fconst_1:
+    case Bytecodes::_fconst_2:
+    case Bytecodes::_dconst_0:
+    case Bytecodes::_dconst_1:
+    case Bytecodes::_bipush:
+    case Bytecodes::_sipush:
+      break;
+
+      // ---- ldc family ----
+      // Only primitive numeric constants are safe: a String or Class constant
+      // can require a VM call (lazy class loading, StringTable interning) and
+      // can throw -- neither of which an inlinee can do since it has no frame.
+    case Bytecodes::_ldc:
+    case Bytecodes::_ldc_w:
+    case Bytecodes::_ldc2_w: {
+      BasicType bt = iter.get_constant().basic_type();
+      if (bt != T_INT && bt != T_LONG && bt != T_FLOAT && bt != T_DOUBLE)
+        return false;
+      break;
+    }
+
+      // ---- loads ----
+    case Bytecodes::_iload: case Bytecodes::_iload_0: case Bytecodes::_iload_1:
+    case Bytecodes::_iload_2: case Bytecodes::_iload_3:
+    case Bytecodes::_lload: case Bytecodes::_lload_0: case Bytecodes::_lload_1:
+    case Bytecodes::_lload_2: case Bytecodes::_lload_3:
+    case Bytecodes::_fload: case Bytecodes::_fload_0: case Bytecodes::_fload_1:
+    case Bytecodes::_fload_2: case Bytecodes::_fload_3:
+    case Bytecodes::_dload: case Bytecodes::_dload_0: case Bytecodes::_dload_1:
+    case Bytecodes::_dload_2: case Bytecodes::_dload_3:
+    case Bytecodes::_aload: case Bytecodes::_aload_0: case Bytecodes::_aload_1:
+    case Bytecodes::_aload_2: case Bytecodes::_aload_3:
+      break;
+
+      // ---- stores ----
+    case Bytecodes::_istore: case Bytecodes::_istore_0: case Bytecodes::_istore_1:
+    case Bytecodes::_istore_2: case Bytecodes::_istore_3:
+    case Bytecodes::_lstore: case Bytecodes::_lstore_0: case Bytecodes::_lstore_1:
+    case Bytecodes::_lstore_2: case Bytecodes::_lstore_3:
+    case Bytecodes::_fstore: case Bytecodes::_fstore_0: case Bytecodes::_fstore_1:
+    case Bytecodes::_fstore_2: case Bytecodes::_fstore_3:
+    case Bytecodes::_dstore: case Bytecodes::_dstore_0: case Bytecodes::_dstore_1:
+    case Bytecodes::_dstore_2: case Bytecodes::_dstore_3:
+    case Bytecodes::_astore: case Bytecodes::_astore_0: case Bytecodes::_astore_1:
+    case Bytecodes::_astore_2: case Bytecodes::_astore_3:
+      break;
+
+      // ---- stack manipulation ----
+    case Bytecodes::_pop: case Bytecodes::_pop2:
+    case Bytecodes::_dup: case Bytecodes::_dup_x1: case Bytecodes::_dup_x2:
+    case Bytecodes::_dup2: case Bytecodes::_dup2_x1: case Bytecodes::_dup2_x2:
+    case Bytecodes::_swap:
+      break;
+
+      // ---- int/long arithmetic (no idiv/irem/ldiv/lrem: those trap on 0) ----
+    case Bytecodes::_iadd: case Bytecodes::_isub: case Bytecodes::_imul:
+    case Bytecodes::_iand: case Bytecodes::_ior: case Bytecodes::_ixor:
+    case Bytecodes::_ishl: case Bytecodes::_ishr: case Bytecodes::_iushr:
+    case Bytecodes::_ineg:
+    case Bytecodes::_ladd: case Bytecodes::_lsub: case Bytecodes::_lmul:
+    case Bytecodes::_land: case Bytecodes::_lor: case Bytecodes::_lxor:
+    case Bytecodes::_lshl: case Bytecodes::_lshr: case Bytecodes::_lushr:
+    case Bytecodes::_lneg:
+      break;
+
+      // ---- fp arithmetic: IEEE division/remainder never trap ----
+    case Bytecodes::_fadd: case Bytecodes::_fsub: case Bytecodes::_fmul:
+    case Bytecodes::_fdiv: case Bytecodes::_frem: case Bytecodes::_fneg:
+    case Bytecodes::_dadd: case Bytecodes::_dsub: case Bytecodes::_dmul:
+    case Bytecodes::_ddiv: case Bytecodes::_drem: case Bytecodes::_dneg:
+      break;
+
+    case Bytecodes::_iinc:
+      break;
+
+      // ---- comparisons ----
+    case Bytecodes::_lcmp:
+    case Bytecodes::_fcmpl: case Bytecodes::_fcmpg:
+    case Bytecodes::_dcmpl: case Bytecodes::_dcmpg:
+      break;
+
+      // ---- conversions ----
+    case Bytecodes::_i2l: case Bytecodes::_i2f: case Bytecodes::_i2d:
+    case Bytecodes::_l2i: case Bytecodes::_l2f: case Bytecodes::_l2d:
+    case Bytecodes::_f2i: case Bytecodes::_f2l: case Bytecodes::_f2d:
+    case Bytecodes::_d2i: case Bytecodes::_d2f: case Bytecodes::_d2l:
+    case Bytecodes::_i2b: case Bytecodes::_i2c: case Bytecodes::_i2s:
+      break;
+
+      // ---- forward branches: this is what makes the method interesting for
+      //      the LLVM-IR path rather than the bytecode path, but see the
+      //      acyclicity check below for why loops are still forbidden ----
+    case Bytecodes::_ifeq: case Bytecodes::_ifne: case Bytecodes::_iflt:
+    case Bytecodes::_ifge: case Bytecodes::_ifgt: case Bytecodes::_ifle:
+    case Bytecodes::_if_icmpeq: case Bytecodes::_if_icmpne: case Bytecodes::_if_icmplt:
+    case Bytecodes::_if_icmpge: case Bytecodes::_if_icmpgt: case Bytecodes::_if_icmple:
+    case Bytecodes::_if_acmpeq: case Bytecodes::_if_acmpne:
+    case Bytecodes::_ifnull: case Bytecodes::_ifnonnull:
+    case Bytecodes::_goto: case Bytecodes::_tableswitch: case Bytecodes::_lookupswitch:
+      saw_branch = true;
+      break;
+
+      // ---- returns ----
+    case Bytecodes::_return:
+    case Bytecodes::_ireturn: case Bytecodes::_lreturn: case Bytecodes::_freturn:
+    case Bytecodes::_dreturn: case Bytecodes::_areturn:
+      break;
+
+      // Everything else (invoke*, get*/put*, arraylength, *aload/*astore,
+      // athrow, new*, instanceof, checkcast, idiv/ldiv/irem/lrem, monitor*)
+      // can trap, call into the VM or otherwise needs a frame: reject.
+    default:
+      return false;
+    }
+  }
+
+  // Straight-line methods belong to the bytecode inliner's territory.
+  if (!saw_branch)
+    return false;
+
+  // Acyclic control flow only: a backedge would trigger a safepoint poll
+  // (see YuhuTopLevelBlock::maybe_add_backedge_safepoint) inside the inlinee,
+  // which is not allowed since the inlinee has no frame anchor of its own.
+  for (int i = 0; i < flow->block_count(); i++) {
+    if (flow->pre_order_at(i)->is_loop_head())
+      return false;
+  }
 
   return true;
 }
@@ -761,27 +926,14 @@ bool YuhuInlinerHelper::do_field_access(bool is_get, bool is_field) {
 }
 
 bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci) {
-  return attempt_inline(target, state, stack, bci, NULL, NULL);
-}
-
-bool YuhuInliner::attempt_inline(ciMethod *target, YuhuState *state, YuhuStack *stack, int bci,
-                                  YuhuInlineNode *inline_node, YuhuTopLevelBlock *outer_block) {
   if (YuhuIntrinsics::is_intrinsic(target)) {
     YuhuIntrinsics::inline_intrinsic(target, state, stack, bci);
     return true;
   }
 
-  // If we have an inline tree, check if this method is marked for inlining
-  if (inline_node != NULL) {
-    // The inline tree has already decided this method should be inlined
-    YuhuInlinerHelper inliner(target, state, inline_node, outer_block);
-    inliner.do_inline();
-    return true;
-  }
-
   // No inline tree - use the old single-level inlining logic
   if (may_be_inlinable(target)) {
-    YuhuInlinerHelper inliner(target, state, NULL, NULL);
+    YuhuInlinerHelper inliner(target, state);
     if (inliner.is_inlinable()) {
       inliner.do_inline();
       return true;

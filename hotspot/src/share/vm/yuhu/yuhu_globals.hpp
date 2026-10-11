@@ -45,6 +45,11 @@
   develop(bool, YuhuTraceInlining, false,                                    \
           "Trace inlining decisions during compilation")                     \
                                                                               \
+  develop(bool, YuhuLLVMInlining, false,                                     \
+          "Inline eligible callees as separate LLVM functions merged by the " \
+          "AlwaysInliner pass instead of only supporting the bytecode-level " \
+          "inliner for straight-line callees")                               \
+                                                                              \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \
                                                                               \
@@ -114,8 +119,6 @@ const uint32_t BLR_MASK = 0xFFFFFC1F;
 const uint32_t BLR_PATTERN = 0xD63F0000;
 const uint32_t B_MASK = 0xFC000000;
 const uint32_t B_PATTERN = 0x14000000;
-
-const uint64_t EXTENDED_SP_ALLOCA_STATEPOINT_ID = 1024;
 
 const uint64_t X0_SP_ALLOCA_STATEPOINT_ID = 1028;
 

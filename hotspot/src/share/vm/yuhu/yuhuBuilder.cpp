@@ -901,11 +901,9 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* na
     // an OopMap, because its stackmap record is keyed by the patch point id, so
     // the call site/stackmap pairing in the recorder never matches it up.
     YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            NULL,
+                                                            function()->inline_node_or_method(),
                                                             temp_placeholder,
-                                                            CallSiteType::oop_call,
-                                                            -2,
-                                                            0);
+                                                            CallSiteType::oop_call);
 
     llvm::Value* call_target = LLVMValue::jlong_constant(temp_placeholder);
     llvm::FunctionType* oop_ftype = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), false);
@@ -1014,11 +1012,9 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
     // an OopMap, because its stackmap record is keyed by the patch point id, so
     // the call site/stackmap pairing in the recorder never matches it up.
     YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            NULL,
+                                                            function()->inline_node_or_method(),
                                                             temp_placeholder,
-                                                            CallSiteType::oop_call,
-                                                            -2,
-                                                            0);
+                                                            CallSiteType::oop_call);
 
     llvm::Value* call_target = LLVMValue::jlong_constant(temp_placeholder);
     llvm::FunctionType* oop_ftype = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), false);
@@ -1072,11 +1068,9 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   // an OopMap, because its stackmap record is keyed by the patch point id, so
   // the call site/stackmap pairing in the recorder never matches it up.
   YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                          NULL,
+                                                          function()->inline_node_or_method(),
                                                           metadata_addr,
-                                                          CallSiteType::metadata_call,
-                                                          -2,
-                                                          0);
+                                                          CallSiteType::metadata_call);
 
   llvm::Value* call_target = LLVMValue::jlong_constant(metadata_addr);
   llvm::FunctionType* metadata_ftype = llvm::FunctionType::get(YuhuType::Metadata_type(), false);

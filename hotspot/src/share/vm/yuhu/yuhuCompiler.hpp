@@ -47,6 +47,7 @@ class YuhuEntry;
 class YuhuFunction;
 class YuhuRuntime;
 class PrologueStpRegistersInfo;
+class Method;
 
 class YuhuCompiler : public AbstractCompiler {
  public:
@@ -130,9 +131,23 @@ class YuhuCompiler : public AbstractCompiler {
   }
 
   // Helpers
- private:
+  // (Public so that YuhuTopLevelBlock::do_call() can name a callee it is
+  // building as an LLVM-IR inlinee the same way the top-level function is
+  // named -- see YuhuFunction::build_inlinee.)
+ public:
   static const char* methodname(const char* klass, const char* method);
   static const char* funcname(const char* base_name);
+
+  // ---- Path B (LLVM-IR inlining) per-method back-off ----
+  // On an LLVM-IR flatten miss (an alwaysinline inlinee that was not
+  // flattened), compile_method records the caller here and aborts that single
+  // compilation via record_failure (which keeps the method retryable).  The
+  // planner then consults llvm_inline_disabled() before assigning the
+  // llvm_inline strategy, so the retry compiles the caller normally instead of
+  // repeating the same failing inlining decision forever.  Keyed on the
+  // caller's Method* (address-compared only).
+  static void disable_llvm_inline(Method* m);
+  static bool llvm_inline_disabled(Method* m);
 //  void generate_native_code(YuhuEntry*     entry,
 //                            llvm::Function* function,
 //                            const char*     name);

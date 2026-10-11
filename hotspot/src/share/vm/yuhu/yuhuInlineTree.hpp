@@ -17,11 +17,12 @@ class YuhuInlineTree;
 // Represents a single inlined method in the inline tree
 class YuhuInlineNode : public ResourceObj {
  public:
-  YuhuInlineNode(ciMethod* method, int bci, int inline_depth)
+  YuhuInlineNode(ciMethod* method, int bci, int inline_depth, YuhuInlineNode* parent)
     : _method(method),
       _bci(bci),
       _inline_depth(inline_depth),
       _children(NULL),
+      _parent(parent),
       _max_locals(method->max_locals()),
       _max_stack(method->max_stack()) {}
 
@@ -30,6 +31,7 @@ class YuhuInlineNode : public ResourceObj {
   int _bci;                    // BCI in the caller where this method is inlined
   int _inline_depth;           // Depth of this inlining (0 = root method)
   GrowableArray<YuhuInlineNode*>* _children;  // Methods inlined into this method
+  YuhuInlineNode* _parent; // parent node for this inlined node
   int _max_locals;             // Method's max_locals
   int _max_stack;              // Method's max_stack
 
@@ -41,6 +43,7 @@ class YuhuInlineNode : public ResourceObj {
   int max_stack() const { return _max_stack; }
 
   GrowableArray<YuhuInlineNode*>* children() const { return _children; }
+  YuhuInlineNode* parent() const { return _parent; }
 
   void add_child(YuhuInlineNode* child) {
     if (_children == NULL) {
@@ -84,14 +87,6 @@ class YuhuInlineNode : public ResourceObj {
     return NULL;
   }
 
-  // Calculate the physical slot offset for this node's locals
-  // This is the sum of all previous nodes' locals in the inline tree
-  int locals_slot_offset() const {
-    // For now, return 0 - will be calculated during frame setup
-    // The actual offset depends on the traversal order
-    return 0;
-  }
-
   void print() const {
     tty->print("  ");
     for (int i = 0; i < _inline_depth; i++) {
@@ -113,14 +108,21 @@ class YuhuInlineNode : public ResourceObj {
 // Root of the inline tree for a compilation
 class YuhuInlineTree : public ResourceObj {
  public:
-  YuhuInlineTree(ciMethod* root_method)
-    : _root(new YuhuInlineNode(root_method, 0, 0)) {}
+  YuhuInlineTree(ciMethod* root_method, bool llvm_inline_allowed)
+    : _root(new YuhuInlineNode(root_method, 0, 0, NULL)), _llvm_inline_allowed(llvm_inline_allowed) {}
 
  private:
   YuhuInlineNode* _root;
+    // Path B is offered for this whole compilation only when the develop flag is
+    // on AND the root (caller) method has not been backed off by a previous
+    // flatten-miss (see YuhuCompiler::disable_llvm_inline).  When false, no
+    // candidate is ever marked llvm_inline, so the caller falls back to the
+    // existing bytecode/do_call path on retry.
+    bool _llvm_inline_allowed;
 
  public:
   YuhuInlineNode* root() const { return _root; }
+  bool llvm_inline_allowed() const { return _llvm_inline_allowed; }
 
   // Calculate total locals needed for all inlined methods
   int total_locals() const {
@@ -140,6 +142,39 @@ class YuhuInlineTree : public ResourceObj {
     tty->print_cr("Total locals: %d, Max stack: %d",
                   total_locals(), max_stack_depth());
   }
+};
+
+// even though a method can't be created as inline node, but it still can be inlined, like intrinsic method.
+class YuhuInlineNodeOrMethod : public ResourceObj {
+private:
+    YuhuInlineNode* _inline_node;
+    ciMethod* _method;
+
+public:
+    YuhuInlineNodeOrMethod(YuhuInlineNode* inline_node): _inline_node(inline_node), _method(NULL) {}
+    YuhuInlineNodeOrMethod(ciMethod* method): _inline_node(NULL), _method(method) {}
+
+    bool is_inline_node() const {
+        return _inline_node != NULL;
+    }
+
+    bool is_method() const {
+        return _method != NULL;
+    }
+
+    YuhuInlineNode* as_inline_node() const {
+        assert(is_inline_node(), "");
+        return _inline_node;
+    }
+
+    ciMethod* as_method() const {
+        assert(is_method(), "");
+        return _method;
+    }
+
+    ciMethod* target() const {
+        return is_inline_node() ? _inline_node->method() : _method;
+    }
 };
 
 #endif // SHARE_VM_YUHU_YUHUINLINETREE_HPP

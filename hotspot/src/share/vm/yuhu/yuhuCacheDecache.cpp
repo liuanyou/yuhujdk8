@@ -399,6 +399,98 @@ void YuhuOSREntryCacher::process_monitor(int index,
   // No action needed here — frame slots are already populated.
 }
 
+// ---------------------------------------------------------------------------
+// YuhuInlineEntryCacher::process_local_slot
+//
+// Path B (LLVM-IR inlining) inlinee entry binder.  The inlinee's LLVM function
+// signature (generate_inlinee_entry_point_type) is the plain Java parameter
+// list with NO leading dummy x0, and the callee is never called through the
+// AArch64 HotSpot ABI -- AlwaysInlinerPass substitutes each formal Argument*
+// with the caller's actual Value at inline time.  So we bind Java bytecode
+// slots to llvm::Argument* directly by formal-parameter index, skipping every
+// register/spill path YuhuNormalEntryCacher uses.
+void YuhuInlineEntryCacher::process_local_slot(int          index,
+                                                 YuhuValue** addr,
+                                                 int          offset) {
+  YuhuValue *value = *addr;
+
+  // Padding slot (second half of a long/double): nothing to bind.
+  if (value == NULL) {
+    return;
+  }
+
+  // Only parameters are live at method entry; non-parameter locals start NULL.
+  if (!(local_slot_needs_read(index, value) && index < arg_size())) {
+    return;
+  }
+
+  // Bytecode-slot -> LLVM-formal-arg-index mapping.
+  // Non-static: bytecode slot 0 = receiver, LLVM arg 0 = receiver, then
+  //   signature params in order, each occupying sig->type_at(i)->size() slots
+  //   (2 for long/double, 1 for others).  The upper slot of a two-word param
+  //   is a NULL padding entry and was already filtered above.
+  // Static:     bytecode slot 0 = sig param 0 = LLVM arg 0 (no receiver).
+  ciSignature* sig = function()->target()->signature();
+  bool is_static = function()->target()->is_static();
+  int arg_index;
+  if (!is_static && index == 0) {
+    arg_index = 0;                              // receiver
+  } else {
+    arg_index    = is_static ? 0 : 1;           // position of sig param 0
+    int cur_slot = is_static ? 0 : 1;           // bytecode slot of sig param 0
+    for (int i = 0; i < sig->count(); i++) {
+      if (cur_slot == index) break;             // found the owning parameter
+      cur_slot += sig->type_at(i)->size();
+      arg_index++;
+    }
+  }
+
+  // Fetch the LLVM formal Argument* directly.  No get_function_arg() helper,
+  // no dummy-x0 skip, no x0-slot load, no stack-arg read -- all three of
+  // those paths in YuhuNormalEntryCacher assume the caller-side AArch64 ABI
+  // that Path B inlinees deliberately bypass.
+  llvm::Function* f = function()->function();
+  llvm::Function::arg_iterator ai = f->arg_begin();
+  for (int i = 0; i < arg_index && ai != f->arg_end(); i++) ai++;
+  guarantee(ai != f->arg_end(),
+            "YuhuInlineEntryCacher: LLVM arg index out of range");
+  llvm::Value* loaded = &*ai;
+
+  // Align the loaded value's type with the local-slot stack type.  Normally a
+  // no-op because both sides came from the same YuhuType::to_stackType()
+  // mapping; kept as a defensive fallback (and for the two-word lower/upper
+  // half edge cases where intptr_type() and the concrete stack type differ).
+  llvm::Type* stack_ty = YuhuType::to_stackType(value->basic_type());
+  if (loaded->getType() != stack_ty) {
+    if (stack_ty->isIntegerTy() && loaded->getType()->isIntegerTy()) {
+      loaded = builder()->CreateIntCast(
+        loaded, stack_ty,
+        value->basic_type() != T_CHAR, "inlinee_arg_typed");
+    } else if (stack_ty->isPointerTy() && loaded->getType()->isPointerTy()) {
+      loaded = builder()->CreateBitCast(loaded, stack_ty, "inlinee_arg_typed");
+    } else if (stack_ty->isPointerTy() && loaded->getType()->isIntegerTy()) {
+      loaded = builder()->CreateIntToPtr(loaded, stack_ty, "inlinee_arg_typed");
+    } else if (stack_ty->isIntegerTy() && loaded->getType()->isPointerTy()) {
+      loaded = builder()->CreatePtrToInt(loaded, stack_ty, "inlinee_arg_typed");
+    } else {
+      loaded = builder()->CreateBitCast(loaded, stack_ty, "inlinee_arg_typed");
+    }
+  }
+
+  // Persist into the inlinee's alloca-backed local slot so downstream loads
+  // see the same value.  After AlwaysInlinerPass flattens the inlinee, LLVM
+  // rewrites every use of the Argument* -- including this store's source --
+  // to the caller's actual Value, so the store becomes an ordinary spill to
+  // the merged alloca inside the caller.
+  builder()->CreateStore(
+    loaded,
+    stack()->slot_addr(adjusted_offset(value, offset), stack_ty));
+
+  // Update the cached YuhuValue to point at the live llvm::Value*.
+  *addr = YuhuValue::create_generic(
+    value->type(), loaded, value->zero_checked());
+}
+
 void YuhuDecacher::write_value_to_frame(llvm::Type* type,
                                          Value*      value,
                                          int         offset) {

@@ -46,10 +46,10 @@ class YuhuBlock : public YuhuTargetInvariants {
       _iter(target()),
       _current_state(NULL) {}
 
-  YuhuBlock(const YuhuCompileInvariants* parent, ciMethod* target)
-    : YuhuTargetInvariants(parent, target),
-      _iter(target),
-      _current_state(NULL) {}
+  YuhuBlock(const YuhuCompileInvariants* parent, YuhuInlineNodeOrMethod* inline_node_or_method)
+    : YuhuTargetInvariants(parent, inline_node_or_method),
+      _iter(target()),
+      _current_state(NULL){}
 
  private:
   ciBytecodeStream _iter;

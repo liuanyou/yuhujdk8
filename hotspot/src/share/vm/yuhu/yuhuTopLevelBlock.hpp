@@ -318,8 +318,8 @@ class YuhuTopLevelBlock : public YuhuBlock {
 
       assert(helper_address != 0, "helper_address should have a value");
 
-      YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id, target(), helper_address,
-                                                              CallSiteType::vm_call, bci(), current_state()->num_monitors());
+      YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id, inline_node_or_method(), helper_address,
+                                                              CallSiteType::vm_call, bci());
     
     // Step 6: Decache oops for VM call (creates OopMap with virtual_offset)
     decache_for_VM_call();
@@ -505,6 +505,16 @@ class YuhuTopLevelBlock : public YuhuBlock {
                                  ciMethod*        dest_method,
                                  ciType*          receiver_type);
   void do_call();
+
+  // LLVM-IR inlining (M0): build (or reuse) an alwaysinline llvm::Function
+  // for a quiescent callee and emit a direct call to it, instead of going
+  // through the compiled-entry stub + deopt/statepoint machinery that a real
+  // Java-level call needs.  Returns true if the call was handled this way and
+  // the caller should stop; false means fall through to the normal call path.
+  bool do_llvm_inline_call(YuhuFunction*        func,
+                           YuhuInlineTree*      inline_tree,
+                           YuhuInlineNode*      inline_node,
+                           bool                 is_static);
 
   // checkcast and instanceof
  private:

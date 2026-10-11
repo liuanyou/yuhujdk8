@@ -38,7 +38,7 @@ class YuhuIntrinsics : public YuhuTargetInvariants {
 
  private:
   YuhuIntrinsics(YuhuState* state, YuhuStack* stack, ciMethod* target, int bci)
-    : YuhuTargetInvariants(state, target), _state(state), _stack(stack), _bci(bci) {}
+    : YuhuTargetInvariants(state, new YuhuInlineNodeOrMethod(target)), _state(state), _stack(stack), _bci(bci) {}
 
  private:
   YuhuState* _state;

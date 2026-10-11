@@ -690,8 +690,8 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
         assert(helper_address != 0, "helper_address should have a value");
 
         YuhuDebugInformationRecorder::get()->register_call_site(
-                statepoint_id, target(), helper_address,
-                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+                statepoint_id, inline_node_or_method(), helper_address,
+                CallSiteType::leaf_call, bci());
 
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "i"
@@ -727,8 +727,8 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
         assert(helper_address != 0, "helper_address should have a value");
 
         YuhuDebugInformationRecorder::get()->register_call_site(
-                statepoint_id, target(), helper_address,
-                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+                statepoint_id, inline_node_or_method(), helper_address,
+                CallSiteType::leaf_call, bci());
 
       Value* arg = pop()->jfloat_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "f" -> "l"
@@ -770,8 +770,8 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
         assert(helper_address != 0, "helper_address should have a value");
 
         YuhuDebugInformationRecorder::get()->register_call_site(
-                statepoint_id, target(), helper_address,
-                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+                statepoint_id, inline_node_or_method(), helper_address,
+                CallSiteType::leaf_call, bci());
 
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "i"
@@ -807,8 +807,8 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
         assert(helper_address != 0, "helper_address should have a value");
 
         YuhuDebugInformationRecorder::get()->register_call_site(
-                statepoint_id, target(), helper_address,
-                CallSiteType::leaf_call, bci(), current_state()->num_monitors());
+                statepoint_id, inline_node_or_method(), helper_address,
+                CallSiteType::leaf_call, bci());
 
       Value* arg = pop()->jdouble_value();
       // LLVM 20+ uses opaque pointer types, reconstruct FunctionType from signature "d" -> "l"

@@ -295,6 +295,58 @@ YuhuOSREntryState::YuhuOSREntryState(YuhuTopLevelBlock* block,
   YuhuOSREntryCacher(block->function(), method).scan(this);
 }
 
+// Path B (LLVM-IR inlining) inlinee entry state.  Structurally parallel to
+// YuhuNormalEntryState -- we still populate every live parameter slot with a
+// placeholder YuhuValue (NULL llvm::Value*) and let the cacher fill in the
+// real Value.  The difference is entirely on the cacher side:
+// YuhuInlineEntryCacher binds each slot to the inlinee's llvm::Argument* by
+// formal-parameter index, skipping the AArch64 register / x0-spill / stack-
+// arg reads that YuhuNormalEntryCacher performs (those assume a caller-side
+// ABI that Path B inlinees never participate in).
+YuhuInlineEntryState::YuhuInlineEntryState(YuhuTopLevelBlock* block,
+                                             Value*              method)
+  : YuhuState(block) {
+  assert(!block->stack_depth_at_entry(), "entry block shouldn't have stack");
+
+  // Local variables (parameters only; non-parameter locals start NULL).
+  for (int i = 0; i < max_locals(); i++) {
+    ciType *type = block->local_type_at_entry(i);
+    set_local_type(i, type);
+
+    YuhuValue *value = NULL;
+    switch (type->basic_type()) {
+    case T_INT:
+    case T_LONG:
+    case T_FLOAT:
+    case T_DOUBLE:
+    case T_OBJECT:
+    case T_ARRAY:
+      if (i >= arg_size()) {
+        ShouldNotReachHere();
+      }
+      value = YuhuValue::create_generic(type, NULL, i == 0 && !is_static());
+      break;
+
+    case ciTypeFlow::StateVector::T_NULL:
+      value = YuhuValue::null();
+      break;
+
+    case ciTypeFlow::StateVector::T_BOTTOM:
+      break;
+
+    case ciTypeFlow::StateVector::T_LONG2:
+    case ciTypeFlow::StateVector::T_DOUBLE2:
+      break;
+
+    default:
+      ShouldNotReachHere();
+    }
+    set_local(i, value);
+  }
+
+  YuhuInlineEntryCacher(block->function(), method).scan(this);
+}
+
 YuhuPHIState::YuhuPHIState(YuhuTopLevelBlock* block)
   : YuhuState(block), _block(block) {
   BasicBlock *saved_insert_point = builder()->GetInsertBlock();

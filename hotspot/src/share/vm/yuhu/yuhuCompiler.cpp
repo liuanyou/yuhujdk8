@@ -57,6 +57,19 @@
 #include "runtime/sharedRuntime.hpp"
 #include "yuhu/yuhuIRTransformer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
+#include "yuhu/yuhuInlinePlanner.hpp"
+
+#pragma push_macro("assert")
+#ifdef assert
+#undef assert
+#endif
+
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
+
+#pragma pop_macro("assert")
 
 #include <fnmatch.h>
 #include <cstring>
@@ -94,6 +107,17 @@ private:
     // ORC JIT (LLVM 11+) - recommended for LLVM 20
     std::unique_ptr<llvm::orc::LLJIT> _jit;
 
+    // Per-method back-off for LLVM-IR inlining (Path B).  If compile_method
+    // ever detects an alwaysinline inlinee that LLVM failed to flatten, it
+    // records the caller here so the retry skips Path B and compiles
+    // normally, instead of repeating the same failing inlining decision every
+    // time the method gets hot (record_failure alone leaves ciEnv::_compilable
+    // at MethodCompilable, so the method stays re-queueable forever).  Keyed
+    // by the caller's Method*, compared by address only (never dereferenced).
+    // Guarded by its own Monitor; the set is embedded so it frees with Impl.
+    Monitor*               _llvm_inline_disabled_lock;
+    std::set<Method*>      _llvm_inline_disabled;
+
 public:
     Impl() {
         // Create the lock to protect the memory manager and execution engine
@@ -103,6 +127,7 @@ public:
         // already hold CompileThread_lock. Therefore, this lock must be acquired AFTER
         // CompileThread_lock in the lock order, meaning it needs a higher rank.
         _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
+        _llvm_inline_disabled_lock = new Monitor(Mutex::nonleaf + 6, "YuhuLLVMInlineDisabledLock");
 
         MutexLocker locker(execution_engine_lock());
 
@@ -417,6 +442,8 @@ public:
         delete _execution_engine_lock;
         delete _normal_context;
         delete _native_context;
+        // _llvm_inline_disabled is an embedded std::set and frees itself.
+        delete _llvm_inline_disabled_lock;
     }
 
     YuhuContext* context() const {
@@ -440,6 +467,29 @@ public:
 
     llvm::orc::LLJIT* jit_without_lock() const {
         return _jit.get();
+    }
+
+    // ---- Path B (LLVM-IR inlining) per-method back-off ----
+    // Mark a caller method as "do not attempt LLVM-IR inlining on retry".
+    //
+    // Locking style: pass Mutex::_no_safepoint_check_flag so we can take the
+    // lock directly from a compiler thread running in _thread_in_native, without
+    // a ThreadInVMfromNative transition.  The critical section is just a
+    // std::set<Method*> insert/find on raw Method* keys -- no allocation, no
+    // handles, no GC-visible state, no HotSpot lock nesting -- so bypassing the
+    // safepoint handshake is exactly what this flag is designed for.
+    // (Contrast with _execution_engine_lock, whose LLVM codegen section is
+    // wrapped in an explicit ThreadInVMfromNative in compile_method; that path
+    // is deliberately different and out of scope here.)
+    void disable_llvm_inline(Method* m) {
+        MonitorLockerEx locker(_llvm_inline_disabled_lock, Mutex::_no_safepoint_check_flag);
+        _llvm_inline_disabled.insert(m);
+    }
+
+    // True if LLVM-IR inlining has been disabled for this method.
+    bool llvm_inline_disabled(Method* m) {
+        MonitorLockerEx locker(_llvm_inline_disabled_lock, Mutex::_no_safepoint_check_flag);
+        return _llvm_inline_disabled.find(m) != _llvm_inline_disabled.end();
     }
 
     void free_queued_methods() {
@@ -1305,12 +1355,15 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   env->debug_info()->set_oopmaps(&oopmaps);
   env->set_dependencies(new Dependencies(env));
 
-  // Create the code buffer and builder
+  // Create the code buffer and builder, hscb is used to create IR only
   CodeBuffer hscb("Yuhu", 256 * K, 64 * K);
   hscb.initialize_oop_recorder(env->oop_recorder());
   YuhuMacroAssembler masm(&hscb);
   YuhuCodeBuffer cb(masm);
   YuhuBuilder builder(&cb, NULL);  // function will be set later by YuhuFunction
+
+  // build inline tree
+  YuhuInlineTree* inlineTree = YuhuInlinePlanner::plan_inlining(target);
 
   // remove all functions from current context
     _p_impl->eraseFunctions();
@@ -1328,12 +1381,82 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // Set the LLVM module reference for embedding metadata later
     recorder->set_module(YuhuContext::current().module());
 
-  Function *function = YuhuFunction::build(env, &builder, flow, func_name);
+  Function *function = YuhuFunction::build(env, &builder, flow, func_name, inlineTree);
   if (env->failing()) {
     tty->print_cr("Yuhu: compile failing during IR build for %s (base_name=%s) entry_bci=%d comp_level=%d",
                   base_name, base_name, entry_bci, env->comp_level());
     YuhuDebugInformationRecorder::release();
     return;
+  }
+
+  // M0 of LLVM-IR inlining: flatten any callee that YuhuTopLevelBlock::
+  // do_llvm_inline_call() built as a separate alwaysinline llvm::Function
+  // (see YuhuFunction::build_inlinee) into the outermost function, before
+  // anything else (call-site metadata embedding, RS4GC in
+  // YuhuIRTransformer::runGCPasses(), codegen) gets a chance to look at the
+  // IR.  AlwaysInlinerPass only removes the *uses* of an alwaysinline
+  // function, so GlobalDCEPass is needed afterwards to remove the now-unused
+  // definitions themselves.
+  //
+  // This runs here rather than from inside runGCPasses() on purpose: ciEnv is
+  // still live at this point, so an unexpected leftover (which should never
+  // happen, since every inlinee call site is a direct call) can be reported
+  // as a clean compile failure instead of from inside an ORC JIT callback,
+  // where there is no ciEnv left to record the failure against.
+  if (YuhuLLVMInlining) {
+    Module* module = function->getParent();
+
+    bool built_any_inlinee = false;
+    for (Function& F : *module) {
+      if (F.hasFnAttribute(Attribute::AlwaysInline)) {
+        built_any_inlinee = true;
+        break;
+      }
+    }
+
+    if (built_any_inlinee) {
+      PassBuilder PB;
+      LoopAnalysisManager LAM;
+      FunctionAnalysisManager FAM;
+      CGSCCAnalysisManager CGAM;
+      ModuleAnalysisManager MAM;
+      PB.registerLoopAnalyses(LAM);
+      PB.registerFunctionAnalyses(FAM);
+      PB.registerCGSCCAnalyses(CGAM);
+      PB.registerModuleAnalyses(MAM);
+      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+      ModulePassManager flatten;
+      flatten.addPass(AlwaysInlinerPass());
+      flatten.run(*module, MAM);
+
+      // Defensive check: no alwaysinline definition should still be live.
+      for (Function& F : *module) {
+        if (!F.isDeclaration() && F.hasFnAttribute(Attribute::AlwaysInline) && !F.use_empty()) {
+          // Should be unreachable under Path B's invariants (every inlinee call
+          // site is a direct, non-vararg, same-calling-convention, never
+          // address-taken call, which AlwaysInlinerPass is required to flatten).
+          // If we ever get here, do NOT let this become a repeating failure:
+          // back off Path B for this caller so the retry plans the normal
+          // bytecode/do_call path and compiles, rather than re-deciding the same
+          // failing inlining every time the method gets hot and never JIT-ing it.
+          // We keep record_failure so THIS compilation is cleanly discarded and
+          // the method stays retryable (ciEnv::_compilable stays MethodCompilable);
+          // we deliberately do NOT call record_method_not_compilable, which would
+          // permanently exclude the method.
+          tty->print_cr("Yuhu: LLVM-IR inlining failed to flatten %s; disabling Path B for %s and retrying without it",
+                        F.getName().str().c_str(), base_name);
+          disable_llvm_inline(target->get_Method());
+          env->record_failure("Yuhu LLVM-IR inlining: alwaysinline callee was not flattened");
+          YuhuDebugInformationRecorder::release();
+          return;
+        }
+      }
+
+      ModulePassManager cleanup;
+      cleanup.addPass(GlobalDCEPass());
+      cleanup.run(*module, MAM);
+    }
   }
 
     if (YuhuTraceInstalls) {
@@ -1368,7 +1491,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   int actual_prologue_bytes = YuhuPrologueAnalyzer::analyze_prologue_stack_bytes(llvm_code_start, &prologue_registers);
   assert(actual_prologue_bytes > 0, "prologue bytes should be greater than 0");
   int actual_prologue_words = actual_prologue_bytes / wordSize;
-  recorder->register_frame_layout_info_with_prologue_fields(actual_prologue_bytes, prologue_registers.length() * 2);
+  recorder->register_prologue_fields(actual_prologue_bytes, prologue_registers.length() * 2);
 
   // Step 3: Calculate final frame_size using actual prologue size
   int frame_size = actual_prologue_words;
@@ -1477,14 +1600,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
     if (target->get_Method()->code() == NULL) {
         if (YuhuTraceInstalls) {
-            tty->print_cr("Yuhu: Register method %s failed", func_name);
+            tty->print_cr("Yuhu: Register method %s failed", base_name);
         }
         env->record_failure("nmethod creation failed: code() is NULL after register_method");
         return;
     }
 
     if (YuhuTraceInstalls) {
-        tty->print_cr("Yuhu: Register method %s successfully, nmethod: code_begin=%p, code_end=%p", func_name,
+        tty->print_cr("Yuhu: Register method %s successfully, nmethod: code_begin=%p, code_end=%p", base_name,
                       target->get_Method()->code()->code_begin(), target->get_Method()->code()->code_end());
     }
   } else {
@@ -1582,7 +1705,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
                            false,
                            false);
 
-      if (target->get_Method()->code() == NULL) {
+      nmethod* nm = target->get_Method()->method_holder()->lookup_osr_nmethod(target->get_Method(), entry_bci, env->comp_level(), true);
+      if (nm == NULL) {
           if (YuhuTraceInstalls) {
               tty->print_cr("Yuhu: Register osr method %s failed", base_name);
           }
@@ -1592,7 +1716,7 @@ void YuhuCompiler::compile_method(ciEnv*    env,
 
       if (YuhuTraceInstalls) {
           tty->print_cr("Yuhu: Register osr method %s successfully, nmethod: code_begin=%p, code_end=%p", base_name,
-                        target->get_Method()->code()->code_begin(), target->get_Method()->code()->code_end());
+                        nm->code_begin(), nm->code_end());
       }
   }
 
@@ -1711,6 +1835,17 @@ const char* YuhuCompiler::funcname(const char *base_name) {
     }
     *dst = '\0';  // Null-terminate
     return buf;
+}
+
+// ---- Path B (LLVM-IR inlining) per-method back-off: static delegation ----
+// Called from compile_method's flatten-miss guard (record the caller) and from
+// YuhuInlinePlanner (consult before assigning the llvm_inline strategy).
+void YuhuCompiler::disable_llvm_inline(Method* m) {
+  compiler()->_p_impl->disable_llvm_inline(m);
+}
+
+bool YuhuCompiler::llvm_inline_disabled(Method* m) {
+  return compiler()->_p_impl->llvm_inline_disabled(m);
 }
 
 // Measure exception handler size (without actually generating code).
