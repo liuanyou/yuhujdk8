@@ -240,15 +240,22 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
 //     straight-line method should go through the existing bytecode inliner,
 //     which never builds a separate LLVM Function for it,
 //   - every one of its bytecodes is in the whitelist below: constants,
-//     local/stack manipulation, arithmetic that cannot trap, conversions,
-//     comparisons, branches (forward or back), and the invoke family
-//     (invokestatic / invokespecial / invokevirtual / invokeinterface /
-//     invokedynamic).  Anything that can allocate, do field/array access,
-//     throw explicitly, run idiv/ldiv/irem/lrem (which can trap on zero),
-//     do monitor ops, or use invokehandle (MethodHandle.invoke/invokeExact
-//     rewritten by rewriter.cpp with a polymorphic signature and appendix
-//     CP entry, for which Yuhu's stub-based frame layout has no DeoptMH
-//     entry point) is still rejected outright.
+//     local/stack manipulation, arithmetic (including the trapping
+//     idiv/ldiv/irem/lrem), conversions, comparisons, branches (forward
+//     or back), the invoke family (invokestatic / invokespecial /
+//     invokevirtual / invokeinterface / invokedynamic), field access
+//     (getstatic / putstatic / getfield / putfield), arraylength, array
+//     load and store (iaload / iastore / aaload / aastore / baload /
+//     bastore / etc.), allocation (new / newarray / anewarray /
+//     multianewarray), and type checks (instanceof / checkcast).
+//     Still rejected: athrow (explicit throw requires ExceptionHandler-
+//     Table merging into the caller's pc-range numbering, deferred to
+//     M2), monitorenter / monitorexit (need per-inlinee BasicObjectLock
+//     slots in the caller's frame, deferred), and invokehandle (bytecode
+//     0xf8, produced by rewriter.cpp when a call targets MethodHandle.
+//     invoke / invokeExact; its polymorphic signature and appendix
+//     handling require a DeoptMH entry point incompatible with Yuhu's
+//     stub-based frame layout).
 //
 // Loops ARE permitted since M1.  A backedge inside the inlinee triggers
 // YuhuTopLevelBlock::maybe_add_backedge_safepoint on the inlinee's own
@@ -276,15 +283,42 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
 // rejected -- polymorphic-signature dispatch requires DeoptMH entry-point
 // machinery incompatible with Yuhu's stub-based frame layout.
 //
-// Known M1 gap: the deopt bundle attached to any safepoint or trap inside
-// an inlinee captures only the inlinee's current_state(), not the caller's
-// virtual state at the inline call site.  Safe under normal workloads --
-// safepoint stop-and-resume works, GC-live reporting on the merged frame
-// via RS4GC is correct, non-deopt paths (interpreter re-execution) still
-// work through the statepoint-id + inline-node sender chain -- but a
-// deopt landing inside an inlinee's loop or on an inlinee's null-check
-// trap reconstructs a partial virtual frame.  Full multi-level bundle
-// capture is the immediate follow-up subtask.
+// Field access, arraylength, array load/store, allocation, and type
+// checks are permitted since the M1+ extension.  Each uses Yuhu's
+// existing do_field_access / do_array_load / do_array_store / do_new_
+// object / do_type_check infrastructure; that IR-emission code is
+// shared with Path A and top-level compiles and does not need any Path
+// B-specific change.  The constant-pool resolution checks in
+// scan_for_traps (holder-linked, field-will-link, klass-loaded) already
+// run against the inlinee's ciMethod during its own parse, and any trap
+// they install carries the inlinee's YuhuInlineNode in the sender chain.
+// Post-inline, all of the IR travels through AlwaysInlinerPass into the
+// caller's merged function with statepoint-ids intact.
+//
+// Trapping division (idiv / ldiv / irem / lrem) is permitted since M1+.
+// Yuhu's do_div emits the JVM's INT_MIN / -1 = INT_MIN overflow rule
+// (AArch64 sdiv traps or returns 0 for that encoding) plus an explicit
+// zero-divisor guard that fires an ArithmeticException trap; both paths
+// are frame-aware via the same statepoint-id + inline-node mechanism as
+// null-check traps.
+//
+// Known M1 gap (now significantly more load-bearing): the deopt bundle
+// attached to any safepoint or trap inside an inlinee captures only the
+// inlinee's current_state(), not the caller's virtual state at the
+// inline call site.  This is now triggered by any null-check (getfield /
+// putfield / arraylength / *aload / *astore / invokevirtual receiver),
+// bounds-check (*aload / *astore), class-check (checkcast), zero-divisor
+// (idiv / ldiv / irem / lrem), or allocation slow path.  Non-trap paths
+// (safepoint stop-and-resume, RS4GC gc-live reporting on the merged
+// frame, ordinary control flow) are correct.  Trap paths still resolve
+// to the correct bytecode-level bci via the statepoint-id + inline-node
+// sender chain, and the caller's compile succeeds (the trap is emitted
+// as an ordinary branch to the deopt handler), but at runtime the
+// interpreter re-execution sees a partial virtual frame (inlinee
+// locals/stack present, caller locals/stack at the inline call site
+// missing).  Production safety REQUIRES closing this gap before relying
+// on any trap-emitting opcode inside a Path B inlinee.  Full multi-level
+// bundle capture is the immediate follow-up subtask.
 bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
   if (!may_be_inlinable(target))
     return false;
@@ -459,12 +493,76 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_invokedynamic:
       break;
 
-      // Everything else (invokehandle, get*/put*, arraylength,
-      // *aload/*astore, athrow, new*, instanceof, checkcast,
-      // idiv/ldiv/irem/lrem, monitor*) can trap on null / bounds /
-      // arithmetic, allocate, use MH polymorphic signatures, or
-      // otherwise needs runtime support not yet provided for Path B
-      // inlinees: reject.
+      // ---- field access (M1+) ----
+      // do_field_access handles getstatic / putstatic / getfield /
+      // putfield including holder-linked check, constant-pool resolution
+      // and receiver null-check (for getfield / putfield).  Static
+      // initialisation not yet complete dispatches via Yuhu's variant-2
+      // Reason_uninitialized reinterpret trap (see scan_for_traps),
+      // which falls back to interpreter re-execution.
+    case Bytecodes::_getstatic: case Bytecodes::_putstatic:
+    case Bytecodes::_getfield:  case Bytecodes::_putfield:
+      break;
+
+      // ---- arraylength (M1+) ----
+      // Emits a check_null on the receiver and a load from the array's
+      // length field.  Null receiver deopts; no bounds concern.
+    case Bytecodes::_arraylength:
+      break;
+
+      // ---- array load / store (M1+) ----
+      // do_array_load / do_array_store emit a null-check + bounds-check
+      // pair; on bounds failure an implicit ArrayIndexOutOfBounds trap
+      // fires; aastore additionally runs the array-klass store-type
+      // check and may throw ArrayStoreException.  See the "Traps" note
+      // in the function-level doc for the M1 deopt-bundle caveat.
+    case Bytecodes::_iaload: case Bytecodes::_laload: case Bytecodes::_faload:
+    case Bytecodes::_daload: case Bytecodes::_aaload: case Bytecodes::_baload:
+    case Bytecodes::_caload: case Bytecodes::_saload:
+    case Bytecodes::_iastore: case Bytecodes::_lastore: case Bytecodes::_fastore:
+    case Bytecodes::_dastore: case Bytecodes::_aastore: case Bytecodes::_bastore:
+    case Bytecodes::_castore: case Bytecodes::_sastore:
+      break;
+
+      // ---- allocation (M1+) ----
+      // new / anewarray / newarray / multianewarray go through Yuhu's
+      // slow-path allocation runtime call; fast-path inline TLAB bump-
+      // pointer form is emitted when the klass size is a compile
+      // constant.  Both flows can trigger GC + safepoint; RS4GC tracks
+      // the freshly-allocated oop as gc-live at the statepoint.  Out-of-
+      // memory is delivered as a pending_exception rather than a deopt
+      // trap, so the M1 multi-level bundle gap does NOT apply here.
+    case Bytecodes::_new: case Bytecodes::_anewarray:
+    case Bytecodes::_newarray: case Bytecodes::_multianewarray:
+      break;
+
+      // ---- type check (M1+) ----
+      // instanceof emits a subtype test and pushes 0/1; it cannot trap.
+      // checkcast emits a subtype test that throws ClassCastException on
+      // failure via the deopt trap path; see the "Traps" note in the
+      // function-level doc.  Unloaded klass operand dispatches to the
+      // fine-grained Reason_unloaded_object / variant-2 reinterpret
+      // trap already used at top-level checkcast sites.
+    case Bytecodes::_instanceof:
+    case Bytecodes::_checkcast:
+      break;
+
+      // ---- trapping integer/long division (M1+) ----
+      // Yuhu's do_div emits the JVM's INT_MIN / -1 = INT_MIN overflow
+      // rule (AArch64 sdiv traps or returns 0 for that encoding) plus
+      // an explicit zero-divisor guard that fires an ArithmeticException
+      // trap.  See the "Traps" note in the function-level doc.
+    case Bytecodes::_idiv: case Bytecodes::_ldiv:
+    case Bytecodes::_irem: case Bytecodes::_lrem:
+      break;
+
+      // Everything else (invokehandle, athrow, monitorenter,
+      // monitorexit) is deliberately excluded: invokehandle needs poly-
+      // morphic-signature dispatch + DeoptMH entry-point machinery
+      // incompatible with Yuhu's stub-based frame layout; athrow
+      // requires ExceptionHandlerTable merging into the caller's pc-
+      // range numbering (deferred to M2); monitor ops require per-
+      // inlinee BasicObjectLock slots in the caller's frame (deferred).
     default:
       return false;
     }
@@ -487,12 +585,16 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 
 // Full-on detailed check for the bytecode-level inliner (Path A).  These
 // rules apply to Path A only; the LLVM-IR inliner (Path B, checked by
-// is_llvm_inlineable above) is more permissive -- since M1 it allows both
-// loops AND the invoke family (invokestatic / invokespecial / invokevirtual
-// / invokeinterface / invokedynamic), because a Path B inlinee gets a real
-// llvm::Function with its own block hierarchy and its safepoint-poll /
-// call-site metadata flows through AlwaysInlinerPass via the statepoint-id
-// attribute.  invokehandle (bytecode 0xf8) is still excluded from Path B.
+// is_llvm_inlineable above) is dramatically more permissive since the
+// M1+ extension -- it allows loops, the entire invoke family (including
+// invokedynamic), field access, arraylength, array load/store, allo-
+// cation, type checks (instanceof / checkcast), and trapping div/
+// rem -- because a Path B inlinee gets a real llvm::Function with its
+// own block hierarchy and its safepoint-poll / call-site / trap meta-
+// data flows through AlwaysInlinerPass via the statepoint-id attribute.
+// invokehandle (bytecode 0xf8) and athrow and monitor ops remain
+// excluded from Path B (see is_llvm_inlineable's function-level doc for
+// the specific reason on each).
 //
 // Under Path A, an inlined method has no stack frame of its own and its
 // IR is emitted directly into the caller's llvm::Function.  That means no
