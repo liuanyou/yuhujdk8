@@ -194,7 +194,26 @@ class YuhuInlinerHelper : public StackObj {
 };
 
 // Quick checks so we can bail out before doing too much
-bool YuhuInliner::may_be_inlinable(ciMethod *target) {
+bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handlers) {
+  // Guard against triggering constant-pool resolution on a klass that
+  // has been loaded but not yet linked.  Downstream, both Path A's
+  // YuhuInlineBlock::emit_IR and Path B's is_llvm_inlineable eventually
+  // run the callee's ciTypeFlow (via target->get_flow_analysis()), whose
+  // do_getfield/do_getstatic call ciEnv::get_field_by_index -> ciField's
+  // ctor.  That ctor asserts klass->get_instanceKlass()->is_linked() at
+  // hotspot/src/share/vm/ci/ciField.cpp:76; hitting the assert crashes
+  // the compiler thread (see test_yuhu/hs_err_pid22469.log where
+  // java/lang/Class$EnclosingMethodInfo had just been loaded and Yuhu
+  // eagerly compiled java.lang.Class::getEnclosingClass at tier 6).
+  // C2's InlineTree uses is_initialized(); is_linked() is the strict
+  // minimum matching ciField's assertion and sufficient to unblock the
+  // Path B inline tree.  An unlinked holder also means its bytecodes
+  // haven't been verified, so refusing to inline is the safe choice
+  // anyway -- the callee will become inlineable on a subsequent compile
+  // once the klass transitions through the verify/prepare phase.
+  if (!target->holder()->is_linked())
+    return false;
+
   // We can't inline native methods
   if (target->is_native())
     return false;
@@ -212,8 +231,15 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
   if (target->is_synchronized() || target->has_monitor_bytecodes())
     return false;
 
-  // We don't do control flow
-  if (target->has_exception_handlers() || target->has_jsrs())
+  // Path A cannot dispatch an inlinee's try/catch or athrow, so any
+  // handler table (or jsr/ret subroutine) disqualifies the callee.
+  // Path B gives the callee its own llvm::Function + its own ciMethod-
+  // driven ciExceptionHandlerStream, so local try/catch works: only
+  // jsrs remain disqualifying ( subroutine-call stack layout is not
+  // modelled by Yuhu's inlinee frame).
+  if (target->has_jsrs())
+    return false;
+  if (!allow_exception_handlers && target->has_exception_handlers())
     return false;
 
   // Don't try to inline constructors, as they must
@@ -231,11 +257,13 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
   return true;
 }
 
-// Detailed eligibility check for the LLVM-IR inlining path (M0/M1).
+// Detailed eligibility check for the LLVM-IR inlining path (M0/M1/M2).
 //
 // A method qualifies only if:
-//   - it passes the quick may_be_inlinable() screen (size limit,
-//     no monitors / exception handlers / jsrs / native / abstract / initializer),
+//   - it passes the quick may_be_inlinable() screen with allow_exception_
+//     handlers=true (holder klass already linked; size limit, no monitors
+//     / jsrs / native / abstract / initializer; exception handler tables
+//     are permitted under Path B),
 //   - it actually has control flow (at least one branch instruction); a
 //     straight-line method should go through the existing bytecode inliner,
 //     which never builds a separate LLVM Function for it,
@@ -248,14 +276,12 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
 //     load and store (iaload / iastore / aaload / aastore / baload /
 //     bastore / etc.), allocation (new / newarray / anewarray /
 //     multianewarray), and type checks (instanceof / checkcast).
-//     Still rejected: athrow (explicit throw requires ExceptionHandler-
-//     Table merging into the caller's pc-range numbering, deferred to
-//     M2), monitorenter / monitorexit (need per-inlinee BasicObjectLock
+//     Still rejected: monitorenter / monitorexit (need per-inlinee BasicObjectLock
 //     slots in the caller's frame, deferred), and invokehandle (bytecode
 //     0xf8, produced by rewriter.cpp when a call targets MethodHandle.
 //     invoke / invokeExact; its polymorphic signature and appendix
 //     handling require a DeoptMH entry point incompatible with Yuhu's
-//     stub-based frame layout).
+//     stub-based frame layout).  athrow is permitted since M2 (see below).
 //
 // Loops ARE permitted since M1.  A backedge inside the inlinee triggers
 // YuhuTopLevelBlock::maybe_add_backedge_safepoint on the inlinee's own
@@ -320,7 +346,7 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target) {
 // on any trap-emitting opcode inside a Path B inlinee.  Full multi-level
 // bundle capture is the immediate follow-up subtask.
 bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
-  if (!may_be_inlinable(target))
+  if (!may_be_inlinable(target, /* allow_exception_handlers = */ true))
     return false;
 
   ciTypeFlow* flow = target->get_flow_analysis();
@@ -556,13 +582,76 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_irem: case Bytecodes::_lrem:
       break;
 
-      // Everything else (invokehandle, athrow, monitorenter,
-      // monitorexit) is deliberately excluded: invokehandle needs poly-
-      // morphic-signature dispatch + DeoptMH entry-point machinery
-      // incompatible with Yuhu's stub-based frame layout; athrow
-      // requires ExceptionHandlerTable merging into the caller's pc-
-      // range numbering (deferred to M2); monitor ops require per-
-      // inlinee BasicObjectLock slots in the caller's frame (deferred).
+      // ---- athrow (M2) ----
+      // YuhuTopLevelBlock::do_athrow at yuhuTopLevelBlock.cpp:1126
+      // snapshots throw_state, pops the exception oop, null-checks it
+      // and calls handle_exception(exception, EX_CHECK_FULL, throw_state).
+      // handle_exception consults num_exceptions() against the current
+      // target -- inside a Path B inlinee this is the inlinee's own
+      // ciMethod -- and dispatches via emit_handler_checks / marshal_
+      // exception_fast / marshal_exception_mixed.  Post-inline those
+      // handler blocks live inside the caller's llvm::Function as
+      // ordinary blocks; statepoint-ids and inline-node references from
+      // the inlinee's dispatch survive AlwaysInlinerPass unchanged.
+      //
+      // Uncaught-by-inlinee path (either the inlinee has no local
+      // handler or none of its entries match the exception klass):
+      // handle_exception falls through to handle_return(T_VOID, excep-
+      // tion).  When called inside a Path B inlinee, handle_return
+      // (yuhuTopLevelBlock.cpp:909+) now stores the exception to
+      // Thread::pending_exception and branches to the inlinee's
+      // unified_exit_block instead of emitting the top-level unwind
+      // patchpoint.  Post-AlwaysInlinerPass, that ret becomes a jump
+      // into the caller's continuation right after do_llvm_inline_call's
+      // CreateCall.  do_llvm_inline_call emits a check_pending_exception
+      // at that continuation (yuhuTopLevelBlock.cpp:1453) which runs
+      // the CALLER's emit_handler_checks against the caller's own
+      // ciExceptionHandlerStream -- so a try/catch wrapping the Java-
+      // level inline call site in the caller is dispatched correctly
+      // at compiled-code level, using the caller's own statepoint-id +
+      // deopt bundle.  If the caller doesn't match either, control
+      // falls through to handle_return(T_VOID, exception) at the CALLER
+      // level (which is NOT an inlinee, so it does hit the top-level
+      // unwind patchpoint); the caller's own bundle reconstructs cor-
+      // rectly, sidestepping the multi-level deopt bundle gap.  Note
+      // the caller's IR-level fast dispatch is the only path that can
+      // fire here (Yuhu still registers an empty ExceptionHandlerTable
+      // per memory "Yuhu ExceptionHandlerTable population require-
+      // ment"), so callers without a try/catch around the inline call
+      // site fall through to interpreter re-execution -- semantically
+      // correct, just not fast-pathed.
+    case Bytecodes::_athrow:
+      break;
+
+      // ---- _goto_w (unreachable in practice) ----
+      // Semantically identical to _goto (just a 4-byte unsigned offset).
+      // javac emits _goto_w only when the target bci exceeds _goto's
+      // 2-byte signed range (±32767).  No method under YuhuMaxInlineSize
+      // (32 bytes default) will ever contain one.  Whitelist alongside
+      // _goto if the size limit is raised past 64 KB.
+    case Bytecodes::_goto_w:
+
+      // ---- _jsr / _jsr_w (unstructured control flow) ----
+      // JSR pushes a returnAddress (bci after the jsr) onto the operand
+      // stack and branches to a subroutine body; RET performs an indirect
+      // jump back via that returnAddress.  This creates multi-entry /
+      // multi-exit unstructured CFG requiring LLVM's indirectbr, which
+      // AlwaysInlinerPass explicitly refuses to inline (blockaddress
+      // references become invalid after merging).  Additionally,
+      // may_be_inlinable's has_jsrs() gate already rejects these methods
+      // upstream for both Path A and Path B, so whitelisting the opcode
+      // here would be a no-op.  Dead since javac stopped emitting JSR/RET
+      // in JDK 1.6 (finally-blocks are now duplicated at bytecode level).
+    case Bytecodes::_jsr:
+    case Bytecodes::_jsr_w:
+
+      // ---- monitorenter / monitorexit ----
+      // Require per-inlinee BasicObjectLock slots in the caller's frame
+      // (deferred -- need a stack-local monitor array modelled across the
+      // inline boundary).
+    case Bytecodes::_monitorenter:
+    case Bytecodes::_monitorexit:
+        return false;
     default:
       return false;
     }
@@ -588,11 +677,14 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 // is_llvm_inlineable above) is dramatically more permissive since the
 // M1+ extension -- it allows loops, the entire invoke family (including
 // invokedynamic), field access, arraylength, array load/store, allo-
-// cation, type checks (instanceof / checkcast), and trapping div/
-// rem -- because a Path B inlinee gets a real llvm::Function with its
-// own block hierarchy and its safepoint-poll / call-site / trap meta-
-// data flows through AlwaysInlinerPass via the statepoint-id attribute.
-// invokehandle (bytecode 0xf8) and athrow and monitor ops remain
+// cation, type checks (instanceof / checkcast), trapping div/rem, and
+// (since M2) athrow and exception handler tables -- because a Path B
+// inlinee gets a real llvm::Function with its own block hierarchy and
+// its safepoint-poll / call-site / trap metadata flows through Always-
+// InlinerPass via the statepoint-id attribute; its local try/catch is
+// dispatched via the inlinee's own ciMethod-driven ciExceptionHandler-
+// Stream inside its own llvm::Function and merges into the caller post-
+// flatten.  invokehandle (bytecode 0xf8) and monitor ops remain
 // excluded from Path B (see is_llvm_inlineable's function-level doc for
 // the specific reason on each).
 //

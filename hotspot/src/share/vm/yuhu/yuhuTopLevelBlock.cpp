@@ -908,6 +908,36 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
 
   if (exception) {
     builder()->CreateStore(exception, pending_exception_address());
+
+    // Path B inlinee: propagate to the caller by returning normally with
+    // Thread::pending_exception set.  do_llvm_inline_call emits a
+    // check_pending_exception immediately after the inline call site in
+    // the caller's IR; post AlwaysInlinerPass flattening the inlinee's
+    // ret becomes an unconditional branch to that caller continuation,
+    // and the caller's own emit_handler_checks dispatches against the
+    // CALLER's exception table using the CALLER's own statepoint-id +
+    // deopt bundle -- which side-steps the multi-level deopt bundle gap
+    // called out in is_llvm_inlineable's function-level doc (see
+    // "Known M1 gap" paragraph): we never need to reconstruct a virtual
+    // frame across the inline boundary because we never deopt at the
+    // inlinee's throw site.
+    //
+    // The unified_exit_block's `ret` for a non-void inlinee reads from
+    // return_slot; for the exception path we've not stashed anything
+    // there (handle_return's `if (type != T_VOID)` branch is guarded
+    // out by the exception OR result assertion above).  Initialize
+    // return_slot to a null value so the ret operand is defined; the
+    // caller discards it once it sees pending_exception.
+    if (function()->is_inlinee()) {
+      llvm::Value* rs = function()->return_slot();
+      if (rs != NULL && target()->return_type()->size() != 0) {
+        llvm::Type* ret_llvm_type =
+          YuhuType::to_stackType(target()->return_type()->basic_type());
+        builder()->CreateStore(llvm::Constant::getNullValue(ret_llvm_type), rs);
+      }
+      builder()->CreateBr(function()->unified_exit_block());
+      return;
+    }
   }
 
   // Store the return value into the function-scope return slot.
@@ -1379,6 +1409,14 @@ bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
 
   llvm::CallInst* call = builder()->CreateCall(inlinee->function(), call_args);
 
+  // M2: snapshot the caller's throw-site state BEFORE the result is
+  // pushed onto xstack.  Same convention as do_call: the check_pending_
+  // exception path we emit below captures this state and uses it to
+  // build the caller's deopt bundle in case the caller's handler lookup
+  // needs to fall back to interpreter re-execution (unloaded catch klass
+  // via marshal_exception_mixed, or no caller-side handler at all).
+  YuhuState *throw_state = current_state()->copy();
+
   // Push the result back onto the expression stack, matching bytecode
   // semantics (compare cache_after_Java_call(), minus its caching scan which
   // is only needed for a call that can actually suspend or deoptimize).
@@ -1396,6 +1434,22 @@ bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
     }
     push(YuhuValue::create_generic(type, call, false));
   }
+
+  // M2: dispatch an inlinee-thrown exception through the CALLER's
+  // exception table.  handle_return's inlinee branch (see yuhuTopLevel
+  // Block.cpp:909+) sets Thread::pending_exception and returns to this
+  // continuation instead of hitting the top-level unwind patchpoint; we
+  // then run the caller's own emit_handler_checks so a caller-level
+  // try/catch around the (flattened) inline call site is honored with-
+  // out interpreter fallback.  If the caller doesn't handle it either,
+  // handle_exception here falls through to handle_return(T_VOID, excep-
+  // tion) at the CALLER's level, which does hit the top-level unwind
+  // patchpoint -- using the caller's own statepoint-id + bundle, which
+  // correctly reconstructs the caller's interpreter frame for re-run.
+  check_pending_exception(EX_CHECK_FULL, throw_state);
+
+  // Mark that a safepoint check has occurred, matching do_call's convention.
+  current_state()->set_has_safepointed(true);
 
   return true;
 }

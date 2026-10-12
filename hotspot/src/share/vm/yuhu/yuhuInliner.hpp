@@ -37,7 +37,26 @@ class YuhuTopLevelBlock;
 class YuhuInliner : public AllStatic {
  public:
   static bool attempt_inline(ciMethod* target, YuhuState* state, YuhuStack* stack, int bci);
-  static bool may_be_inlinable(ciMethod* target);
+  // Path A (bytecode inliner) uses the strict form: any exception handler
+  // table disqualifies the callee.  Path B (LLVM-IR inliner) passes
+  // allow_exception_handlers=true because a Path B inlinee gets its own
+  // llvm::Function with real block structure and its own ciMethod-driven
+  // ciExceptionHandlerStream, so its local try/catch dispatches correctly
+  // through YuhuTopLevelBlock::compute_exceptions / handle_exception /
+  // emit_handler_checks and post-inline those blocks merge into the
+  // caller's function.  Exceptions thrown but not caught inside the
+  // inlinee travel via handle_return(T_VOID, exception)'s inlinee branch
+  // (pending_exception store + ret to unified_exit_block); AlwaysInliner
+  // Pass merges that ret into the caller's continuation, where do_llvm_
+  // inline_call's newly-added check_pending_exception dispatches the
+  // exception against the CALLER's own exception table at compiled-code
+  // level.  Only if the caller doesn't match either does control reach
+  // the caller-level handle_return (non-inlinee branch) which emits the
+  // top-level unwind patchpoint -- and that path uses the caller's own
+  // statepoint-id + bundle, so interpreter re-execution reconstructs a
+  // full frame.  See is_llvm_inlineable's function-level doc for the
+  // full M2 exception flow.
+  static bool may_be_inlinable(ciMethod* target, bool allow_exception_handlers = false);
 
   // M0 of LLVM-IR inlining: a callee is "llvm_inlineable" if it passes the
   // quick may_be_inlinable() checks, has control flow (so the bytecode-level
