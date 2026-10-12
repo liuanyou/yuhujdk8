@@ -590,8 +590,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                             CallSiteEntry* site = _call_site_entries->at(n);
                             YuhuInlineNode* prev_node = inline_node_chain_list.at(m-1);
                             // multiple call sites may match parent inline node, but bci makes unique match
-                            if (site->inline_node_or_method->as_inline_node() == inline_node_chain_list.at(m) && site->bci == prev_node->bci() &&
-                                site->call_site_type == CallSiteType::inlinee_call) {
+                            // put call site type check in first condition, coz as_inline_node may fail for leaf call
+                            if (site->call_site_type == CallSiteType::inlinee_call && site->bci == prev_node->bci() && site->inline_node_or_method->as_inline_node() == inline_node_chain_list.at(m)) {
                                 node_call_site = site;
                                 break;
                             }
