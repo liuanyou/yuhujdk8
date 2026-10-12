@@ -25,12 +25,13 @@ echo ""
 # Run with Yuhu compiler and exception table tracing
 echo "Running test with Yuhu compiler..."
 echo "Command:"
-echo "$JDK_HOME/bin/java -XX:+UseYuhuInt -XX:+UseYuhuCompiler -XX:TieredStopAtLevel=6 -XX:YuhuComplexityThreshold=1 -XX:CompileCommand=yuhuonly,com/example/ExceptionTableTest.simpleTryCatch -XX:+YuhuDumpIRToFile -XX:YuhuPrintTypeflowOf=com.example.ExceptionTableTest::simpleTryCatch com.example.ExceptionTableTest"
+echo "$JDK_HOME/bin/java -XX:+UseYuhuInt -XX:+YuhuLLVMInlining -XX:+UseYuhuCompiler -XX:TieredStopAtLevel=6 -XX:YuhuComplexityThreshold=1 -XX:CompileCommand=yuhuonly,com/example/ExceptionTableTest.simpleTryCatch -XX:+YuhuDumpIRToFile -XX:YuhuPrintTypeflowOf=com.example.ExceptionTableTest::simpleTryCatch com.example.ExceptionTableTest"
 echo ""
 echo "=== Output ==="
 
 "$JDK_HOME/bin/java" \
     -XX:+UseYuhuInt \
+    -XX:+YuhuLLVMInlining \
     -XX:+UseYuhuCompiler \
     -XX:TieredStopAtLevel=6 \
     -XX:YuhuComplexityThreshold=1 \

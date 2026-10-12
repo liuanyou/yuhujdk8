@@ -59,7 +59,7 @@ fi
 
 echo ""
 echo "=== 测试 1: 强制使用 Yuhu 编译器 ==="
-echo "命令: $JAVA -XX:+UseYuhuInt -XX:+UseYuhuCompiler -XX:+YuhuTraceInstalls -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply com.example.Matrix"
+echo "命令: $JAVA -XX:+UseYuhuInt -XX:+YuhuLLVMInlining -XX:+UseYuhuCompiler -XX:+YuhuTraceInstalls -XX:CompileCommand=yuhuonly,com/example/Matrix.multiply com.example.Matrix"
 echo ""
 
 "$JAVA" -XX:+UseYuhuInt \
