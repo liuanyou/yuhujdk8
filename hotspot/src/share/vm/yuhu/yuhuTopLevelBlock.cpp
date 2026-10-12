@@ -286,6 +286,53 @@ void YuhuTopLevelBlock::cache_after_VM_call() {
   YuhuVMCallCacher(function()).scan(current_state());
 }
 
+// A safepoint poll behaves like a VM call from the frame's point of view: it is
+// a void-returning stub call that can suspend the thread for GC and can be
+// redirected to the deopt handler.  So, exactly as do_trap() decaches before
+// emitting the trap, the poll must decache its live JVM state first -- writing
+// every cached oop (locals + expression stack) into its nominal frame slot.
+// Without this the slots retain stale words while the deopt-bundle-derived
+// OopMap still claims them as GC roots, so GC trips
+// "found non oop pointer" (hs_err_pid81367: String::toLowerCase local[6] 'lang'
+// read as an int).  We reuse the VM-call decacher because the poll takes and
+// returns nothing, so no argument slots are popped.  The decacher materializes
+// the COMPLETE frame state (all live slots), which the poll needs both for GC oop
+// scanning and for DeoptimizeALot / deopt-at-safepoint frame reconstruction.
+void YuhuTopLevelBlock::decache_for_safepoint_call() {
+  YuhuVMCallDecacher decacher(function(), bci());
+  decacher.scan(current_state());
+}
+
+// Reload the oop frame slots back into the virtual state after the poll, since
+// GC may have relocated the objects in place through the OopMap produced above
+// (mirrors cache_after_VM_call()).
+void YuhuTopLevelBlock::cache_after_safepoint_call() {
+  YuhuVMCallCacher(function()).scan(current_state());
+}
+
+// A Path B inlinee invoke records a deopt bundle so the CALLER participates as a
+// level in the inline scope chain (generate_safepoint_and_describe_scope pulls the
+// inlinee_call site as an inner node of the enclosing poll and walks the
+// YuhuInlineNodeOrMethod chain to describe each scope).  For that description --
+// and any interpreter reconstruction it drives -- to be correct, the caller's live
+// locals AND expression stack must be materialized into the frame at the invoke
+// bci, which is exactly what a trap decache guarantees before do_trap() registers
+// its bundle.  We reuse the trap decacher (needs_write is `value != NULL`, i.e.
+// every slot, not just oops) because the scope chain carries the whole frame
+// state.  The invoke arguments were already popped above, so -- unlike
+// decache_for_Java_call -- this performs no xpop().
+void YuhuTopLevelBlock::decache_for_inlinee_call() {
+    YuhuVMCallDecacher(function(), bci()).scan(current_state());
+}
+
+// Re-read the caller's oop frame slots after the (flattened) inlinee call, keeping
+// cache/decache symmetry with the Java-call path.  Effectively a no-op here: the
+// inlinee is inlined away and cannot suspend, and YuhuCacher skips reloading a slot
+// whose cached value still holds a live llvm::Value*.  Emitted for consistency.
+void YuhuTopLevelBlock::cache_after_inlinee_call() {
+  YuhuVMCallCacher(function()).scan(current_state());
+}
+
 void YuhuTopLevelBlock::decache_for_trap() {
   YuhuTrapDecacher(function(), bci()).scan(current_state());
 }
@@ -699,6 +746,11 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     llvm::FunctionType* poll_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), { YuhuType::thread_type() }, false);
     llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(poll_ftype));
 
+    // Materialize cached oops into their frame slots before the poll (mirrors the
+    // decache-before-call ordering used at Java/VM/trap sites), so the GC and
+    // deopt-derived OopMap point at real values, not stale slot contents.
+    decache_for_safepoint_call();
+
     register_deopt_bundle(statepoint_id);
 
     llvm::CallInst* call = builder()->CreateCall(poll_ftype, callee, { thread() });
@@ -709,6 +761,8 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
     call->setAttributes(Attrs);
 
+  // Reload the frame slots after the poll so continued code uses GC-forwarded oops.
+  cache_after_safepoint_call();
   current_state()->set_has_safepointed(true);
 }
 
@@ -1389,14 +1443,21 @@ bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
     }
   }
 
-  // Pop the receiver (if any) and the arguments off the expression stack.
-  // No decaching: an inlinee cannot trap or safepoint (see YuhuInliner::
-  // is_llvm_inlineable), and its call vanishes before codegen, so there is
-  // nothing for an OopMap or a deopt bundle to describe here.
+  // Pop the receiver (if any) and the arguments off the expression stack.  The
+  // inlinee cannot trap or safepoint on its own and its call vanishes before
+  // codegen, so no OopMap is generated *for this call site*.  The caller's live
+  // state is still materialized below (decache_for_inlinee_call) because its
+  // deopt bundle is pulled into the enclosing poll's inline scope chain.
   for (int j = 0; j < arg_slots; j++)
     xpop();
 
     uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+    // Materialize the caller's live locals / expression stack into the frame so
+    // the deopt bundle below can describe the caller's scope level in the inline
+    // chain.  The invoke arguments were already popped above, so this captures the
+    // caller's post-invoke state -- matching the "register deopt bundle after
+    // decache" ordering used for Java calls.
+    decache_for_inlinee_call();
     // must register deopt bundle after decache_for_Java_call pops values from expression stack
     // bci here doesn't need to be re-executed
     register_deopt_bundle(statepoint_id);
@@ -1408,6 +1469,12 @@ bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
                                                             bci());
 
   llvm::CallInst* call = builder()->CreateCall(inlinee->function(), call_args);
+
+  // Re-read the caller's oop slots after the (flattened) inlinee call, keeping the
+  // cache/decache symmetry with the Java-call path.  No-op in practice: the inlinee
+  // cannot suspend here and the cacher skips values that still hold a live LLVM
+  // value.
+  cache_after_inlinee_call();
 
   // M2: snapshot the caller's throw-site state BEFORE the result is
   // pushed onto xstack.  Same convention as do_call: the check_pending_

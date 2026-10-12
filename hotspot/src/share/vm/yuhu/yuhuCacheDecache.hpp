@@ -197,10 +197,15 @@ class YuhuJavaCallDecacher : public YuhuDecacher {
     return _callee;
   }
 
+  // Full frame state: a deopt bundle records JVM state by type only (the actual
+  // values live in the physical frame, not as LLVM deopt operands), so ANY deopt
+  // at this site -- including a DeoptimizeALot one fired on exit from the runtime
+  // system -- rebuilds the interpreter frame from the frame slots.  Every live
+  // slot must therefore be materialized, not just the oops.
   // Stack slot helpers
  protected:
   bool stack_slot_needs_write(int index, YuhuValue* value) {
-    return value && (index < callee()->arg_size() || value->is_jobject());
+    return value != NULL;
   }
   bool stack_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject() && index >= callee()->arg_size();
@@ -209,7 +214,7 @@ class YuhuJavaCallDecacher : public YuhuDecacher {
   // Local slot helpers
  protected:
   bool local_slot_needs_write(int index, YuhuValue* value) {
-    return value && value->is_jobject();
+    return value != NULL;
   }
   bool local_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
@@ -221,10 +226,12 @@ class YuhuVMCallDecacher : public YuhuDecacher {
   YuhuVMCallDecacher(YuhuFunction* function, int bci)
     : YuhuDecacher(function, bci) {}
 
+  // Full frame state (see YuhuJavaCallDecacher): materialize every live slot so a
+  // deopt / DeoptimizeALot at this VM-call site can rebuild the interpreter frame.
   // Stack slot helpers
  protected:
   bool stack_slot_needs_write(int index, YuhuValue* value) {
-    return value && value->is_jobject();
+    return value != NULL;
   }
   bool stack_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();
@@ -233,7 +240,7 @@ class YuhuVMCallDecacher : public YuhuDecacher {
   // Local slot helpers
  protected:
   bool local_slot_needs_write(int index, YuhuValue* value) {
-    return value && value->is_jobject();
+    return value != NULL;
   }
   bool local_slot_needs_oopmap(int index, YuhuValue* value) {
     return value && value->is_jobject();

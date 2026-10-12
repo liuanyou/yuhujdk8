@@ -221,6 +221,19 @@ class YuhuTopLevelBlock : public YuhuBlock {
   void cache_after_Java_call(ciMethod* callee, llvm::Value* call_result);
   void decache_for_VM_call();
   void cache_after_VM_call();
+  // A safepoint poll is a void-returning stub call that can suspend for GC and
+  // can be redirected to the deopt handler, so its frame-state requirements are
+  // identical to a VM call: every cached oop must be materialized into its
+  // nominal frame slot before the poll, and reloaded afterwards.
+  void decache_for_safepoint_call();
+  void cache_after_safepoint_call();
+  // A Path B inlinee invoke records a deopt bundle so the CALLER participates as
+  // a level in the inline scope chain; the caller's full frame state must be
+  // materialized at the invoke bci so that scope description / reconstruction is
+  // valid.  The invoke arguments are already popped at the call site, so unlike
+  // decache_for_Java_call this performs no xpop.
+  void decache_for_inlinee_call();
+  void cache_after_inlinee_call();
   void decache_for_trap();
 
   // Monitors
