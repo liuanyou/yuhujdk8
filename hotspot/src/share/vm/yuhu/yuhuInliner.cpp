@@ -264,9 +264,20 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 //     handlers=true (holder klass already linked; size limit, no monitors
 //     / jsrs / native / abstract / initializer; exception handler tables
 //     are permitted under Path B),
-//   - it actually has control flow (at least one branch instruction); a
-//     straight-line method should go through the existing bytecode inliner,
-//     which never builds a separate LLVM Function for it,
+//   - the bytecode inliner (Path A) cannot handle it.  Path B claims a
+//     callee the moment it contains an opcode Path A structurally rejects
+//     (branches, the invoke family, putstatic, arraylength, array load/
+//     store, allocation, type checks, trapping idiv/ldiv/irem/lrem, or
+//     athrow); a callee built only from opcodes Path A already inlines
+//     (constants, loads/stores, stack shuffles, non-trapping arithmetic,
+//     fp arithmetic, conversions, comparisons, field get/put, returns)
+//     stays with Path A, which never builds a separate LLVM Function for
+//     it.  This replaced the pre-M2 rule that required at least one
+//     branch, which let a straight-line callee that merely contained an
+//     invoke (or alloc / array op / checkcast / trapping div / athrow)
+//     slip through BOTH inliners un-inlined.  Callees neither path can
+//     handle (invokehandle / monitorenter / monitorexit / jsr / goto_w)
+//     still fall through to a normal do_call at the call site.
 //   - every one of its bytecodes is in the whitelist below: constants,
 //     local/stack manipulation, arithmetic (including the trapping
 //     idiv/ldiv/irem/lrem), conversions, comparisons, branches (forward
@@ -357,7 +368,13 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       return false;
   }
 
-  bool saw_branch = false;
+  // Path B claims a callee only when the bytecode inliner (Path A)
+  // cannot handle it.  Set true on the first opcode Path A structurally
+  // rejects (branches, the invoke family, putstatic, arraylength, array
+  // load/store, allocation, type checks, trapping div/rem, athrow).  A
+  // method built only from opcodes Path A already inlines leaves this
+  // false and is left to Path A.  Replaces the pre-M2 `saw_branch` gate.
+  bool needs_path_b = false;
 
   ciBytecodeStream iter(target);
   while (iter.next() != ciBytecodeStream::EOBC()) {
@@ -477,7 +494,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_if_acmpeq: case Bytecodes::_if_acmpne:
     case Bytecodes::_ifnull: case Bytecodes::_ifnonnull:
     case Bytecodes::_goto: case Bytecodes::_tableswitch: case Bytecodes::_lookupswitch:
-      saw_branch = true;
+      needs_path_b = true;
       break;
 
       // ---- returns ----
@@ -517,6 +534,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_invokevirtual:
     case Bytecodes::_invokeinterface:
     case Bytecodes::_invokedynamic:
+      needs_path_b = true;
       break;
 
       // ---- field access (M1+) ----
@@ -526,14 +544,22 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // initialisation not yet complete dispatches via Yuhu's variant-2
       // Reason_uninitialized reinterpret trap (see scan_for_traps),
       // which falls back to interpreter re-execution.
-    case Bytecodes::_getstatic: case Bytecodes::_putstatic:
-    case Bytecodes::_getfield:  case Bytecodes::_putfield:
+    case Bytecodes::_getstatic:
+    case Bytecodes::_getfield:
+    case Bytecodes::_putfield:
+      break;
+    case Bytecodes::_putstatic:
+      // Path A's do_field_access asserts "can't inline putstatic" and
+      // is_inlinable() has no _putstatic case, so a method containing it
+      // is reachable only through Path B.
+      needs_path_b = true;
       break;
 
       // ---- arraylength (M1+) ----
       // Emits a check_null on the receiver and a load from the array's
       // length field.  Null receiver deopts; no bounds concern.
     case Bytecodes::_arraylength:
+      needs_path_b = true;
       break;
 
       // ---- array load / store (M1+) ----
@@ -548,6 +574,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     case Bytecodes::_iastore: case Bytecodes::_lastore: case Bytecodes::_fastore:
     case Bytecodes::_dastore: case Bytecodes::_aastore: case Bytecodes::_bastore:
     case Bytecodes::_castore: case Bytecodes::_sastore:
+      needs_path_b = true;
       break;
 
       // ---- allocation (M1+) ----
@@ -560,6 +587,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // trap, so the M1 multi-level bundle gap does NOT apply here.
     case Bytecodes::_new: case Bytecodes::_anewarray:
     case Bytecodes::_newarray: case Bytecodes::_multianewarray:
+      needs_path_b = true;
       break;
 
       // ---- type check (M1+) ----
@@ -571,6 +599,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // trap already used at top-level checkcast sites.
     case Bytecodes::_instanceof:
     case Bytecodes::_checkcast:
+      needs_path_b = true;
       break;
 
       // ---- trapping integer/long division (M1+) ----
@@ -580,6 +609,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // trap.  See the "Traps" note in the function-level doc.
     case Bytecodes::_idiv: case Bytecodes::_ldiv:
     case Bytecodes::_irem: case Bytecodes::_lrem:
+      needs_path_b = true;
       break;
 
       // ---- athrow (M2) ----
@@ -621,6 +651,7 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // site fall through to interpreter re-execution -- semantically
       // correct, just not fast-pathed.
     case Bytecodes::_athrow:
+      needs_path_b = true;
       break;
 
       // ---- _goto_w (unreachable in practice) ----
@@ -657,10 +688,6 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
     }
   }
 
-  // Straight-line methods belong to the bytecode inliner's territory.
-  if (!saw_branch)
-    return false;
-
   // Loops are permitted since M1 (see function-level doc).  A backedge
   // inside the inlinee causes maybe_add_backedge_safepoint to fire on the
   // inlinee's own block hierarchy; the emitted statepoint call carries
@@ -669,7 +696,13 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
   // function with its statepoint-id attribute intact so RS4GC and the
   // debug-info recorder keep working.
 
-  return true;
+  // Claim the callee only if it contains an opcode Path A cannot inline.
+  // A purely straight-line method (Path A's territory) leaves this false
+  // and is bytecode-inlined into the caller's block, which is cheaper
+  // than materialising a separate alwaysinline llvm::Function and running
+  // AlwaysInlinerPass over it.  Every opcode reaching here was already
+  // whitelisted for Path B above, so returning true is always safe.
+  return needs_path_b;
 }
 
 // Full-on detailed check for the bytecode-level inliner (Path A).  These

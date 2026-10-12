@@ -58,18 +58,34 @@ class YuhuInliner : public AllStatic {
   // full M2 exception flow.
   static bool may_be_inlinable(ciMethod* target, bool allow_exception_handlers = false);
 
-  // M0 of LLVM-IR inlining: a callee is "llvm_inlineable" if it passes the
-  // quick may_be_inlinable() checks, has control flow (so the bytecode-level
-  // inliner could never handle it), yet is "quiescent": every instruction is
-  // straight dataflow (constants, local load/store, stack shuffling, arithmetic,
-  // conversions, comparisons) or a forward branch (if*/goto/tableswitch/
-  // lookupswitch) that does not form a loop.  In particular it contains no
-  // invoke/field-access/array-access/division/throw/new/instanceof/checkcast
-  // instruction -- each of those can trap or call into the VM and so would
-  // require a real frame, which an inlinee must not have.  See also the
-  // "Four things B must not do" list in the inlinee design: this eligibility
-  // check is what keeps B from ever reaching those code paths during its own
-  // YuhuFunction::initialize().
+  // Eligibility check for the LLVM-IR inlining path (Path B).  Yuhu
+  // offers two inliners at each call site: Path A (the bytecode inliner,
+  // YuhuInlinerHelper::is_inlinable + do_inline) pastes a callee's IR
+  // straight into the caller's block, while Path B builds the callee as a
+  // separate alwaysinline llvm::Function that AlwaysInlinerPass flattens
+  // into the caller.  Path B is claimed for a callee only when Path A
+  // CANNOT inline it -- i.e. the callee contains at least one opcode Path
+  // A structurally rejects (branches, the invoke family, putstatic,
+  // arraylength, array load/store, allocation, type checks, trapping
+  // idiv/ldiv/irem/lrem, or athrow).  A callee made purely of opcodes
+  // Path A already handles stays with Path A.  Callees NEITHER path can
+  // inline (invokehandle / monitorenter / monitorexit / jsr / goto_w) are
+  // rejected here and fall through to a normal do_call.
+  //
+  // Historically (M0) the gate was "has at least one branch", on the
+  // theory that Path B existed only to merge a callee's control-flow
+  // graph -- which Path A could not do.  That heuristic went stale once
+  // M1/M1+/M2 widened Path B's whitelist to absorb invokes, field/array
+  // access, allocation, type checks, trapping div, and athrow: a
+  // straight-line-with-an-invoke callee fell through BOTH nets un-
+  // inlined.  The predicate is now "Path A declines it", checked against
+  // the same opcode families the Path B whitelist already admits.  A
+  // callee still must be quiescent in the frame sense: it gets no stack
+  // frame of its own, so any opcode that survives the whitelist must be
+  // one whose safepoint/call/trap metadata can travel through Always-
+  // InlinerPass via the statepoint-id attribute.  See is_llvm_inlineable's
+  // function-level doc for the full opcode inventory and the M1 deopt-
+  // bundle caveat.
   static bool is_llvm_inlineable(ciMethod* target);
 };
 
