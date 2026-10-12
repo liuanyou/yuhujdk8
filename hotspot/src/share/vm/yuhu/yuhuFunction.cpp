@@ -211,7 +211,15 @@ void YuhuFunction::initialize(const char *name) {
   llvm::Value *method = NULL;
   
   // For static methods, skip the first parameter (NULL)
-  if (is_static()) {
+  // IMPORTANT: the dummy-x0 slot lives only in generate_normal_entry_point_
+  // type (see that function); generate_inlinee_entry_point_type omits it
+  // entirely.  For a static inlinee with zero Java params the LLVM arg list
+  // is empty, so ai++ would dereference arg_end() (yielding a null Argument*)
+  // and setName would fault at offset 8 -- see test_yuhu/hs_err_pid84223.log
+  // where a static, 0-arg inlinee of java.net.URL::getURLStreamHandler
+  // crashed YuhuFunction::initialize.  Guarding on !_is_inlinee mirrors the
+  // same rule already enforced at the dummy-x0 SAVE site (~line 250).
+  if (is_static() && !_is_inlinee) {
     llvm::Argument *null_arg = ai++;
     null_arg->setName("null_arg");
     // Don't use null_arg, it's just a placeholder for x0
