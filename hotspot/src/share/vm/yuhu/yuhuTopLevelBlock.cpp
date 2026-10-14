@@ -749,7 +749,17 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     // Materialize cached oops into their frame slots before the poll (mirrors the
     // decache-before-call ordering used at Java/VM/trap sites), so the GC and
     // deopt-derived OopMap point at real values, not stale slot contents.
-    decache_for_safepoint_call();
+    //
+    // Skip the spill for the method-entry poll: its frame slots are already
+    // initialized by the entry cacher from the parameters (which dominate the
+    // entry block), so re-storing them here is redundant.  On methods whose first
+    // bytecode block is a loop header the cached locals/method resolve to that
+    // block's PHI nodes, and storing them in the entry block breaks SSA dominance
+    // ("Instruction does not dominate all uses").  The successor's state values
+    // already dominate entry, so no spill is needed here.
+    if (!is_method_entry_safepoint) {
+      decache_for_safepoint_call();
+    }
 
     register_deopt_bundle(statepoint_id);
 
@@ -761,8 +771,13 @@ void YuhuTopLevelBlock::maybe_add_safepoint(bool is_method_entry_safepoint) {
     llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
     call->setAttributes(Attrs);
 
-  // Reload the frame slots after the poll so continued code uses GC-forwarded oops.
-  cache_after_safepoint_call();
+  // Reload the frame slots after the poll so Yuhu's cached SSA state reflects the
+  // spilled contents.  This only pairs with the decache above; GC-forwarding of
+  // live oops across the poll is done by RS4GC, not here.  Skip it for the
+  // method-entry poll, where there was no spill to read back.
+  if (!is_method_entry_safepoint) {
+    cache_after_safepoint_call();
+  }
   current_state()->set_has_safepointed(true);
 }
 
