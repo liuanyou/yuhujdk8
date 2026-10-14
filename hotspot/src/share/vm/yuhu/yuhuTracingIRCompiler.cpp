@@ -111,7 +111,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         break;
     }
 
-    // 1. 找到 __LLVM_StackMaps 段
     for (auto &Section : (*ObjFile)->sections()) {
         auto NameOrErr = Section.getName();
         if (!NameOrErr) {
@@ -124,9 +123,18 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                 errs() << "[StackMap] Section: " << *NameOrErr << "\n";
             }
         }
+    }
+
+    // 1. 找到 __LLVM_StackMaps 段
+    for (auto &Section : (*ObjFile)->sections()) {
+        auto NameOrErr = Section.getName();
+        if (!NameOrErr) {
+            continue;
+        }
         // Section.getName() returns in format of segment,section eg
         // Section: __TEXT,__text
         // Section: $__GOT
+        // Section: __DATA,__data
         // Section: __LD,__compact_unwind
         // Section: __TEXT,__const
         // Section: __LLVM_STACKMAPS,__llvm_stackmaps

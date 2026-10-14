@@ -181,18 +181,48 @@ void CallSiteExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationRespons
 llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &G,
                                                       llvm::orc::MaterializationResponsibility &MR) {
     auto recorder = YuhuDebugInformationRecorder::get();
+
+    for (auto &Section : G.sections()) {
+        auto NameOrErr = Section.getName();
+        if (YuhuTraceMachineCode) {
+            errs() << "[CallSite Extractor] Section: " << NameOrErr << "\n";
+        }
+    }
+
     for (auto &Section : G.sections()) {
         if (!Section.getName().ends_with("__const"))
             continue;
         for (auto *Sym : Section.symbols()) {
             assert(Sym->getAddress().getValue() == Sym->getRange().Start.getValue(), "addr should match to range start");
-            recorder->register_const_symbol(Sym->getAddress().getValue(), Sym->getRange().Start.getValue(), Sym->getRange().End.getValue());
+            recorder->register_symbol(Sym->getAddress().getValue(), Sym->getRange().Start.getValue(), Sym->getRange().End.getValue(), SectionType::const_section);
             if (YuhuTraceMachineCode) {
                 errs() << "[CallSite Extractor] const, address: "
                         << Sym->getAddress().getValue()
                         << ", start: " << Sym->getRange().Start.getValue()
                         << ", end: " << Sym->getRange().End.getValue()
                         << ", section name: " << Section.getName() << "\n";
+            }
+        }
+    }
+
+    for (auto &Section : G.sections()) {
+        if (!Section.getName().ends_with("__data"))
+            continue;
+        for (auto *Sym : Section.symbols()) {
+            if (!Sym->hasName()) continue;
+            StringRef name = *(Sym->getName());
+            // name is prefixed with l_, eg l___metadata_slot_10066
+            if (!name.contains("__metadata_slot_")) {
+                ShouldNotReachHere();
+            }
+            assert(Sym->getAddress().getValue() == Sym->getRange().Start.getValue(), "addr should match to range start");
+            recorder->register_symbol(Sym->getAddress().getValue(), Sym->getRange().Start.getValue(), Sym->getRange().End.getValue(), SectionType::data_section);
+            if (YuhuTraceMachineCode) {
+                errs() << "[CallSite Extractor] data, address: "
+                       << Sym->getAddress().getValue()
+                       << ", start: " << Sym->getRange().Start.getValue()
+                       << ", end: " << Sym->getRange().End.getValue()
+                       << ", section name: " << Section.getName() << "\n";
             }
         }
     }
@@ -207,8 +237,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             uint64_t target_addr = Sym->getAddress().getValue();
             uint64_t function_address = *(uint64_t*)target_addr;
             assert(function_address != 0, "function address should be valid");
-            assert(recorder->contains_call_target(function_address) || recorder->get_const_symbol_by_range_addr(function_address),
-                   "addr should be call target or const address");
+            assert(recorder->contains_call_target(function_address) || recorder->get_symbol_by_range_addr(function_address),
+                   "addr should be call target or const/data address");
 
             SymbolEntry entry{};
             entry.addr = target_addr;
@@ -312,10 +342,11 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                     return *((uint64_t*)token) == entry.addr;
                 });
                 if (index != -1) {
-                    // if it is GOT symbol
+                    // if got symbol is found, then mark it as got symbol,
+                    // but got entry can also be used for indirect addressing data symbol and const symbol
                     recorder->register_edge(block_offset + Edge.getOffset(), EdgeTargetType::got_symbol, target_addr);
-                } else if (recorder->get_const_symbol_by_range_addr(target_addr)) {
-                    // if it is const symbol
+                } else if (recorder->get_symbol_by_section_type_and_range_addr(SectionType::const_section, target_addr)) {
+                    // if it is direct addressing jump table, then mark it as const symbol
                     recorder->register_edge(block_offset + Edge.getOffset(), EdgeTargetType::const_symbol, target_addr);
                 } else if (Kind != llvm::jitlink::Edge::GenericEdgeKind::KeepAlive) {
                     ShouldNotReachHere();

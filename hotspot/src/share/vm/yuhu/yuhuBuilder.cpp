@@ -1061,44 +1061,19 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
 
   // Two ids, same split as the unwind patch point in handle_return: the call
   // site entry carries the metadata payload, the patch point entry links to it.
-  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
-  uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
+  uint64_t unique_id = YuhuStatepointIDGenerator::next();
 
-  // current_method/bci are never consulted: a metadata call site does not get
-  // an OopMap, because its stackmap record is keyed by the patch point id, so
-  // the call site/stackmap pairing in the recorder never matches it up.
-  YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                          function()->inline_node_or_method(),
-                                                          metadata_addr,
-                                                          CallSiteType::metadata_call);
+  std::string slot_name = "__metadata_slot_"+ std::to_string(unique_id);
+  Constant* init = ConstantExpr::getIntToPtr(ConstantInt::get(YuhuType::jlong_type(), metadata_addr), type);
 
-  llvm::Value* call_target = LLVMValue::jlong_constant(metadata_addr);
-  llvm::FunctionType* metadata_ftype = llvm::FunctionType::get(YuhuType::Metadata_type(), false);
-  llvm::Value* callee = CreateIntToPtr(call_target, PointerType::getUnqual(metadata_ftype));
+  auto gv = new GlobalVariable(*mod, type, false, GlobalValue::PrivateLinkage, init, slot_name);
+  gv->setAlignment(Align(8));
 
-    llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
-            mod, llvm::Intrinsic::experimental_patchpoint, { YuhuType::Metadata_type() });
+  YuhuDebugInformationRecorder::get()->register_global_var(unique_id, GlobalVarType::metadata, metadata_addr);
 
-    // patchpoint.void(id, numBytes, target, numArgs, ...)
-    llvm::Value* pp_args[] = {
-            LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
-            llvm::ConstantInt::get(YuhuType::jint_type(), 16),              // numBytes: reserved region size
-            callee, // target: raw i64
-            llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
-    };
+  llvm::LoadInst* load = new LoadInst(type, gv, "", GetInsertBlock());
 
-    // register patch point
-    YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 16, statepoint_id);
-
-    llvm::CallInst* call = CreateCall(pp_intrinsic, pp_args);
-
-    llvm::LLVMContext &Ctx = getContext();
-    llvm::AttrBuilder AB(Ctx);
-    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
-    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
-    call->setAttributes(Attrs);
-
-    return call;
+    return load;
 }
 
 // Helpers for creating basic blocks.
@@ -1217,9 +1192,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
 
     ResourceMark rm;
     GrowableArray<RelocEntry> reloc_entries;
-    GrowableArray<uint64_t> copied_const_srcs; // const_symbol_entry->start
-    GrowableArray<uint64_t> copied_const_dsts; // address in cb->consts()
-    GrowableArray<std::pair<uint64_t, uint64_t>> copied_const_symbols;
     GrowableArray<uint64_t> patched_oop_call_site_statepoint_ids;
     GrowableArray<uint64_t> patched_metadata_call_site_statepoint_ids;
 
@@ -1332,6 +1304,10 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         NOT_PRODUCT(})
     NOT_PRODUCT(})
 
+    GrowableArray<uint64_t> copied_symbol_srcs; // symbol_entry->start
+    GrowableArray<uint64_t> copied_symbol_dsts; // address in cb->consts()
+    GrowableArray<std::pair<uint64_t, uint64_t>> copied_symbols;
+
     // process edge entries
     auto edge_entries = recorder->edge_entries();
     // sort by offset, adrp + ldr generates 2 edge entries, just processes the first one
@@ -1356,55 +1332,82 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
                 reloc_entries.append(reloc_entry);
             } else {
-                auto const_symbol_entry = recorder->get_const_symbol_by_range_addr(function_address);
-                assert(const_symbol_entry != NULL, "Const symbol should exist");
+                // it should be either data symbol or const symbol
+                auto symbol_entry = recorder->get_symbol_by_range_addr(function_address);
+                assert(symbol_entry != NULL, "Symbol should exist");
 
                 address new_table_addr;
-                int idx = copied_const_srcs.find(const_symbol_entry->start);
+                int idx = copied_symbol_srcs.find(symbol_entry->start);
                 if (idx >= 0) {
-                    new_table_addr = (address)copied_const_dsts.at(idx);
+                    new_table_addr = (address)copied_symbol_dsts.at(idx);
                 } else {
                     new_table_addr = cb->consts()->end();
-                    size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
-                    memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
+                    size_t symbol_size = symbol_entry->end - symbol_entry->start;
+                    memcpy(new_table_addr, (address) symbol_entry->start, symbol_size);
                     cb->consts()->set_end(new_table_addr + symbol_size);
-                    copied_const_srcs.append(const_symbol_entry->start);
-                    copied_const_dsts.append((uint64_t)new_table_addr);
+                    copied_symbol_srcs.append(symbol_entry->start);
+                    copied_symbol_dsts.append((uint64_t)new_table_addr);
                 }
 
                 // get new function address with offset
-                address new_target_address = (function_address - const_symbol_entry->start) + new_table_addr;
+                address new_target_address = (function_address - symbol_entry->start) + new_table_addr;
+                // target value should be copied successfully
+                assert(*(uint64_t*)function_address == *(uint64_t*)(new_target_address), "target value should match");
                 bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
                 assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = adapter_size + offset_in_func;
                 reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
-                reloc_entry.target = (uint64_t)new_target_address;
+                reloc_entry.target = (uint64_t) new_target_address;
                 reloc_entries.append(reloc_entry);
+                if (symbol_entry->section_type == SectionType::data_section) {
+                    uint64_t target_value = *(uint64_t*)(function_address);
+                    auto global_var = recorder->get_global_var_by_target_value(target_value);
+                    assert(global_var != NULL, "global var should exist");
+                    if (global_var->global_var_type == GlobalVarType::metadata) {
+                        ::Metadata* metadata = (::Metadata*)(uintptr_t) target_value;
+                        assert(metadata != NULL && metadata->is_metaspace_object(), "metadata must be a metaspace object");
+                        // allocate_metadata_index() deduplicates, so several uses of the same
+                        // Metadata* share one pool entry while each keeps its own relocation.
+                        int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
+                        assert(metadata_index > 0, "metadata_index must be > 0");
+
+                        RelocEntry reloc_entry2{};
+                        reloc_entry2.offset = adapter_size + offset_in_func;
+                        reloc_entry2.reloc_type = relocInfo::relocType::metadata_type;
+                        reloc_entry2.spec_index = metadata_index;
+                        reloc_entries.append(reloc_entry2);
+                    } else {
+                        ShouldNotReachHere();
+                    }
+                }
+
             }
         } else if (edge->edge_target_type == EdgeTargetType::const_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
             assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(edge_instr), "should be direct jump table pattern");
 
-            auto const_symbol_entry = recorder->get_const_symbol_by_range_addr(edge->target_address);
+            auto const_symbol_entry = recorder->get_symbol_by_section_type_and_range_addr(SectionType::const_section, edge->target_address);
             assert(const_symbol_entry != NULL, "Const symbol should exist");
 
             address new_table_addr;
-            int idx = copied_const_srcs.find(const_symbol_entry->start);
+            int idx = copied_symbol_srcs.find(const_symbol_entry->start);
             if (idx >= 0) {
-                new_table_addr = (address)copied_const_dsts.at(idx);
+                new_table_addr = (address)copied_symbol_dsts.at(idx);
             } else {
                 new_table_addr = cb->consts()->end();
                 size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
                 memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
                 cb->consts()->set_end(new_table_addr + symbol_size);
-                copied_const_srcs.append(const_symbol_entry->start);
-                copied_const_dsts.append((uint64_t)new_table_addr);
+                copied_symbol_srcs.append(const_symbol_entry->start);
+                copied_symbol_dsts.append((uint64_t)new_table_addr);
             }
 
             // get new function address with offset
             address new_target_address = (edge->target_address - const_symbol_entry->start) + new_table_addr;
+            // simply compare first byte, may not be accurate, but better than nothing
+            assert(*(uint8_t*)(edge->target_address) == *(uint8_t*)(new_target_address), "copied content should match");
             bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
             assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 

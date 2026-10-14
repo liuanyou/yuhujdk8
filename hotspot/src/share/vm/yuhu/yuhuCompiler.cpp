@@ -1514,17 +1514,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, &prologue_registers);
     int exc_handler_size  = measure_exception_handler_size();
     int deopt_handler_size = measure_deopt_handler_size();
-    int consts_size = recorder->total_const_symbol_size();
+    int symbols_size = recorder->total_symbol_size();
 
     size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
     // Create CodeBuffer that manages its own BufferBlob internally
-    CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size + exc_handler_size + deopt_handler_size + consts_size, (int)(combined_size * 0.15));
+    CodeBuffer combined_cb("yuhu-normal-combined", (int)combined_size + exc_handler_size + deopt_handler_size + symbols_size, (int)(combined_size * 0.15));
     if (combined_cb.blob() == NULL) {
       fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
     }
-    if (consts_size > 0) {
-        combined_cb.initialize_consts_size(consts_size);
+    if (symbols_size > 0) {
+        combined_cb.initialize_consts_size(symbols_size);
     }
     combined_cb.initialize_stubs_size( exc_handler_size + deopt_handler_size);
 
@@ -1619,17 +1619,17 @@ void YuhuCompiler::compile_method(ciEnv*    env,
       int unwind_handler_size = measure_unwind_handler_size(frame_size * wordSize, &prologue_registers);
       int exc_handler_size  = measure_exception_handler_size();
       int deopt_handler_size = measure_deopt_handler_size();
-      int consts_size = recorder->total_const_symbol_size();
+      int symbols_size = recorder->total_symbol_size();
 
       size_t combined_size = adapter_size + effective_code_size + unwind_handler_size;
 
       // Create CodeBuffer that manages its own BufferBlob internally
-      CodeBuffer combined_cb("yuhu-osr-combined", (int)combined_size + exc_handler_size + deopt_handler_size + consts_size, (int)(combined_size * 0.15));
+      CodeBuffer combined_cb("yuhu-osr-combined", (int)combined_size + exc_handler_size + deopt_handler_size + symbols_size, (int)(combined_size * 0.15));
       if (combined_cb.blob() == NULL) {
           fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
       }
-      if (consts_size > 0) {
-          combined_cb.initialize_consts_size(consts_size);
+      if (symbols_size > 0) {
+          combined_cb.initialize_consts_size(symbols_size);
       }
       combined_cb.initialize_stubs_size( exc_handler_size + deopt_handler_size);
 

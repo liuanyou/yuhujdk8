@@ -33,6 +33,18 @@ enum class EdgeTargetType : uint8_t {
     const_symbol = 2
 };
 
+enum class GlobalVarType : uint8_t {
+    none = 0,
+    metadata = 1,
+    oop = 2
+};
+
+enum class SectionType : uint8_t {
+    none = 0,
+    const_section = 1,
+    data_section = 2
+};
+
 class CallSiteEntry : public ResourceObj {
 public:
     uint64_t statepoint_id; // generated at IR phase - assigned
@@ -74,11 +86,19 @@ public:
     jobject oop = NULL;
 };
 
+class GlobalVarEntry : public ResourceObj {
+public:
+    uint64_t unique_id;
+    GlobalVarType global_var_type;
+    uint64_t target_value;
+};
+
 class SymbolEntry : public ResourceObj {
 public:
     uint64_t addr;
     uint64_t start;
     uint64_t end;
+    SectionType section_type;
 };
 
 // adrp + ldr generates 2 edge entries, but points to the same target address with different offsets
@@ -163,7 +183,9 @@ private:
 
   GrowableArray<PatchPointEntry*>* _patchpoint_entries;
 
-  GrowableArray<SymbolEntry*>* _const_symbol_entries;
+  GrowableArray<GlobalVarEntry*>* _global_var_entries;
+
+  GrowableArray<SymbolEntry*>* _symbol_entries;
 
   GrowableArray<EdgeEntry*>* _edge_entries;
 
@@ -335,29 +357,45 @@ public:
       return _call_site_entries->at(index);
   }
 
-  SymbolEntry* get_const_symbol_by_addr(uint64_t addr) const {
-      if (!addr) return NULL;
-      int index = _const_symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
-          return *((uint64_t*)token) == entry->addr;
+  GlobalVarEntry* get_global_var_by_target_value(uint64_t target_value) const {
+      if (!_global_var_entries) return NULL;
+      int index = _global_var_entries->find(&target_value, [](void* token, GlobalVarEntry* entry) -> bool {
+          return *((uint64_t*)token) == entry->target_value;
       });
       if (index == -1) return NULL;
-      return _const_symbol_entries->at(index);
+      return _global_var_entries->at(index);
   }
 
-  SymbolEntry* get_const_symbol_by_range_addr(uint64_t addr) const {
+   SymbolEntry* get_symbol_by_section_type_and_range_addr(SectionType section_type, uint64_t addr) const {
+       if (!addr) return NULL;
+       int index = -1;
+       for (int i = 0; i < _symbol_entries->length(); ++i) {
+           SymbolEntry* entry = _symbol_entries->at(i);
+           // data is at least 1 byte, so addr should never be entry->end
+           if (entry->section_type == section_type && addr >= entry->start && addr < entry->end) {
+               index = i;
+               break;
+           }
+       }
+       if (index == -1) return NULL;
+       return _symbol_entries->at(index);
+  }
+
+  SymbolEntry* get_symbol_by_range_addr(uint64_t addr) const {
       if (!addr) return NULL;
-      int index = _const_symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
+      int index = _symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
           uint64_t range_addr = *((uint64_t*)token);
-          return  range_addr >= entry->start && range_addr <= entry->end;
+          // data is at least 1 byte, so addr should never be entry->end
+          return  range_addr >= entry->start && range_addr < entry->end;
       });
       if (index == -1) return NULL;
-      return _const_symbol_entries->at(index);
+      return _symbol_entries->at(index);
   }
 
-  size_t total_const_symbol_size() const {
+  size_t total_symbol_size() const {
       size_t total = 0;
-      for (int i = 0; i < _const_symbol_entries->length(); ++i) {
-          total += _const_symbol_entries->at(i)->end - _const_symbol_entries->at(i)->start;
+      for (int i = 0; i < _symbol_entries->length(); ++i) {
+          total += _symbol_entries->at(i)->end - _symbol_entries->at(i)->start;
       }
       return total;
   }
@@ -382,7 +420,9 @@ public:
 
   void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj = NULL);
 
-  void register_const_symbol(uint64_t address, uint64_t start, uint64_t end);
+  void register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value);
+
+  void register_symbol(uint64_t address, uint64_t start, uint64_t end, SectionType section_type);
 
   void register_edge(uint32_t offset, EdgeTargetType edge_target_type, uint64_t target_address);
 

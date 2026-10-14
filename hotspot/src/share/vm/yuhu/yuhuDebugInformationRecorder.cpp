@@ -74,7 +74,8 @@ void YuhuDebugInformationRecorder::init_collections() {
   _stack_map_entries = new (_arena) GrowableArray<StackMapEntry*>(_arena, 10, 0, (StackMapEntry*)NULL);
   _deopt_bundles = new (_arena) GrowableArray<DeoptBundle*>(_arena, 10, 0, (DeoptBundle*)NULL);
   _patchpoint_entries = new (_arena) GrowableArray<PatchPointEntry*>(_arena, 10, 0, (PatchPointEntry*)NULL);
-  _const_symbol_entries = new (_arena) GrowableArray<SymbolEntry*>(_arena, 10, 0, (SymbolEntry*)NULL);
+  _global_var_entries = new (_arena) GrowableArray<GlobalVarEntry*>(_arena, 10, 0, (GlobalVarEntry*)NULL);
+  _symbol_entries = new (_arena) GrowableArray<SymbolEntry*>(_arena, 10, 0, (SymbolEntry*)NULL);
   _edge_entries = new (_arena) GrowableArray<EdgeEntry*>(_arena, 10, 0, (EdgeEntry*)NULL);
   _frame_layout_entries = new (_arena) GrowableArray<FrameLayoutEntry*>(_arena, 10, 0, (FrameLayoutEntry*)NULL);
 }
@@ -286,16 +287,32 @@ void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, 
     _patchpoint_entries->append(patch_point_entry);
 }
 
-void YuhuDebugInformationRecorder::register_const_symbol(uint64_t addr, uint64_t start, uint64_t end) {
-    int index = _const_symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
+void YuhuDebugInformationRecorder::register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value) {
+    int index = _global_var_entries->find(&unique_id, [](void* token, GlobalVarEntry* entry) -> bool {
+        return *((uint64_t*)token) == entry->unique_id;
+    });
+    // skip registration if already exists
+    if (index != -1) {
+        return;
+    }
+    auto global_var_entry = new (_arena) GlobalVarEntry();
+    global_var_entry->unique_id = unique_id;
+    global_var_entry->global_var_type = global_var_type;
+    global_var_entry->target_value = target_value;
+    _global_var_entries->append(global_var_entry);
+}
+
+void YuhuDebugInformationRecorder::register_symbol(uint64_t addr, uint64_t start, uint64_t end, SectionType section_type) {
+    int index = _symbol_entries->find(&addr, [](void* token, SymbolEntry* entry) -> bool {
         return *((uint32_t*)token) == entry->addr;
     });
     if (index == -1) {
-        auto const_symbol_entry = new (_arena) SymbolEntry();
-        const_symbol_entry->addr = addr;
-        const_symbol_entry->start = start;
-        const_symbol_entry->end = end;
-        _const_symbol_entries->append(const_symbol_entry);
+        auto symbol_entry = new (_arena) SymbolEntry();
+        symbol_entry->addr = addr;
+        symbol_entry->start = start;
+        symbol_entry->end = end;
+        symbol_entry->section_type = section_type;
+        _symbol_entries->append(symbol_entry);
     }
 }
 
