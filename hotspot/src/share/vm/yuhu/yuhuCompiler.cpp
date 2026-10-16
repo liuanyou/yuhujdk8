@@ -1629,6 +1629,13 @@ void YuhuCompiler::compile_method(ciEnv*    env,
           fatal(err_msg("YuhuCompiler::compile_method: failed to allocate combined CodeBuffer (size=%zu)", combined_size));
       }
       if (symbols_size > 0) {
+          // the space is subtracted from initialized code size (insts size),
+          // insts is allocated firstly, then consts is allocated from last insts area which is ending at end of insts limit
+          // and eventually stubs is allocated from middle insts aread which is ending at begin of consts start
+          // so the final section layout is:
+          // insts begin  -> 0x11195b840
+          // stubs begin  -> 0x11195bf00
+          // consts begin -> 0x11195c000
           combined_cb.initialize_consts_size(symbols_size);
       }
       combined_cb.initialize_stubs_size( exc_handler_size + deopt_handler_size);

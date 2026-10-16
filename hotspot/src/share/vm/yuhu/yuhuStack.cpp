@@ -67,9 +67,9 @@ void YuhuStack::initialize(Value* method, YuhuInlineNodeOrMethod* inline_node_or
   _extended_frame_size = frame_words + locals_words;
   // No need to align 16 bytes here, llvm will handle it
 
-    ResourceMark rm;
-    ciMethod* target = inline_node_or_method->target();
   if (YuhuTraceInstalls) {
+      ResourceMark rm;
+      ciMethod* target = inline_node_or_method->target();
       if (YuhuStackMapFile != NULL) {
           YUHU_STACK_MAP_LOG("Yuhu: method %s.%s signature %s - stack is initialized with header_words=%d, monitor_words=%d, stack_words=%d, local_words=%d, extended_frame_size=%d",
                              target->holder()->name()->as_utf8(),

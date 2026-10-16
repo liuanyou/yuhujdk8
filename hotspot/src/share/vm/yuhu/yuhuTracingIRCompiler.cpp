@@ -232,7 +232,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                         break;
                     }
                 }
-                assert(found_offset, "extended sp alloca should have offset");
+                assert(found_offset, "x0 sp alloca should have offset");
             } else {
                 if (YuhuTraceMachineCode) {
                     CallSiteType call_site_type = recorder->get_call_site_type_by_statepoint_id(StatepointID);
@@ -337,5 +337,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
                 }
             }
         }
+        recorder->eliminate_not_survived_frames();
     }
 }

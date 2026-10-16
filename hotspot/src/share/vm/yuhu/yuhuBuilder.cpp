@@ -890,48 +890,22 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* na
 
     Module* mod = GetInsertBlock()->getModule();
 
-    // Two ids, same split as the unwind patch point in handle_return: the call
-    // site entry carries the oop payload, the patch point entry links to it.
-    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
-    uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
+    // generate unique id with statepoint id, this makes slot name unique
+    uint64_t unique_id = YuhuStatepointIDGenerator::next();
 
-    uint64_t temp_placeholder = statepoint_id_for_patchpoint & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
+    uint64_t temp_placeholder = unique_id & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
 
-    // current_method/bci are never consulted: a oop call site does not get
-    // an OopMap, because its stackmap record is keyed by the patch point id, so
-    // the call site/stackmap pairing in the recorder never matches it up.
-    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            function()->inline_node_or_method(),
-                                                            temp_placeholder,
-                                                            CallSiteType::oop_call);
+    std::string slot_name = "__oop_slot_"+ std::to_string(unique_id);
+    Constant* init = ConstantExpr::getIntToPtr(ConstantInt::get(YuhuType::jlong_type(), temp_placeholder), YuhuType::oop_addrspace1_type());
 
-    llvm::Value* call_target = LLVMValue::jlong_constant(temp_placeholder);
-    llvm::FunctionType* oop_ftype = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), false);
-    llvm::Value* callee = CreateIntToPtr(call_target, PointerType::getUnqual(oop_ftype));
+    auto gv = new GlobalVariable(*mod, YuhuType::oop_addrspace1_type(), false, GlobalValue::PrivateLinkage, init, slot_name);
+    gv->setAlignment(Align(8));
 
-    llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
-            mod, llvm::Intrinsic::experimental_patchpoint, { YuhuType::oop_addrspace1_type() });
+    YuhuDebugInformationRecorder::get()->register_global_var(unique_id, GlobalVarType::oop, temp_placeholder, jmirror);
 
-    // patchpoint.void(id, numBytes, target, numArgs, ...)
-    llvm::Value* pp_args[] = {
-            LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
-            llvm::ConstantInt::get(YuhuType::jint_type(), 16),              // numBytes: reserved region size
-            callee, // target: raw i64
-            llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
-    };
+    auto load = new LoadInst(YuhuType::oop_addrspace1_type(), gv, "", GetInsertBlock());
 
-    // register patch point
-    YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 16, statepoint_id, jmirror);
-
-    llvm::CallInst* call = CreateCall(pp_intrinsic, pp_args);
-
-    llvm::LLVMContext &Ctx = getContext();
-    llvm::AttrBuilder AB(Ctx);
-    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
-    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
-    call->setAttributes(Attrs);
-
-    llvm::Value* mirror_oop = call;
+    llvm::Value* mirror_oop = load;
   
   // Calculate field address: mirror + field_offset.  The mirror is a heap
   // oop, so use a GEP to keep the field address a derived pointer that RS4GC
@@ -1001,48 +975,22 @@ Value* YuhuBuilder::CreateInlineOop(ciObject* object, const char* name) {
   // Allocate jobject and assign unique oop_id (like C1 does, but deferred to relocation phase)
   jobject jobj = JNIHandles::make_local(real_oop);
 
-    // Two ids, same split as the unwind patch point in handle_return: the call
-    // site entry carries the oop payload, the patch point entry links to it.
-    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
-    uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
+    // generate unique id with statepoint id, this makes slot name unique
+    uint64_t unique_id = YuhuStatepointIDGenerator::next();
 
-    uint64_t temp_placeholder = statepoint_id_for_patchpoint & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
+    uint64_t temp_placeholder = unique_id & 0xFFFFFFFFFFFFULL;  // Use oop_id as temporary placeholder
 
-    // current_method/bci are never consulted: a oop call site does not get
-    // an OopMap, because its stackmap record is keyed by the patch point id, so
-    // the call site/stackmap pairing in the recorder never matches it up.
-    YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
-                                                            function()->inline_node_or_method(),
-                                                            temp_placeholder,
-                                                            CallSiteType::oop_call);
+    std::string slot_name = "__oop_slot_"+ std::to_string(unique_id);
+    Constant* init = ConstantExpr::getIntToPtr(ConstantInt::get(YuhuType::jlong_type(), temp_placeholder), YuhuType::oop_addrspace1_type());
 
-    llvm::Value* call_target = LLVMValue::jlong_constant(temp_placeholder);
-    llvm::FunctionType* oop_ftype = llvm::FunctionType::get(YuhuType::oop_addrspace1_type(), false);
-    llvm::Value* callee = CreateIntToPtr(call_target, PointerType::getUnqual(oop_ftype));
+    auto gv = new GlobalVariable(*mod, YuhuType::oop_addrspace1_type(), false, GlobalValue::PrivateLinkage, init, slot_name);
+    gv->setAlignment(Align(8));
 
-    llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
-            mod, llvm::Intrinsic::experimental_patchpoint, { YuhuType::oop_addrspace1_type() });
+    YuhuDebugInformationRecorder::get()->register_global_var(unique_id, GlobalVarType::oop, temp_placeholder, jobj);
 
-    // patchpoint.void(id, numBytes, target, numArgs, ...)
-    llvm::Value* pp_args[] = {
-            LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
-            llvm::ConstantInt::get(YuhuType::jint_type(), 16),              // numBytes: reserved region size
-            callee, // target: raw i64
-            llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
-    };
+    auto load = new LoadInst(YuhuType::oop_addrspace1_type(), gv, "", GetInsertBlock());
 
-    // register patch point
-    YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 16, statepoint_id, jobj);
-
-    llvm::CallInst* call = CreateCall(pp_intrinsic, pp_args);
-
-    llvm::LLVMContext &Ctx = getContext();
-    llvm::AttrBuilder AB(Ctx);
-    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
-    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
-    call->setAttributes(Attrs);
-
-  return call;
+    return load;
 }
 
 Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType* type, const char* name) {
@@ -1059,8 +1007,7 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
   assert((metadata_addr & 0xFFFF000000000000ULL) == 0,
          "metadata address must fit in 48 bits");
 
-  // Two ids, same split as the unwind patch point in handle_return: the call
-  // site entry carries the metadata payload, the patch point entry links to it.
+  // generate unique id with statepoint id, this makes slot name unique
   uint64_t unique_id = YuhuStatepointIDGenerator::next();
 
   std::string slot_name = "__metadata_slot_"+ std::to_string(unique_id);
@@ -1071,9 +1018,9 @@ Value* YuhuBuilder::CreateInlineMetadata(::Metadata* metadata, llvm::PointerType
 
   YuhuDebugInformationRecorder::get()->register_global_var(unique_id, GlobalVarType::metadata, metadata_addr);
 
-  llvm::LoadInst* load = new LoadInst(type, gv, "", GetInsertBlock());
+  auto load = new LoadInst(type, gv, "", GetInsertBlock());
 
-    return load;
+  return load;
 }
 
 // Helpers for creating basic blocks.
@@ -1134,17 +1081,10 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return;
     }
 
-    auto patch_oop_index = [](uint32_t* placeholder_instr, int oop_index) -> bool {
+    auto patch_oop_index = [](uint64_t* placeholder_instr, int oop_index) -> bool {
         // Update placeholder with real oop_index (high 16 bits = 0)
         uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
-        uint16_t imm0 = (real_placeholder >> 0) & 0xFFFF;
-        uint16_t imm1 = (real_placeholder >> 16) & 0xFFFF;
-        uint16_t imm2 = (real_placeholder >> 32) & 0xFFFF;
-
-        // Patch the 3 mov/movk instructions
-        placeholder_instr[0] = 0xD2800000 | (imm0 << 5) | (placeholder_instr[0] & 0x1F);           // mov xN, #low16
-        placeholder_instr[1] = 0xF2A00000 | (imm1 << 5) | (placeholder_instr[1] & 0x1F);           // movk xN, #mid-low, lsl #16
-        placeholder_instr[2] = 0xF2C00000 | (imm2 << 5) | (placeholder_instr[2] & 0x1F);           // movk xN, #mid-high, lsl #32
+        placeholder_instr[0] = real_placeholder;
         return true;
     };
 
@@ -1190,10 +1130,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return true;
     };
 
-    ResourceMark rm;
     GrowableArray<RelocEntry> reloc_entries;
-    GrowableArray<uint64_t> patched_oop_call_site_statepoint_ids;
-    GrowableArray<uint64_t> patched_metadata_call_site_statepoint_ids;
 
     // process patch points
     auto recorder = YuhuDebugInformationRecorder::get();
@@ -1211,78 +1148,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 uint64_t unwind_handler_address = (uint64_t) (code_start + adapter_size + llvm_code_size);
                 bool branch_unwind_handler_patched = patch_branch_unwind_handler(patchpoint_addr, unwind_handler_address);
                 assert(branch_unwind_handler_patched, "should patch successfully");
-            } else if (call_site_type == CallSiteType::metadata_call) {
-                // The patch point's target operand is the Metadata* address, so LLVM
-                // has already materialized it into a register (movz/movk) and branches
-                // to it. The stackmap offset points at the start of that materialization,
-                // so the blr is the instruction right after the 3-word sequence.
-                // Rewriting the blr as "mov x0, xN" hands the same address to whoever
-                // consumes the patch point result, without transferring control.
-                assert(YuhuVirtualAddressScanner::is_mov_64_or_movz_64(patchpoint_addr[0]), "should be target materialization");
-                uint32_t* blr_instr = patchpoint_addr + 3;
-                assert(YuhuVirtualAddressScanner::is_blr_pattern(blr_instr), "should be blr instruction");
-                bool blr_patched = YuhuVirtualAddressScanner::patch_blr_to_mov_x0(blr_instr);
-                assert(blr_patched, "should patch blr into mov x0, xN successfully");
-
-                // Recover the Metadata* from the call site this patch point belongs
-                // to: CreateInlineMetadata recorded it as the call target, so there is
-                // no side table to keep in sync with the IR.
-                CallSiteEntry* metadata_call_site = recorder->get_call_site_by_statepoint_id(patchpoint->patchpoint_entry->call_site_statepoint_id);
-                assert(metadata_call_site != NULL && metadata_call_site->call_site_type == CallSiteType::metadata_call, "metadata call site should be registered");
-                ::Metadata* metadata = (::Metadata*)(uintptr_t) metadata_call_site->call_target;
-                assert(metadata != NULL && metadata->is_metaspace_object(), "metadata must be a metaspace object");
-
-                // allocate_metadata_index() deduplicates, so several uses of the same
-                // Metadata* share one pool entry while each keeps its own relocation.
-                int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
-                assert(metadata_index > 0, "metadata_index must be > 0");
-
-                // The anchored PC is informational only: a pool-indexed
-                // metadata_Relocation resolves through nmethod::metadata_addr_at(),
-                // never through the instruction sitting at the PC.
-                RelocEntry reloc_entry{};
-                reloc_entry.offset = adapter_size + offset_in_func;
-                reloc_entry.reloc_type = relocInfo::relocType::metadata_type;
-                reloc_entry.spec_index = metadata_index;
-                reloc_entries.append(reloc_entry);
-
-                patched_metadata_call_site_statepoint_ids.append(patchpoint->patchpoint_entry->call_site_statepoint_id);
-
-                if (YuhuTraceOffset) {
-                    tty->print_cr("Yuhu: patched metadata patch point at offset %d: blr -> mov x0, x%d, metadata_index %d",
-                                  offset_in_func, (blr_instr[0] >> 16) & 0x1F, metadata_index);
-                }
-            } else if (call_site_type == CallSiteType::oop_call) {
-                assert(YuhuVirtualAddressScanner::is_mov_64_or_movz_64(patchpoint_addr[0]), "should be target materialization");
-                uint32_t* blr_instr = patchpoint_addr + 3;
-                assert(YuhuVirtualAddressScanner::is_blr_pattern(blr_instr), "should be blr instruction");
-                bool blr_patched = YuhuVirtualAddressScanner::patch_blr_to_mov_x0(blr_instr);
-                assert(blr_patched, "should patch blr into mov x0, xN successfully");
-
-                jobject jobj = patchpoint->patchpoint_entry->oop;
-                assert(jobj != NULL, "jobj must not be NULL");
-
-                // Allocate real oop_index from the final OopRecorder (like C1 does)
-                int oop_index = cb->oop_recorder()->allocate_oop_index(jobj);
-
-                bool oop_index_patched = patch_oop_index(patchpoint_addr, oop_index);
-                assert(oop_index_patched, "should patch successfully");
-
-                // The anchored PC is informational only: a pool-indexed
-                // metadata_Relocation resolves through nmethod::metadata_addr_at(),
-                // never through the instruction sitting at the PC.
-                RelocEntry reloc_entry{};
-                reloc_entry.offset = adapter_size + offset_in_func;
-                reloc_entry.reloc_type = relocInfo::relocType::oop_type;
-                reloc_entry.spec_index = oop_index;
-                reloc_entries.append(reloc_entry);
-
-                patched_oop_call_site_statepoint_ids.append(patchpoint->patchpoint_entry->call_site_statepoint_id);
-
-                if (YuhuTraceOffset) {
-                    tty->print_cr("Yuhu: patched oop patch point at offset %d: blr -> mov x0, x%d, oop_index %d",
-                                  offset_in_func, (blr_instr[0] >> 16) & 0x1F, oop_index);
-                }
             } else {
                 ShouldNotReachHere();
             }
@@ -1290,19 +1155,6 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             ShouldNotReachHere();
         }
     }
-
-    NOT_PRODUCT(for (int i = 0; i < recorder->get_call_site_count(); ++i) {)
-        NOT_PRODUCT(CallSiteEntry* entry = recorder->get_call_site_by_statepoint_id(recorder->get_call_site_statepoint_id(i));)
-        NOT_PRODUCT(if (entry->call_site_type == CallSiteType::metadata_call) {)
-            NOT_PRODUCT(if (!patched_metadata_call_site_statepoint_ids.contains(entry->statepoint_id)) {)
-                NOT_PRODUCT(assert(true, "just checking");)
-            NOT_PRODUCT(})
-        NOT_PRODUCT(} else if (entry->call_site_type == CallSiteType::oop_call) {)
-            NOT_PRODUCT(if (!patched_oop_call_site_statepoint_ids.contains(entry->statepoint_id)) {)
-                NOT_PRODUCT(assert(true, "just checking");)
-            NOT_PRODUCT(})
-        NOT_PRODUCT(})
-    NOT_PRODUCT(})
 
     GrowableArray<uint64_t> copied_symbol_srcs; // symbol_entry->start
     GrowableArray<uint64_t> copied_symbol_dsts; // address in cb->consts()
@@ -1330,6 +1182,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = adapter_size + offset_in_func;
                 reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                reloc_entry.section_type = CodeBuffer::SECT_INSTS;
                 reloc_entries.append(reloc_entry);
             } else {
                 // it should be either data symbol or const symbol
@@ -1352,7 +1205,9 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 // get new function address with offset
                 address new_target_address = (function_address - symbol_entry->start) + new_table_addr;
                 // target value should be copied successfully
-                assert(*(uint64_t*)function_address == *(uint64_t*)(new_target_address), "target value should match");
+                if (idx == -1) {
+                    assert(*(uint64_t *) function_address == *(uint64_t *) (new_target_address), "target value should match");
+                }
                 bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
                 assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
@@ -1360,6 +1215,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry.offset = adapter_size + offset_in_func;
                 reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
                 reloc_entry.target = (uint64_t) new_target_address;
+                reloc_entry.section_type = CodeBuffer::SECT_INSTS;
                 reloc_entries.append(reloc_entry);
                 if (symbol_entry->section_type == SectionType::data_section) {
                     uint64_t target_value = *(uint64_t*)(function_address);
@@ -1374,15 +1230,32 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                         assert(metadata_index > 0, "metadata_index must be > 0");
 
                         RelocEntry reloc_entry2{};
-                        reloc_entry2.offset = adapter_size + offset_in_func;
+                        // consts section is at last end of code buffer, create metadata reloc at consts section
+                        reloc_entry2.offset = new_target_address - code_start;
                         reloc_entry2.reloc_type = relocInfo::relocType::metadata_type;
                         reloc_entry2.spec_index = metadata_index;
+                        reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
+                        reloc_entries.append(reloc_entry2);
+                    } else if (global_var->global_var_type == GlobalVarType::oop) {
+                        jobject jobj = global_var->oop;
+                        assert(jobj != NULL, "jobj must not be NULL");
+
+                        // Allocate real oop_index from the final OopRecorder (like C1 does)
+                        int oop_index = cb->oop_recorder()->allocate_oop_index(jobj);
+                        // patch data directly
+                        bool oop_index_patched = patch_oop_index((uint64_t*)new_target_address, oop_index);
+                        assert(oop_index_patched, "should patch successfully");
+
+                        RelocEntry reloc_entry2{};
+                        reloc_entry2.offset = new_target_address - code_start;
+                        reloc_entry2.reloc_type = relocInfo::relocType::oop_type;
+                        reloc_entry2.spec_index = oop_index;
+                        reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
                         reloc_entries.append(reloc_entry2);
                     } else {
                         ShouldNotReachHere();
                     }
                 }
-
             }
         } else if (edge->edge_target_type == EdgeTargetType::const_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
@@ -1415,6 +1288,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             reloc_entry.offset = adapter_size + offset_in_func;
             reloc_entry.reloc_type = relocInfo::relocType::internal_word_type;
             reloc_entry.target = (uint64_t)new_target_address;
+            reloc_entry.section_type = CodeBuffer::SECT_INSTS;
             reloc_entries.append(reloc_entry);
         } else {
             ShouldNotReachHere();
@@ -1437,25 +1311,28 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         uint32_t *instr = (uint32_t *) (code_start + reloc_entry.offset);
         if (reloc_entry.reloc_type == relocInfo::relocType::oop_type) {
             RelocationHolder rspec = oop_Relocation::spec(reloc_entry.spec_index);
-            cb->relocate((address)instr, rspec);
+            if (reloc_entry.section_type == CodeBuffer::SECT_INSTS) {
+                cb->insts()->relocate((address) instr, rspec);
+            } else if (reloc_entry.section_type == CodeBuffer::SECT_CONSTS) {
+                cb->consts()->relocate((address) instr, rspec);
+            }
         } else if (reloc_entry.reloc_type == relocInfo::relocType::metadata_type) {
             RelocationHolder rspec = metadata_Relocation::spec(reloc_entry.spec_index);
-            cb->relocate((address) instr, rspec);
+            if (reloc_entry.section_type == CodeBuffer::SECT_INSTS) {
+                cb->insts()->relocate((address) instr, rspec);
+            } else if (reloc_entry.section_type == CodeBuffer::SECT_CONSTS) {
+                cb->consts()->relocate((address) instr, rspec);
+            }
         } else if (reloc_entry.reloc_type == relocInfo::relocType::poll_type) {
+            assert(reloc_entry.section_type == CodeBuffer::SECT_INSTS, "");
             cb->relocate((address)(instr), reloc_entry.reloc_type);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::runtime_call_type) {
+            assert(reloc_entry.section_type == CodeBuffer::SECT_INSTS, "");
             cb->relocate((address)(instr), reloc_entry.reloc_type);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::internal_word_type) {
+            assert(reloc_entry.section_type == CodeBuffer::SECT_INSTS, "");
             cb->relocate((address)(instr), internal_word_Relocation::spec((address)reloc_entry.target));
         }
-    }
-
-    if (YuhuTraceOffset) {
-        tty->print_cr("Yuhu: Patched %d oop patch points and generated %d relocation records",
-                      patched_oop_call_site_statepoint_ids.length(), patched_oop_call_site_statepoint_ids.length());
-        tty->print_cr("Yuhu: Patched %d metadata patch points and generated %d relocation records",
-                      patched_metadata_call_site_statepoint_ids.length(), patched_metadata_call_site_statepoint_ids.length());
-        tty->flush();
     }
 }
 

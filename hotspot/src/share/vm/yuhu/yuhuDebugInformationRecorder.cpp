@@ -287,7 +287,7 @@ void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, 
     _patchpoint_entries->append(patch_point_entry);
 }
 
-void YuhuDebugInformationRecorder::register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value) {
+void YuhuDebugInformationRecorder::register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value, jobject jobj) {
     int index = _global_var_entries->find(&unique_id, [](void* token, GlobalVarEntry* entry) -> bool {
         return *((uint64_t*)token) == entry->unique_id;
     });
@@ -299,6 +299,7 @@ void YuhuDebugInformationRecorder::register_global_var(uint64_t unique_id, Globa
     global_var_entry->unique_id = unique_id;
     global_var_entry->global_var_type = global_var_type;
     global_var_entry->target_value = target_value;
+    global_var_entry->oop = jobj;
     _global_var_entries->append(global_var_entry);
 }
 
@@ -498,7 +499,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             StackMapEntry* stack_map = _stack_map_entries->at(j);
             assert(stack_map->statepoint_id != 0, "statepoint id should exist");
             if (call_site->statepoint_id == stack_map->statepoint_id) {
-                // 1. patch point statepoint id won't match here, hence calls like unwind/oop/metadata call are skipped
+                // 1. patch point statepoint id won't match here, hence calls like unwind call are skipped
                 // 2. inlinee call is skipped too
                 call_site_instruction_holder_list.append(CallSiteInstructionHolder(call_site, stack_map)); // multiple stack map may match here
             }
@@ -607,7 +608,7 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                             CallSiteEntry* site = _call_site_entries->at(n);
                             YuhuInlineNode* prev_node = inline_node_chain_list.at(m-1);
                             // multiple call sites may match parent inline node, but bci makes unique match
-                            // put call site type check in first condition, coz as_inline_node may fail for leaf call
+                            // put call site type check in first condition, coz as_inline_node fails for leaf call
                             if (site->call_site_type == CallSiteType::inlinee_call && site->bci == prev_node->bci() && site->inline_node_or_method->as_inline_node() == inline_node_chain_list.at(m)) {
                                 node_call_site = site;
                                 break;

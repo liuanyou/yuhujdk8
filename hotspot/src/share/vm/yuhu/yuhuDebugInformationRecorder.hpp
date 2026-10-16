@@ -22,9 +22,7 @@ enum class CallSiteType : uint8_t {
     deopt_call = 4,
     unwind_call = 5,
     leaf_call = 6,
-    oop_call = 7,
-    metadata_call = 8,
-    inlinee_call = 9
+    inlinee_call = 7
 };
 
 enum class EdgeTargetType : uint8_t {
@@ -91,6 +89,7 @@ public:
     uint64_t unique_id;
     GlobalVarType global_var_type;
     uint64_t target_value;
+    jobject oop = NULL;
 };
 
 class SymbolEntry : public ResourceObj {
@@ -175,10 +174,10 @@ private:
   // Call site metadata for JITLink correlation
   GrowableArray<CallSiteEntry*>* _call_site_entries;
 
-  // Stack map statepoint locations
+  // Stack map statepoint locations for call sites
   GrowableArray<StackMapEntry*>* _stack_map_entries;
 
-  // deopt statepoint locations
+  // deopt bundles for call sites
   GrowableArray<DeoptBundle*>* _deopt_bundles;
 
   GrowableArray<PatchPointEntry*>* _patchpoint_entries;
@@ -308,6 +307,26 @@ public:
   }
 
   void embed_call_site_metadata();
+
+  // during IR transform phase, some inlinees may not survive after running IR passes,
+  // hence eliminate those inlinees' frames
+  void eliminate_not_survived_frames() {
+      for (int i = 0; i < _frame_layout_entries->length(); ) {
+          auto frame_layout_entry = _frame_layout_entries->at(i);
+          if (frame_layout_entry->header_words != -1 &&
+                 frame_layout_entry->monitor_words != -1 &&
+                 frame_layout_entry->stack_words != -1 &&
+                 frame_layout_entry->locals_words != -1 &&
+                 frame_layout_entry->extended_frame_words != -1 &&
+                 frame_layout_entry->extended_frame_reg_num == -1 &&
+                 frame_layout_entry->extended_frame_kind == -1 &&
+                 frame_layout_entry->extended_frame_offset == -1) {
+              _frame_layout_entries->remove_at(i);
+              continue;
+          }
+          ++i;
+      }
+  }
   
   int get_call_site_count() const {
     return _call_site_entries ? _call_site_entries->length() : 0;
@@ -345,17 +364,6 @@ public:
       if (index == -1) return CallSiteType::none;
       return _call_site_entries->at(index)->call_site_type;
     }
-
-  // Full entry lookup, for call sites whose payload lives in the entry itself
-  // (e.g. a metadata patch point, whose Metadata* is recorded as call_target).
-  CallSiteEntry* get_call_site_by_statepoint_id(uint64_t statepoint_id) const {
-      if (!_call_site_entries) return NULL;
-      int index = _call_site_entries->find(&statepoint_id, [](void* token, CallSiteEntry* entry) -> bool {
-          return *((uint64_t*)token) == entry->statepoint_id;
-      });
-      if (index == -1) return NULL;
-      return _call_site_entries->at(index);
-  }
 
   GlobalVarEntry* get_global_var_by_target_value(uint64_t target_value) const {
       if (!_global_var_entries) return NULL;
@@ -420,7 +428,7 @@ public:
 
   void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj = NULL);
 
-  void register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value);
+  void register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value, jobject jobj = NULL);
 
   void register_symbol(uint64_t address, uint64_t start, uint64_t end, SectionType section_type);
 

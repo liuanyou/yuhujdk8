@@ -49,6 +49,7 @@ public:
     size_t offset;
     int spec_index;
     uint64_t target;
+    int section_type;
 };
 
 class YuhuBuilder : public llvm::IRBuilder<> {
