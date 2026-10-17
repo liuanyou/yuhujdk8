@@ -236,9 +236,6 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
             } else {
                 if (YuhuTraceMachineCode) {
                     CallSiteType call_site_type = recorder->get_call_site_type_by_statepoint_id(StatepointID);
-                    if (call_site_type == CallSiteType::none) {
-                        call_site_type = recorder->get_call_site_type_by_patchpoint_statepoint_id(StatepointID);
-                    }
                     if (YuhuStackMapFile != NULL) {
                         YUHU_STACK_MAP_LOG("[StackMap] ID: %llu , call site type: %d", StatepointID, call_site_type);
                     } else {

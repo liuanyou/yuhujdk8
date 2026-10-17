@@ -49,24 +49,8 @@ static const uint32_t MOV_IMM_PATTERN_32 = 0x2A000000;
 static const uint32_t MOV_IMM_PATTERN_64 = 0xAA000000;
 
 // Scanner for finding dual virtual address placeholders in machine code
-class YuhuVirtualAddressScanner : public AllStatic {
+class YuhuAddressScanner : public AllStatic {
  public:
-  /**
-   * Rewrite a value-producing patch point's call instruction as a register move.
-   *
-   * LLVM materializes a patch point's target operand into a register right
-   * before the call (a movz/movk sequence followed by "blr xN").  For an
-   * inlined metadata constant the target operand *is* the Metadata* address,
-   * so instead of transferring control we turn "blr xN" into "mov x0, xN":
-   * the address already sitting in xN is delivered through x0, which is where
-   * the AArch64 calling convention puts a call's result and therefore where
-   * the IR consumer of the patch point reads it.
-   *
-   * @param blr_instr  the "blr xN" instruction of the patch point
-   * @return false if the instruction is not a blr, true once it is rewritten
-   */
-  static bool patch_blr_to_mov_x0(uint32_t* blr_instr);
-
   /**
    * extract target address from b instruction
    *
@@ -214,6 +198,103 @@ class YuhuVirtualAddressScanner : public AllStatic {
         bool is_mov_64 = ((inst & MOV_IMM_MASK) == MOV_IMM_PATTERN_64);
         bool is_movz_64 = ((inst & MOVZ_MASK) == MOVZ_PATTERN_64);
         return is_mov_64 || is_movz_64;
+    };
+};
+
+class YuhuAddressPatcher : public AllStatic {
+public:
+    /**
+     * Rewrite a value-producing patch point's call instruction as a register move.
+     *
+     * LLVM materializes a patch point's target operand into a register right
+     * before the call (a movz/movk sequence followed by "blr xN").  For an
+     * inlined metadata constant the target operand *is* the Metadata* address,
+     * so instead of transferring control we turn "blr xN" into "mov x0, xN":
+     * the address already sitting in xN is delivered through x0, which is where
+     * the AArch64 calling convention puts a call's result and therefore where
+     * the IR consumer of the patch point reads it.
+     *
+     * @param blr_instr  the "blr xN" instruction of the patch point
+     * @return false if the instruction is not a blr, true once it is rewritten
+     */
+    static bool patch_blr_to_mov_x0(uint32_t* blr_instr) {
+        uint32_t blr_inst = blr_instr[0];
+        if ((blr_inst & BLR_MASK) != BLR_PATTERN) {
+            return false;
+        }
+
+        // expected instruction sequence of a value-producing patch point's call:
+        //   movz   x16, #addr[15:0]
+        //   movk   x16, #addr[31:16], lsl #16
+        //   movk   x16, #addr[47:32], lsl #32
+        //   blr    x16
+        // BLR (register) 64-bit: 0xD63F0000 | (Rn << 5)
+        uint32_t rn = (blr_inst >> 5) & 0x1F;
+        assert(rn != 31, "blr from register 31 cannot be a patch point target");
+
+        // The register being branched to already holds the value the patch point is
+        // supposed to produce, so the call only has to become a move into x0.
+        // MOV (register) is ORR (shifted register) with xzr as first operand and no
+        // shift: orr x0, xzr, xRn -> 0xAA0003E0 | (Rm << 16) | Rd, and the pattern
+        // already encodes Rd = 0 because the result must land in x0.
+        blr_instr[0] = 0xAA0003E0 | (rn << 16);
+        return true;
+    }
+
+    static bool patch_oop_index(uint64_t* placeholder_instr, int oop_index) {
+        // Update placeholder with real oop_index (high 16 bits = 0)
+        uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
+        placeholder_instr[0] = real_placeholder;
+        return true;
+    };
+
+    static bool patch_branch_unwind_handler(uint32_t* blr_instr, uint64_t unwind_handler_address) {
+        // Patch b instruction
+        uint64_t b_addr = (uint64_t)blr_instr;
+        long offset = unwind_handler_address - b_addr;
+        uint32_t b_unwind_handler = 0x14000000 | ((offset >> 2) & 0x03FFFFFF);
+
+        blr_instr[0] = b_unwind_handler;
+        return true;
+    };
+
+    static bool patch_nop(uint32_t* instr, size_t size) {
+        for (size_t i = 0; i < size; ++i) {
+            instr[i] = 0xD503201F;  // nop instruction
+        }
+        return true;
+    }
+
+    static bool patch_new_adrp(uint32_t* instr, uint64_t function_address) {
+        // Calculate new page offset for function_address
+        uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
+
+        uint64_t adrp_addr = (uint64_t)instr;  // Address of ADRP instruction in CodeCache
+        uint64_t func_page = function_address & ~0xFFFULL;  // Function's page address
+        uint64_t new_pc_page = adrp_addr & ~0xFFFULL;  // ADRP's PC page
+
+        int64_t page_diff = (int64_t)(func_page - new_pc_page) >> 12;  // Page difference
+
+        // Encode new ADRP
+        uint32_t new_adrp = (instr[0] & 0x9F000000) | rd;  // Keep opcode and Rd
+        new_adrp |= (page_diff & 0x3) << 29;  // immlo (bits [30:29])
+        new_adrp |= ((page_diff >> 2) & 0x7FFFF) << 5;  // immhi (bits [23:5])
+
+        instr[0] = new_adrp;
+
+        // Patch add instruction
+        // Calculate offset within page
+        uint32_t new_page_offset = function_address & 0xFFF;  // Lower 12 bits
+
+        // Encode ADD instruction: add x8, x8, #page_offset
+        // ADD (immediate): 0x91000000 | (imm12 << 10) | (shift << 22) | Rn | Rd
+        uint32_t new_add = 0x91000000;  // ADD opcode
+        new_add |= (new_page_offset & 0xFFF) << 10;  // imm12 (bits [21:10])
+        new_add |= rd;  // Rd = same register as ADRP
+        new_add |= rd << 5;  // Rn = same register
+
+        instr[1] = new_add;
+        return true;
     };
 };
 

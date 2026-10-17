@@ -92,6 +92,24 @@ static void yuhu_monitor_log_init() {
         } \
     } while(0)
 
+void YuhuRuntime::gc_safepoint_poll(JavaThread* thread) {
+    if (SafepointSynchronize::do_call_back()) {
+        SafepointSynchronize::block(thread);
+    }
+
+//    {
+//        Thread::WXWriteFromExecSetter __wx_write;
+//        ThreadInVMfromJava __tiv(thread);
+//
+//        unsigned int gc_count = Universe::heap()->total_collections();
+//        unsigned int full_gc_count = Universe::heap()->total_full_collections();
+//        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
+//        VMThread::execute(&op);
+//    }
+}
+
+void YuhuRuntime::go_unwind() {}
+
 JRT_ENTRY(void, YuhuRuntime::new_instance(JavaThread* thread, Klass* k_oop))
   // Option A: JIT passes resolved Klass* directly (embedded as a
   // metadata-relocated constant in the nmethod). No frame walk needed.
@@ -519,22 +537,6 @@ void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
                 (new_sp < min_stack) ? "YES - OVERFLOW!" : "NO - OK",
                 (unsigned long)new_sp, (unsigned long)min_stack);
   tty->print_cr("======================================");
-}
-
-extern "C" void gc_safepoint_poll(JavaThread* thread) {
-    if (SafepointSynchronize::do_call_back()) {
-        SafepointSynchronize::block(thread);
-    }
-
-//    {
-//        Thread::WXWriteFromExecSetter __wx_write;
-//        ThreadInVMfromJava __tiv(thread);
-//
-//        unsigned int gc_count = Universe::heap()->total_collections();
-//        unsigned int full_gc_count = Universe::heap()->total_full_collections();
-//        VM_ParallelGCSystemGC op(gc_count, full_gc_count, GCCause::_java_lang_system_gc);
-//        VMThread::execute(&op);
-//    }
 }
 
 int count_stk_args(GrowableArray<BasicType>* stk_basic_types) {
@@ -1792,7 +1794,7 @@ void YuhuRuntime::initialize_vm_stubs() {
   _throw_NullPointerException_stub = generate_vm_stub("yuhu_throw_NullPointerException_stub", (address) YuhuRuntime::throw_NullPointerException);
   _throw_StackOverflowError_stub = generate_vm_stub("yuhu_throw_StackOverflowError_stub", (address) SharedRuntime::throw_StackOverflowError);
 
-  _safepoint_poll_stub = generate_vm_stub("yuhu_safepoint_poll_stub", (address) gc_safepoint_poll);
+  _safepoint_poll_stub = generate_vm_stub("yuhu_safepoint_poll_stub", (address) YuhuRuntime::gc_safepoint_poll);
 
   _handle_deoptimization_stub = generate_handle_deoptimization_stub();
   

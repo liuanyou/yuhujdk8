@@ -91,20 +91,6 @@ static void reportNonIntegralPointerCasts(Module &M) {
     }
 }
 
-void declareGCSafepointPoll(Module& M) {
-    LLVMContext& Ctx = M.getContext();
-    FunctionType* PollType = FunctionType::get(
-            llvm::Type::getVoidTy(Ctx),  // 返回类型 void
-            false                  // 不是可变参数
-    );
-
-    // 如果不存在，则声明
-    if (!M.getFunction("gc.safepoint_poll")) {
-        Function::Create(PollType, Function::ExternalLinkage,
-                         "gc.safepoint_poll", &M);
-    }
-}
-
 static void saveIRToFile(Module &M) {
     std::string ir_filename = std::string("/tmp/yuhu_ir_RS4GC");
 
@@ -157,8 +143,6 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
         if (YuhuTraceIRCompilation) {
             errs() << "=== Running GC Passes on module: " << M.getName() << " ===\n";
         }
-
-        declareGCSafepointPoll(M);
 
         // Inventory frontend-emitted GC-pointer/integer escapes BEFORE any pass
         // runs: InstCombine would fold/move them and RS4GC inserts legitimate

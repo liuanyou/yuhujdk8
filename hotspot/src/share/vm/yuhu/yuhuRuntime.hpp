@@ -34,8 +34,6 @@ class ciMethod;
 class Symbol;
 class YuhuRuntimeStub;
 
-extern "C" void gc_safepoint_poll(JavaThread* thread);
-
 // Stable cache key for a method: (klass_name, method_name, signature, access_flags)
 // All Symbol* are interned in HotSpot, so pointer comparison is safe.
 // This avoids collisions from ephemeral ciMethod* or reusable Method* pointers.
@@ -188,6 +186,9 @@ class YuhuRuntime : public AllStatic {
                                             ciMethod* current_method,
                                             GrowableArray<BasicType>* reg_basic_types,
                                             GrowableArray<BasicType>* stk_basic_types);
+
+  static void gc_safepoint_poll(JavaThread* thread);
+  static void go_unwind();
 
   static void new_instance(JavaThread* thread, Klass* klass);
   static void newarray(JavaThread* thread, BasicType type, int size);

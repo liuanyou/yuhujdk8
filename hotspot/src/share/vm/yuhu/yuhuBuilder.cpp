@@ -45,7 +45,7 @@
 #include "yuhu/yuhuPrologueAnalyzer.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhu_globals.hpp"
-#include "yuhu/yuhuVirtualAddressPatcher.hpp"
+#include "yuhu/yuhuAddressPatcher.hpp"
 #include "utilities/debug.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
@@ -1081,79 +1081,24 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         return;
     }
 
-    auto patch_oop_index = [](uint64_t* placeholder_instr, int oop_index) -> bool {
-        // Update placeholder with real oop_index (high 16 bits = 0)
-        uint64_t real_placeholder = oop_index & 0xFFFFFFFFFFFFULL;
-        placeholder_instr[0] = real_placeholder;
-        return true;
-    };
-
-    auto patch_branch_unwind_handler = [](uint32_t* instr, uint64_t unwind_handler_address) -> bool {
-        // Patch b instruction
-        uint64_t b_addr = (uint64_t)instr;
-        long offset = unwind_handler_address - b_addr;
-        uint32_t b_unwind_handler = 0x14000000 | ((offset >> 2) & 0x03FFFFFF);
-
-        instr[0] = b_unwind_handler;
-        return true;
-    };
-
-    auto patch_new_adrp = [](uint32_t* instr, uint64_t function_address) -> bool {
-        // Calculate new page offset for function_address
-        uint32_t rd = instr[0] & 0x1F;  // Extract Rd first
-
-        uint64_t adrp_addr = (uint64_t)instr;  // Address of ADRP instruction in CodeCache
-        uint64_t func_page = function_address & ~0xFFFULL;  // Function's page address
-        uint64_t new_pc_page = adrp_addr & ~0xFFFULL;  // ADRP's PC page
-
-        int64_t page_diff = (int64_t)(func_page - new_pc_page) >> 12;  // Page difference
-
-        // Encode new ADRP
-        uint32_t new_adrp = (instr[0] & 0x9F000000) | rd;  // Keep opcode and Rd
-        new_adrp |= (page_diff & 0x3) << 29;  // immlo (bits [30:29])
-        new_adrp |= ((page_diff >> 2) & 0x7FFFF) << 5;  // immhi (bits [23:5])
-
-        instr[0] = new_adrp;
-
-        // Patch add instruction
-        // Calculate offset within page
-        uint32_t new_page_offset = function_address & 0xFFF;  // Lower 12 bits
-
-        // Encode ADD instruction: add x8, x8, #page_offset
-        // ADD (immediate): 0x91000000 | (imm12 << 10) | (shift << 22) | Rn | Rd
-        uint32_t new_add = 0x91000000;  // ADD opcode
-        new_add |= (new_page_offset & 0xFFF) << 10;  // imm12 (bits [21:10])
-        new_add |= rd;  // Rd = same register as ADRP
-        new_add |= rd << 5;  // Rn = same register
-
-        instr[1] = new_add;
-        return true;
-    };
-
     GrowableArray<RelocEntry> reloc_entries;
 
     // process patch points
     auto recorder = YuhuDebugInformationRecorder::get();
-    auto patchpoints = recorder->get_patchpoint_stack_maps();
-    for (int i = 0; i < patchpoints->length(); ++i) {
-        PatchPointStackMapPair* patchpoint = patchpoints->at(i);
-        uint32_t offset_in_func = patchpoint->stack_map_entry->instruction_offset;
-        uint32_t* patchpoint_addr = (uint32_t*)(code_start + adapter_size + offset_in_func);
+    auto unwind_call_sites = recorder->get_call_site_stack_maps_by_call_site_type(CallSiteType::unwind_call);
+    for (int j = 0; j < unwind_call_sites->length(); ++j) {
+        CallSiteInstructionHolder* call_site_holder = unwind_call_sites->at(j);
+        assert(call_site_holder->call_target() == (uint64_t)&YuhuRuntime::go_unwind, "");
+        uint64_t llvm_blr_offset = call_site_holder->instruction_offset() - 4;
+        uint32_t* llvm_blr_instr = (uint32_t*)(llvm_code_start + llvm_blr_offset);
+        assert(YuhuAddressScanner::is_blr_pattern(llvm_blr_instr), "");
+        uint32_t* blr_instr = (uint32_t*)(code_start + adapter_size + llvm_blr_offset);
+        assert(YuhuAddressScanner::is_blr_pattern(blr_instr), "");
 
-        if (patchpoint->patchpoint_entry->call_site_statepoint_id != 0) {
-            CallSiteType call_site_type = recorder->get_call_site_type_by_statepoint_id(patchpoint->patchpoint_entry->call_site_statepoint_id);
-            assert(call_site_type != CallSiteType::none, "call site type should not be none");
-            if (call_site_type == CallSiteType::unwind_call) {
-                // Patch b instruction
-                uint64_t unwind_handler_address = (uint64_t) (code_start + adapter_size + llvm_code_size);
-                bool branch_unwind_handler_patched = patch_branch_unwind_handler(patchpoint_addr, unwind_handler_address);
-                assert(branch_unwind_handler_patched, "should patch successfully");
-            } else {
-                ShouldNotReachHere();
-            }
-        } else {
-            ShouldNotReachHere();
-        }
+        // Patch b instruction
+        uint64_t unwind_handler_address = (uint64_t) (code_start + adapter_size + llvm_code_size);
+        bool branch_unwind_handler_patched = YuhuAddressPatcher::patch_branch_unwind_handler(blr_instr, unwind_handler_address);
+        assert(branch_unwind_handler_patched, "should patch successfully");
     }
 
     GrowableArray<uint64_t> copied_symbol_srcs; // symbol_entry->start
@@ -1173,17 +1118,23 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
         uint32_t offset_in_func = edge->offset;
         if (edge->edge_target_type == EdgeTargetType::got_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
-            assert(YuhuVirtualAddressScanner::is_adrp_got_pattern(edge_instr), "should be adrp got instructions");
+            assert(YuhuAddressScanner::is_adrp_got_pattern(edge_instr), "should be adrp got instructions");
             uint64_t function_address = *(uint64_t*)(edge->target_address);
             if (recorder->contains_call_target(function_address)) {
-                bool new_adrp_patched = patch_new_adrp(edge_instr, function_address);
-                assert(new_adrp_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
+                if (function_address == (uint64_t)&YuhuRuntime::go_unwind) {
+                    bool nop_patched = YuhuAddressPatcher::patch_nop(edge_instr, 2);
+                    assert(nop_patched, "should patch successfully");
+                } else {
+                    bool new_adrp_patched = YuhuAddressPatcher::patch_new_adrp(edge_instr, function_address);
+                    assert(new_adrp_patched && YuhuAddressScanner::is_adrp_with_add_pattern(edge_instr),
+                           "should patch successfully");
 
-                RelocEntry reloc_entry{};
-                reloc_entry.offset = adapter_size + offset_in_func;
-                reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
-                reloc_entry.section_type = CodeBuffer::SECT_INSTS;
-                reloc_entries.append(reloc_entry);
+                    RelocEntry reloc_entry{};
+                    reloc_entry.offset = adapter_size + offset_in_func;
+                    reloc_entry.reloc_type = relocInfo::relocType::runtime_call_type;
+                    reloc_entry.section_type = CodeBuffer::SECT_INSTS;
+                    reloc_entries.append(reloc_entry);
+                }
             } else {
                 // it should be either data symbol or const symbol
                 auto symbol_entry = recorder->get_symbol_by_range_addr(function_address);
@@ -1208,8 +1159,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 if (idx == -1) {
                     assert(*(uint64_t *) function_address == *(uint64_t *) (new_target_address), "target value should match");
                 }
-                bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
-                assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
+                bool new_jump_table_patched = YuhuAddressPatcher::patch_new_adrp(edge_instr, (uint64_t)new_target_address);
+                assert(new_jump_table_patched && YuhuAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
                 RelocEntry reloc_entry{};
                 reloc_entry.offset = adapter_size + offset_in_func;
@@ -1243,7 +1194,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                         // Allocate real oop_index from the final OopRecorder (like C1 does)
                         int oop_index = cb->oop_recorder()->allocate_oop_index(jobj);
                         // patch data directly
-                        bool oop_index_patched = patch_oop_index((uint64_t*)new_target_address, oop_index);
+                        bool oop_index_patched = YuhuAddressPatcher::patch_oop_index((uint64_t*)new_target_address, oop_index);
                         assert(oop_index_patched, "should patch successfully");
 
                         RelocEntry reloc_entry2{};
@@ -1259,7 +1210,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             }
         } else if (edge->edge_target_type == EdgeTargetType::const_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
-            assert(YuhuVirtualAddressScanner::is_adrp_jump_table_pattern(edge_instr), "should be direct jump table pattern");
+            assert(YuhuAddressScanner::is_adrp_jump_table_pattern(edge_instr), "should be direct jump table pattern");
 
             auto const_symbol_entry = recorder->get_symbol_by_section_type_and_range_addr(SectionType::const_section, edge->target_address);
             assert(const_symbol_entry != NULL, "Const symbol should exist");
@@ -1281,8 +1232,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             address new_target_address = (edge->target_address - const_symbol_entry->start) + new_table_addr;
             // simply compare first byte, may not be accurate, but better than nothing
             assert(*(uint8_t*)(edge->target_address) == *(uint8_t*)(new_target_address), "copied content should match");
-            bool new_jump_table_patched = patch_new_adrp(edge_instr, (uint64_t)new_target_address);
-            assert(new_jump_table_patched && YuhuVirtualAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
+            bool new_jump_table_patched = YuhuAddressPatcher::patch_new_adrp(edge_instr, (uint64_t)new_target_address);
+            assert(new_jump_table_patched && YuhuAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
             RelocEntry reloc_entry{};
             reloc_entry.offset = adapter_size + offset_in_func;

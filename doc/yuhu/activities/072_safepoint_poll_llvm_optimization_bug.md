@@ -47,7 +47,7 @@ The `gc.safepoint_poll()` declaration in LLVM IR is just a placeholder - it shou
 2. **LLVM's CSE pass** sees both calls target the same address
 3. **LLVM optimizes** the second call by reusing the register from the first call
 4. **Generated code** becomes `mov x10, x19` + `blr x10` instead of `adrp + ldr`
-5. **YuhuVirtualAddressScanner** in `yuhuORCPlugins.cpp` looks for pattern:
+5. **YuhuAddressScanner** in `yuhuORCPlugins.cpp` looks for pattern:
    ```
    adrp + ldr/movk + blr
    ```
@@ -97,14 +97,14 @@ Faulting instruction sequence:
 ### Option C: Insert optimization barrier between calls
 **Problematic**: Requires inserting dummy volatile operations between every pair of safepoint polls. Fragile and impacts code quality.
 
-### Option D: Fix YuhuVirtualAddressScanner (RECOMMENDED)
+### Option D: Fix YuhuAddressScanner (RECOMMENDED)
 **Best solution**: Handle LLVM's optimization by tracking register dependencies.
 
 ## Recommended Solution: Option D
 
 ### Approach
 
-Update `YuhuVirtualAddressScanner::scan_forwards_for_call_targets()` to recognize safepoint polls even when LLVM optimizes away the `adrp` instruction.
+Update `YuhuAddressScanner::scan_forwards_for_call_targets()` to recognize safepoint polls even when LLVM optimizes away the `adrp` instruction.
 
 ### Implementation Strategy
 

@@ -76,14 +76,6 @@ public:
     int num_monitors;
 };
 
-class PatchPointEntry : public ResourceObj {
-public:
-    uint64_t statepoint_id;
-    uint32_t reserved_bytes = 0;
-    uint64_t call_site_statepoint_id = 0;
-    jobject oop = NULL;
-};
-
 class GlobalVarEntry : public ResourceObj {
 public:
     uint64_t unique_id;
@@ -122,16 +114,6 @@ public:
     int extended_frame_offset = -1; // extracted from stack map
 };
 
-class PatchPointStackMapPair : public ResourceObj {
-public:
-    PatchPointEntry* patchpoint_entry;
-    StackMapEntry* stack_map_entry;
-
-    PatchPointStackMapPair() : patchpoint_entry(nullptr), stack_map_entry(nullptr) {}
-
-    PatchPointStackMapPair(PatchPointEntry* patchpoint, StackMapEntry* stack_map) : patchpoint_entry(patchpoint), stack_map_entry(stack_map) {}
-};
-
 class CallSiteInstructionHolder : public ResourceObj {
 public:
     CallSiteEntry* call_site_entry; // same IR may be duplicated in machine code, it is 1:M relations, same call site may have multiple stack map
@@ -145,6 +127,11 @@ public:
     uint64_t instruction_offset() const {
         assert(stack_map_entry != NULL, "stack map should exist");
         return stack_map_entry->instruction_offset;
+    }
+
+    uint64_t call_target() const {
+        assert(call_site_entry != NULL, "call site should exist");
+        return call_site_entry->call_target;
     }
 };
 
@@ -179,8 +166,6 @@ private:
 
   // deopt bundles for call sites
   GrowableArray<DeoptBundle*>* _deopt_bundles;
-
-  GrowableArray<PatchPointEntry*>* _patchpoint_entries;
 
   GrowableArray<GlobalVarEntry*>* _global_var_entries;
 
@@ -289,18 +274,21 @@ public:
       return index != -1;
   }
 
-  GrowableArray<PatchPointStackMapPair*>* get_patchpoint_stack_maps() const {
-      auto result = new GrowableArray<PatchPointStackMapPair*>();
+  GrowableArray<CallSiteInstructionHolder*>* get_call_site_stack_maps_by_call_site_type(CallSiteType call_site_type) const {
+      auto result = new GrowableArray<CallSiteInstructionHolder*>();
 
-      for (int i = 0; i < _patchpoint_entries->length(); ++i) {
-          PatchPointEntry* patchpoint_entry = _patchpoint_entries->at(i);
+      for (int i = 0; i < _call_site_entries->length(); ++i) {
+          CallSiteEntry* call_site = _call_site_entries->at(i);
+          if (call_site->call_site_type != call_site_type) {
+              continue;
+          }
 
           for (int j = 0; j < _stack_map_entries->length(); ++j) {
               StackMapEntry* stack_map_entry = _stack_map_entries->at(j);
-              if (patchpoint_entry->statepoint_id != stack_map_entry->statepoint_id) {
+              if (call_site->statepoint_id != stack_map_entry->statepoint_id) {
                   continue;
               }
-              result->append(new PatchPointStackMapPair(patchpoint_entry, stack_map_entry));
+              result->append(new CallSiteInstructionHolder(call_site, stack_map_entry));
           }
       }
       return result;
@@ -350,20 +338,6 @@ public:
       if (index == -1) return CallSiteType::none;
       return _call_site_entries->at(index)->call_site_type;
   }
-
-  CallSiteType get_call_site_type_by_patchpoint_statepoint_id(uint64_t patchpoint_statepoint_id) const {
-      if (!_patchpoint_entries) return CallSiteType::none;
-      if (!_call_site_entries) return CallSiteType::none;
-      int patchpoint_index = _patchpoint_entries->find(&patchpoint_statepoint_id, [](void* token, PatchPointEntry* entry) -> bool {
-          return *((uint64_t*)token) == entry->statepoint_id;
-      });
-      if (patchpoint_index == -1) return CallSiteType::none;
-      int index = _call_site_entries->find(&(_patchpoint_entries->at(patchpoint_index)->call_site_statepoint_id), [](void* token, CallSiteEntry* entry) -> bool {
-          return *((uint64_t*)token) == entry->statepoint_id;
-      });
-      if (index == -1) return CallSiteType::none;
-      return _call_site_entries->at(index)->call_site_type;
-    }
 
   GlobalVarEntry* get_global_var_by_target_value(uint64_t target_value) const {
       if (!_global_var_entries) return NULL;
@@ -425,8 +399,6 @@ public:
   void register_stack_map_location_data(uint64_t statepoint_id, uint32_t instruction_offset, uint8_t location_kind, uint32_t location_reg_num, int32_t location_offset, uint64_t constant = 0);
 
   void register_deopt_bundle(uint64_t statepoint_id, GrowableArray<uint8_t>* locals_basic_type_list, GrowableArray<uint8_t>* expressions_basic_type_list, int num_monitors);
-
-  void register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj = NULL);
 
   void register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value, jobject jobj = NULL);
 

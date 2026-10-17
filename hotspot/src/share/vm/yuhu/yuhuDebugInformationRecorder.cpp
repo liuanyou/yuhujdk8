@@ -73,7 +73,6 @@ void YuhuDebugInformationRecorder::init_collections() {
   _call_site_entries = new (_arena) GrowableArray<CallSiteEntry*>(_arena, 10, 0, (CallSiteEntry*)NULL);
   _stack_map_entries = new (_arena) GrowableArray<StackMapEntry*>(_arena, 10, 0, (StackMapEntry*)NULL);
   _deopt_bundles = new (_arena) GrowableArray<DeoptBundle*>(_arena, 10, 0, (DeoptBundle*)NULL);
-  _patchpoint_entries = new (_arena) GrowableArray<PatchPointEntry*>(_arena, 10, 0, (PatchPointEntry*)NULL);
   _global_var_entries = new (_arena) GrowableArray<GlobalVarEntry*>(_arena, 10, 0, (GlobalVarEntry*)NULL);
   _symbol_entries = new (_arena) GrowableArray<SymbolEntry*>(_arena, 10, 0, (SymbolEntry*)NULL);
   _edge_entries = new (_arena) GrowableArray<EdgeEntry*>(_arena, 10, 0, (EdgeEntry*)NULL);
@@ -269,22 +268,6 @@ void YuhuDebugInformationRecorder::register_deopt_bundle(uint64_t statepoint_id,
     for (int i = 0; i < expressions_basic_type_list->length(); ++i) {
         deopt_bundle->expression_stacks->append(expressions_basic_type_list->at(i));
     }
-}
-
-void YuhuDebugInformationRecorder::register_patch_point(uint64_t statepoint_id, uint32_t reserved_bytes, uint64_t call_site_statepoint_id, jobject jobj) {
-    int index = _patchpoint_entries->find(&statepoint_id, [](void* token, PatchPointEntry* entry) -> bool {
-        return *((uint64_t*)token) == entry->statepoint_id;
-    });
-    // skip registration if already exists
-    if (index != -1) {
-        return;
-    }
-    auto patch_point_entry = new (_arena) PatchPointEntry();
-    patch_point_entry->statepoint_id = statepoint_id;
-    patch_point_entry->reserved_bytes = reserved_bytes;
-    patch_point_entry->call_site_statepoint_id = call_site_statepoint_id;
-    patch_point_entry->oop = jobj;
-    _patchpoint_entries->append(patch_point_entry);
 }
 
 void YuhuDebugInformationRecorder::register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value, jobject jobj) {
@@ -499,8 +482,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
             StackMapEntry* stack_map = _stack_map_entries->at(j);
             assert(stack_map->statepoint_id != 0, "statepoint id should exist");
             if (call_site->statepoint_id == stack_map->statepoint_id) {
-                // 1. patch point statepoint id won't match here, hence calls like unwind call are skipped
-                // 2. inlinee call is skipped too
+                // 1. unwind/leaf call is also matched here, but they are filtered out in later check
+                // 2. inlinee call is skipped
                 call_site_instruction_holder_list.append(CallSiteInstructionHolder(call_site, stack_map)); // multiple stack map may match here
             }
         }
@@ -871,7 +854,8 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                                               monitors_token); // DebugToken* for synchronized monitors
             }
             real_recorder->end_safepoint(pc_offset);
-        } else if (call_site_entry->call_site_type != CallSiteType::leaf_call) {
+        } else if (call_site_entry->call_site_type != CallSiteType::leaf_call &&
+                    call_site_entry->call_site_type != CallSiteType::unwind_call) {
             ShouldNotReachHere();
         }
 

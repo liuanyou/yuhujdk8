@@ -233,7 +233,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
   CXXFLAGS/yuhuState.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuORCPlugins.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuTracingIRCompiler.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
-  CXXFLAGS/yuhuVirtualAddressPatcher.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuIRTransformer.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuDebugInformationRecorder.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
   CXXFLAGS/yuhuRewriteStatepointsForGC.o += -std=c++17 -Wno-reserved-user-defined-literal -Wno-format-nonliteral -Wno-error=format-nonliteral
@@ -270,7 +269,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
     PCH_FLAG/yuhuState.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuORCPlugins.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuTracingIRCompiler.o = $(PCH_FLAG/NO_PCH)
-    PCH_FLAG/yuhuVirtualAddressPatcher.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuIRTransformer.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuDebugInformationRecorder.o = $(PCH_FLAG/NO_PCH)
     PCH_FLAG/yuhuRewriteStatepointsForGC.o = $(PCH_FLAG/NO_PCH)

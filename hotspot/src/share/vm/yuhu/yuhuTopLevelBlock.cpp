@@ -1025,38 +1025,17 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
   if (exception) {
       // jump to unwind handler
       uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
-      uint64_t statepoint_id_for_patchpoint = YuhuStatepointIDGenerator::next();
 
-//      uint64_t helper_address = (uint64_t)&go_unwind;
-      // call_target_va is not used in the CreateCall, just create one for no use
       YuhuDebugInformationRecorder::get()->register_call_site(statepoint_id,
                                                               inline_node_or_method(),
-                                                              0,
+                                                              (uint64_t)&YuhuRuntime::go_unwind,
                                                               CallSiteType::unwind_call,
                                                               bci());
-
-//      llvm::Value* call_target = LLVMValue::jlong_constant(helper_address);
 //
       llvm::Module* mod = builder()->GetInsertBlock()->getModule();
-//      llvm::FunctionType* unwind_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
-//      llvm::Value* callee = builder()->CreateIntToPtr(call_target, PointerType::getUnqual(unwind_ftype));
-
-      llvm::Function* pp_intrinsic = llvm::Intrinsic::getDeclaration(
-              mod, llvm::Intrinsic::experimental_patchpoint_void);
-
-      // patchpoint.void(id, numBytes, target, numArgs, ...)
-      llvm::Value* pp_args[] = {
-              LLVMValue::jlong_constant(statepoint_id_for_patchpoint),        // id
-              llvm::ConstantInt::get(YuhuType::jint_type(), 4),              // numBytes: reserved region size
-              llvm::ConstantPointerNull::get(
-                      llvm::PointerType::getUnqual(builder()->getContext())), // target: &go_unwind (raw i64)
-              llvm::ConstantInt::get(YuhuType::jint_type(), 0),               // numArgs
-      };
-
-      // register patch point
-      YuhuDebugInformationRecorder::get()->register_patch_point(statepoint_id_for_patchpoint, 4, statepoint_id);
-
-      llvm::CallInst* call = builder()->CreateCall(pp_intrinsic, pp_args);
+      llvm::FunctionType* unwind_ftype = llvm::FunctionType::get(llvm::Type::getVoidTy(mod->getContext()), false);
+      llvm::FunctionCallee poll_fn = mod->getOrInsertFunction("yuhu.go_unwind", unwind_ftype);
+      llvm::CallInst* call = builder()->CreateCall(unwind_ftype, poll_fn.getCallee(), {});
 
       llvm::LLVMContext &Ctx = builder()->getContext();
       llvm::AttrBuilder AB(Ctx);

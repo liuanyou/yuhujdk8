@@ -8,7 +8,7 @@
 
 #include "precompiled.hpp"
 #include "yuhu/yuhuORCPlugins.hpp"
-#include "yuhu/yuhuVirtualAddressPatcher.hpp"
+#include "yuhu/yuhuAddressPatcher.hpp"
 #include "yuhu/yuhuFunction.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "llvm/Support/Endian.h"
@@ -218,8 +218,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
             assert(Sym->getAddress().getValue() == Sym->getRange().Start.getValue(), "addr should match to range start");
             recorder->register_symbol(Sym->getAddress().getValue(), Sym->getRange().Start.getValue(), Sym->getRange().End.getValue(), SectionType::data_section);
             if (YuhuTraceMachineCode) {
-                errs() << "[CallSite Extractor] data, address: "
-                       << Sym->getAddress().getValue()
+                errs() << "[CallSite Extractor] data: " << name
+                       << ", address: " << Sym->getAddress().getValue()
                        << ", start: " << Sym->getRange().Start.getValue()
                        << ", end: " << Sym->getRange().End.getValue()
                        << ", section name: " << Section.getName() << "\n";
@@ -286,32 +286,6 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
         }
         if (!found_func) {
             continue;
-        }
-
-        ResourceMark rm;
-        auto patchpoints = recorder->get_patchpoint_stack_maps();
-        for (int i = 0; i < patchpoints->length(); ++i) {
-            auto patchpoint = patchpoints->at(i);
-            uint32_t offset_in_func = patchpoint->stack_map_entry->instruction_offset;
-            uint64_t patchpoint_addr = found_func->getRange().Start.getValue() + offset_in_func;
-            for (auto *Block : Section.blocks()) {
-                uint64_t BaseAddr = Block->getAddress().getValue();
-                size_t Size = Block->getSize();
-                if (!(BaseAddr <= patchpoint_addr && patchpoint_addr < (BaseAddr + Size))) {
-                    // Skip if patchpoint doesn't fall into the block code range
-                    continue;
-                }
-                assert((patchpoint_addr + patchpoint->patchpoint_entry->reserved_bytes) <= (BaseAddr + Size), "Block should cover reserved bytes");
-                if (patchpoint->patchpoint_entry->call_site_statepoint_id != 0) {
-                    CallSiteType call_site_type = recorder->get_call_site_type_by_statepoint_id(patchpoint->patchpoint_entry->call_site_statepoint_id);
-                    assert(call_site_type != CallSiteType::none, "call site type should not be none");
-                    if (call_site_type == CallSiteType::unwind_call) {
-                        // patch to unwind handler, should do it in YuhuBuilder::scan_and_generate_all_relocations
-                    } else {
-                        ShouldNotReachHere();
-                    }
-                }
-            }
         }
 
         // Iterate over all blocks in this section

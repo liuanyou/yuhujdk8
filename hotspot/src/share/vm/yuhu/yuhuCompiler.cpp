@@ -376,9 +376,9 @@ public:
 
         llvm::orc::SymbolMap SymMap;
         auto& ES = _jit->getExecutionSession();
-        SymMap[ES.intern("_gc.safepoint_poll")] =
+        SymMap[ES.intern("_yuhu.go_unwind")] =
                 llvm::orc::ExecutorSymbolDef(
-                        llvm::orc::ExecutorAddr::fromPtr(YuhuRuntime::safepoint_poll_stub()),
+                        llvm::orc::ExecutorAddr::fromPtr(&YuhuRuntime::go_unwind),
                         llvm::JITSymbolFlags::Callable);
         SymMap[ES.intern("___llvm_deoptimize")] =
                 llvm::orc::ExecutorSymbolDef(
