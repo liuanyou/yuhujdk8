@@ -530,6 +530,7 @@ address SharedRuntime::raw_exception_handler_for_return_address(JavaThread* thre
 
 
 JRT_LEAF(address, SharedRuntime::exception_handler_for_return_address(JavaThread* thread, address return_address))
+  Thread::WXWriteFromExecSetter wx_write;
   return raw_exception_handler_for_return_address(thread, return_address);
 JRT_END
 
