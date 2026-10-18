@@ -194,7 +194,7 @@ class YuhuInlinerHelper : public StackObj {
 };
 
 // Quick checks so we can bail out before doing too much
-bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handlers) {
+bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handlers, bool allow_monitors) {
   // Guard against triggering constant-pool resolution on a klass that
   // has been loaded but not yet linked.  Downstream, both Path A's
   // YuhuInlineBlock::emit_IR and Path B's is_llvm_inlineable eventually
@@ -227,8 +227,29 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
   if (target->code_size() > YuhuMaxInlineSize)
     return false;
 
-  // Monitors aren't allowed without a frame to put them in
-  if (target->is_synchronized() || target->has_monitor_bytecodes())
+  // Monitors aren't allowed without a frame to put them in.
+  //
+  // Path A (allow_monitors=false) merges the callee's bytecodes into the
+  // caller's block stream, so a callee monitorenter would need a
+  // BasicObjectLock slot in the CALLER's frame -- which the caller never
+  // allocated, because its max_monitors() comes from its own ciTypeFlow
+  // and does not fold in callees.  YuhuBlock::do_monitorenter is
+  // ShouldNotCallThis() for exactly that reason, and YuhuInlineBlock's
+  // YuhuTargetInvariants has _flow == NULL, so count_monitors() would
+  // crash on a monitor-bearing callee.
+  //
+  // Path B (allow_monitors=true) builds the callee as its own
+  // llvm::Function with its own YuhuStack: initialize() sizes a
+  // monitor_words = max_monitors() * interpreter_frame_monitor_size()
+  // area from the inlinee's OWN flow-derived max_monitors(), and
+  // YuhuTopLevelBlock::do_monitorenter/do_monitorexit emit against
+  // stack()->monitor_addr() in that per-level frame.  Both explicit
+  // monitorenter/monitorexit and a synchronized callee's implicit method
+  // lock (acquire_method_lock() in YuhuFunction::initialize, which is not
+  // guarded on is_inlinee) are therefore frame-correct across the inline
+  // boundary.
+  if (!allow_monitors &&
+      (target->is_synchronized() || target->has_monitor_bytecodes()))
     return false;
 
   // Path A cannot dispatch an inlinee's try/catch or athrow, so any
@@ -260,15 +281,17 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 // Detailed eligibility check for the LLVM-IR inlining path (M0/M1/M2).
 //
 // A method qualifies only if:
-//   - it passes the quick may_be_inlinable() screen with allow_exception_
-//     handlers=true (holder klass already linked; size limit, no monitors
-//     / jsrs / native / abstract / initializer; exception handler tables
-//     are permitted under Path B),
+//   - it passes the quick may_be_inlinable() screen with both
+//     allow_exception_handlers and allow_monitors set true (holder klass
+//     already linked; size limit, no jsrs / native / abstract /
+//     initializer; exception handler tables and monitors are permitted
+//     under Path B because the inlinee gets its own frame),
 //   - the bytecode inliner (Path A) cannot handle it.  Path B claims a
 //     callee the moment it contains an opcode Path A structurally rejects
 //     (branches, the invoke family, putstatic, arraylength, array load/
-//     store, allocation, type checks, trapping idiv/ldiv/irem/lrem, or
-//     athrow); a callee built only from opcodes Path A already inlines
+//     store, allocation, type checks, trapping idiv/ldiv/irem/lrem,
+//     athrow, or monitorenter/monitorexit); a callee built only from
+//     opcodes Path A already inlines
 //     (constants, loads/stores, stack shuffles, non-trapping arithmetic,
 //     fp arithmetic, conversions, comparisons, field get/put, returns)
 //     stays with Path A, which never builds a separate LLVM Function for
@@ -276,7 +299,7 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 //     branch, which let a straight-line callee that merely contained an
 //     invoke (or alloc / array op / checkcast / trapping div / athrow)
 //     slip through BOTH inliners un-inlined.  Callees neither path can
-//     handle (invokehandle / monitorenter / monitorexit / jsr / goto_w)
+//     handle (invokehandle / jsr / goto_w)
 //     still fall through to a normal do_call at the call site.
 //   - every one of its bytecodes is in the whitelist below: constants,
 //     local/stack manipulation, arithmetic (including the trapping
@@ -286,13 +309,16 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 //     (getstatic / putstatic / getfield / putfield), arraylength, array
 //     load and store (iaload / iastore / aaload / aastore / baload /
 //     bastore / etc.), allocation (new / newarray / anewarray /
-//     multianewarray), and type checks (instanceof / checkcast).
-//     Still rejected: monitorenter / monitorexit (need per-inlinee BasicObjectLock
-//     slots in the caller's frame, deferred), and invokehandle (bytecode
+//     multianewarray), type checks (instanceof / checkcast), and
+//     monitorenter / monitorexit.
+//     Still rejected: invokehandle (bytecode
 //     0xf8, produced by rewriter.cpp when a call targets MethodHandle.
 //     invoke / invokeExact; its polymorphic signature and appendix
 //     handling require a DeoptMH entry point incompatible with Yuhu's
 //     stub-based frame layout).  athrow is permitted since M2 (see below).
+//     monitorenter / monitorexit are permitted now that the inlinee's own
+//     YuhuStack reserves a monitor area sized from its own max_monitors();
+//     see the whitelist case below.
 //
 // Loops ARE permitted since M1.  A backedge inside the inlinee triggers
 // YuhuTopLevelBlock::maybe_add_backedge_safepoint on the inlinee's own
@@ -345,7 +371,8 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 // inline call site.  This is now triggered by any null-check (getfield /
 // putfield / arraylength / *aload / *astore / invokevirtual receiver),
 // bounds-check (*aload / *astore), class-check (checkcast), zero-divisor
-// (idiv / ldiv / irem / lrem), or allocation slow path.  Non-trap paths
+// (idiv / ldiv / irem / lrem), monitorenter's lockee null-check, or
+// allocation slow path.  Non-trap paths
 // (safepoint stop-and-resume, RS4GC gc-live reporting on the merged
 // frame, ordinary control flow) are correct.  Trap paths still resolve
 // to the correct bytecode-level bci via the statepoint-id + inline-node
@@ -357,7 +384,8 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 // on any trap-emitting opcode inside a Path B inlinee.  Full multi-level
 // bundle capture is the immediate follow-up subtask.
 bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
-  if (!may_be_inlinable(target, /* allow_exception_handlers = */ true))
+  if (!may_be_inlinable(target, /* allow_exception_handlers = */ true,
+                             /* allow_monitors = */ true))
     return false;
 
   ciTypeFlow* flow = target->get_flow_analysis();
@@ -675,14 +703,45 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // in JDK 1.6 (finally-blocks are now duplicated at bytecode level).
     case Bytecodes::_jsr:
     case Bytecodes::_jsr_w:
+      return false;
 
       // ---- monitorenter / monitorexit ----
-      // Require per-inlinee BasicObjectLock slots in the caller's frame
-      // (deferred -- need a stack-local monitor array modelled across the
-      // inline boundary).
+      // Per-inlinee frame, per-inlinee monitor area.  The inlinee's own
+      // YuhuStack::initialize reserves monitor_words =
+      // max_monitors() * frame::interpreter_frame_monitor_size() slots,
+      // sized from the inlinee's OWN flow-derived max_monitors()
+      // (YuhuTargetInvariants::count_monitors walks the ciTypeFlow passed
+      // by build_inlinee, which is non-NULL on this path -- unlike Path A's
+      // YuhuInlineBlock, whose _flow == NULL makes count_monitors() and
+      // YuhuBlock::do_monitorenter unusable).
+      //
+      // Emission is the shared top-level implementation:
+      // YuhuTopLevelBlock::do_monitorenter null-checks the lockee, then
+      // acquire_lock() stores it into stack()->monitor_object_addr(monitor),
+      // bumps num_monitors() and calls the YuhuRuntime::monitorenter stub
+      // with EAM_MONITOR_FUDGE so a trap raised mid-acquire decrements the
+      // count again before any handler runs.  do_monitorexit calls
+      // release_lock(EX_CHECK_NO_CATCH).  Both address the slot through
+      // the inlinee's own frame, so nothing crosses the inline boundary at
+      // IR level.
+      //
+      // Every exit drains this level's monitors: handle_return runs
+      // `while (num_monitors()) release_lock(...)` before its inlinee
+      // branch, so it fires on both the normal ret and the pending-
+      // exception propagation return.  Runtime side is level-agnostic too:
+      // StackValue::resolve_monitor_lock is unextended_sp + word_offset,
+      // and the recorder emits a per-level monitor OopMap plus MonitorValue
+      // scope entries onto the inlinee's frame_holder_chain element.
+      //
+      // Sets needs_path_b because Path A structurally cannot emit a
+      // monitor, so even an otherwise straight-line callee containing a
+      // synchronized block must be claimed by Path B rather than falling
+      // through both inliners.
     case Bytecodes::_monitorenter:
     case Bytecodes::_monitorexit:
-        return false;
+      needs_path_b = true;
+      break;
+
     default:
       return false;
     }
@@ -710,16 +769,18 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 // is_llvm_inlineable above) is dramatically more permissive since the
 // M1+ extension -- it allows loops, the entire invoke family (including
 // invokedynamic), field access, arraylength, array load/store, allo-
-// cation, type checks (instanceof / checkcast), trapping div/rem, and
-// (since M2) athrow and exception handler tables -- because a Path B
-// inlinee gets a real llvm::Function with its own block hierarchy and
-// its safepoint-poll / call-site / trap metadata flows through Always-
+// cation, type checks (instanceof / checkcast), trapping div/rem,
+// monitorenter / monitorexit, and (since M2) athrow and exception handler
+// tables -- because a Path B
+// inlinee gets a real llvm::Function with its own block hierarchy, its
+// own frame (including a monitor area), and its safepoint-poll /
+// call-site / trap metadata flows through Always-
 // InlinerPass via the statepoint-id attribute; its local try/catch is
 // dispatched via the inlinee's own ciMethod-driven ciExceptionHandler-
 // Stream inside its own llvm::Function and merges into the caller post-
-// flatten.  invokehandle (bytecode 0xf8) and monitor ops remain
-// excluded from Path B (see is_llvm_inlineable's function-level doc for
-// the specific reason on each).
+// flatten.  Only invokehandle (bytecode 0xf8) remains excluded from
+// Path B (see is_llvm_inlineable's function-level doc for
+// the specific reason).
 //
 // Under Path A, an inlined method has no stack frame of its own and its
 // IR is emitted directly into the caller's llvm::Function.  That means no

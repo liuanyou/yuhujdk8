@@ -56,7 +56,22 @@ class YuhuInliner : public AllStatic {
   // statepoint-id + bundle, so interpreter re-execution reconstructs a
   // full frame.  See is_llvm_inlineable's function-level doc for the
   // full M2 exception flow.
-  static bool may_be_inlinable(ciMethod* target, bool allow_exception_handlers = false);
+  //
+  // allow_monitors follows the exact same reasoning and is set by the
+  // same caller (Path B only).  Path A merges the callee's bytecodes
+  // into the CALLER's block stream, so a callee monitor would need
+  // BasicObjectLock slots in the caller's frame -- slots the caller
+  // never allocated, because the caller's own max_monitors() is derived
+  // from its own ciTypeFlow and does not fold in callees.  Path A's
+  // YuhuBlock::do_monitorenter/do_monitorexit are ShouldNotCallThis()
+  // for that reason.  Path B gives the callee its own llvm::Function and
+  // its own frame: YuhuStack::initialize sizes the monitor area from the
+  // inlinee's own max_monitors(), and YuhuTopLevelBlock::do_monitorenter
+  // resolves slots through that per-level frame, so monitors are safe
+  // across the inline boundary.
+  static bool may_be_inlinable(ciMethod* target,
+                               bool allow_exception_handlers = false,
+                               bool allow_monitors = false);
 
   // Eligibility check for the LLVM-IR inlining path (Path B).  Yuhu
   // offers two inliners at each call site: Path A (the bytecode inliner,
@@ -67,9 +82,9 @@ class YuhuInliner : public AllStatic {
   // CANNOT inline it -- i.e. the callee contains at least one opcode Path
   // A structurally rejects (branches, the invoke family, putstatic,
   // arraylength, array load/store, allocation, type checks, trapping
-  // idiv/ldiv/irem/lrem, or athrow).  A callee made purely of opcodes
-  // Path A already handles stays with Path A.  Callees NEITHER path can
-  // inline (invokehandle / monitorenter / monitorexit / jsr / goto_w) are
+  // idiv/ldiv/irem/lrem, athrow, or monitorenter/monitorexit).  A callee
+  // made purely of opcodes Path A already handles stays with Path A.
+  // Callees NEITHER path can inline (invokehandle / jsr / goto_w) are
   // rejected here and fall through to a normal do_call.
   //
   // Historically (M0) the gate was "has at least one branch", on the
@@ -80,9 +95,13 @@ class YuhuInliner : public AllStatic {
   // straight-line-with-an-invoke callee fell through BOTH nets un-
   // inlined.  The predicate is now "Path A declines it", checked against
   // the same opcode families the Path B whitelist already admits.  A
-  // callee still must be quiescent in the frame sense: it gets no stack
-  // frame of its own, so any opcode that survives the whitelist must be
-  // one whose safepoint/call/trap metadata can travel through Always-
+  // callee's opcode metadata must survive flattening: the inlinee's
+  // allocas (locals, expression stack, monitor area) all collapse into
+  // the caller's single LLVM frame once AlwaysInlinerPass runs, so the
+  // runtime only ever sees one physical frame -- per-level boundaries are
+  // reconstructed from the recorder's frame_holder_chain, not from
+  // frame metadata.  Any opcode that survives the whitelist must therefore
+  // be one whose safepoint/call/trap metadata can travel through Always-
   // InlinerPass via the statepoint-id attribute.  See is_llvm_inlineable's
   // function-level doc for the full opcode inventory and the M1 deopt-
   // bundle caveat.
