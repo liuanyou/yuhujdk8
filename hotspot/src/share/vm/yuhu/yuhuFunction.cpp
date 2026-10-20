@@ -127,8 +127,22 @@ YuhuFunction* YuhuFunction::get_or_build_inlinee(YuhuInlineTree* inline_tree, Yu
   assert(!_is_inlinee, "only the outermost function may hold inlinees");
   ciMethod* target = inline_node->method();
 
+  // Key the cache by the invoke-site YuhuInlineNode, NOT by target method.  The
+  // same method may be inlined at several distinct caller bcis (e.g. ResolvableType
+  // .forClass at bci 29 and bci 260 in getTypeForFactoryBean); each site must own
+  // its own inlinee function so it gets its own statepoint ids, deopt bundle and
+  // frame layout.  Reusing across sites by target method makes a later site's
+  // safepoint poll resolve to the FIRST-built site's frame description in
+  // YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope (the
+  // shared inline node's bci() is frozen at build time, so "bci makes unique
+  // match" picks the wrong caller bundle), over/under-claiming OopMap slots and
+  // tripping GC "found non oop pointer".  do_llvm_inline_call already passes a
+  // per-site node (find_child_by_bci), so this lookup was the only reason sites
+  // collapsed.  The AlwaysInliner clones the body into the caller per call site
+  // anyway, so this does not grow emitted code size.
   for (int i = 0; i < _inlinees.length(); i++) {
-    if (_inlinees.at(i)->target_method() == target) {
+    YuhuInlineNodeOrMethod* site = _inlinees.at(i)->inline_node_or_method();
+    if (site != NULL && site->is_inline_node() && site->as_inline_node() == inline_node) {
       return _inlinees.at(i);
     }
   }
@@ -229,10 +243,12 @@ void YuhuFunction::initialize(const char *name) {
   // They will be used directly as local variables in YuhuNormalEntryCacher
   // No need to store them here, they're already in the function signature
   
-  // Method* and Thread* are read from registers (x12, x28)
-  // No longer passed as function parameters
-  // Note: CreateReadMethodRegister/ThreadRegister return i64 (intptr_type),
-  // but we need pointer types for CreateAddressOfStructEntry/CreateValueOfStructEntry
+  // Thread* is read from register x28 (callee-saved, ABI-guaranteed per-thread).
+  // Method* is NOT read from x12: x12 is a caller-saved scratch register and is
+  // only the interpreter's rmethod, left undefined across compiled-to-compiled
+  // calls, so reading it at entry is not a reliable source.  The nmethod
+  // statically knows its own Method*, so we bake a compile-time constant instead
+  // (see the CreateInlineMetadata calls below).  Neither is passed as a parameter.
   
   // CRITICAL: We need to create thread_ptr EARLY (before creating blocks)
   // because YuhuTopLevelBlock objects use copy constructor which copies _thread.
@@ -277,10 +293,11 @@ void YuhuFunction::initialize(const char *name) {
       "thread_ptr");
     set_thread(thread);
 
-    // Create method_ptr as well
-    llvm::Value *method_int = builder()->CreateReadMethodRegister();
-    method = builder()->CreateIntToPtr(
-      method_int,
+    // Create method_ptr as well -- a compile-time constant Method* for THIS scope
+    // (the outer function and, because initialize() runs per Path-B inlinee too,
+    // each inlinee itself via target()), instead of the caller-saved x12 register.
+    method = builder()->CreateInlineMetadata(
+      target()->get_Method(),
       YuhuType::Method_type(),
       "method_ptr");
   } else {
@@ -368,9 +385,8 @@ void YuhuFunction::initialize(const char *name) {
     if (method == NULL || thread() == NULL) {
       // Fallback: create them now if they weren't created earlier
       if (method == NULL) {
-        llvm::Value *method_int = builder()->CreateReadMethodRegister();
-        method = builder()->CreateIntToPtr(
-          method_int,
+        method = builder()->CreateInlineMetadata(
+          target()->get_Method(),
           YuhuType::Method_type(),
           "method_ptr");
       }

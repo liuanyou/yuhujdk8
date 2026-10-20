@@ -64,8 +64,10 @@ class YuhuFunction : public YuhuTargetInvariants {
   // of merging its bytecodes into the caller's blocks the way the bytecode
   // inliner does.  The resulting YuhuFunction must outlive this call (it is
   // heap-allocated off the compilation's ResourceArea, not a stack temporary
-  // like build()'s), since get_or_build_inlinee() caches and reuses it for
-  // every call site that resolves to the same target.  Unlike build(), this
+  // like build()'s), since get_or_build_inlinee() caches it against the invoke
+  // site's YuhuInlineNode.  Each distinct call site gets its own inlinee (they
+  // are NOT shared by target method any more -- see get_or_build_inlinee) so it
+  // owns its statepoint ids, deopt bundle and frame layout.  Unlike build(), this
   // does NOT run any of the four frame/global-registration side effects that
   // only the outermost function is allowed to perform (see the "_is_inlinee"
   // checks sprinkled through initialize()).
@@ -104,9 +106,13 @@ class YuhuFunction : public YuhuTargetInvariants {
   llvm::Value*                     _x0_slot; // 8th int-like argument
   bool                             _is_inlinee;  // True for a callee built as a separate, alwaysinline llvm::Function
 
-  // Inlinees built for this (non-inlinee) function's call sites, keyed by
-  // target method, so that two call sites invoking the same method share one
-  // llvm::Function instead of each building a fresh duplicate.  Empty on an
+  // Inlinees built for this (non-inlinee) function's call sites, keyed by the
+  // invoke-site YuhuInlineNode (NOT by target method), so that two call sites
+  // invoking the same method each get their own llvm::Function with per-site
+  // statepoint / deopt-bundle / frame-layout metadata; sharing by method caused
+  // OopMap over-claims when the same method was inlined at multiple bcis.  The
+  // AlwaysInliner clones each inlinee's body into the caller anyway, so this
+  // does not grow emitted code size.  Empty on an
   // inlinee itself, since an inlinee is guaranteed (by YuhuInliner::
   // is_llvm_inlineable) to contain no call sites at all.
   GrowableArray<YuhuFunction*> _inlinees;

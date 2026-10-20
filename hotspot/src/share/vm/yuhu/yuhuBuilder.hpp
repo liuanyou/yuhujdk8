@@ -225,7 +225,8 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::CallInst* CreateReadFramePointer();
   llvm::CallInst* CreateReadStackPointer();  // Read actual SP register (x31) on AArch64
   llvm::CallInst* CreateReadLinkRegister();   // Read LR register (x30) on AArch64
-  llvm::CallInst* CreateReadMethodRegister(); // Read rmethod register (x12) on AArch64
+  // CreateReadMethodRegister() removed: the compiled nmethod's Method* is now a
+  // compile-time constant (see YuhuFunction::initialize), not the x12 register.
   llvm::CallInst* CreateReadThreadRegister(); // Read rthread register (x28) on AArch64
   llvm::CallInst* CreateReadCurrentPC(); // Read current pc on AArch64
   llvm::CallInst* CreateReadX0Register();  // Read x0 register (holds saved p7 parameter)

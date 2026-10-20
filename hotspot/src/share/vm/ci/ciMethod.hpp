@@ -56,6 +56,7 @@ class ciMethod : public ciMetadata {
   friend class YuhuBuilder;
   friend class YuhuRuntime;
   friend class YuhuInlinePlanner;
+  friend class YuhuFunction;
 
  private:
   // General method information.

@@ -118,10 +118,21 @@ void YuhuStack::initialize(Value* method, YuhuInlineNodeOrMethod* inline_node_or
   // Temporary oop slot
   _oop_tmp_slot_offset = offset++;
 
-  // Method pointer
+  // Method pointer.
+  //
+  // `method` is now the scope's compile-time constant Method* (baked in
+  // YuhuFunction::initialize via CreateInlineMetadata from target()), NOT the
+  // caller-saved x12 register -- so it names the correct method for the outer
+  // frame and, since initialize() runs per Path-B inlinee too, for each inlinee.
+  // This is a debug pre-fill only: `method` is NULL in PRODUCT builds
+  // (PRODUCT_ONLY(NULL) at the YuhuStackWithNormalFrame call site), so the store
+  // is skipped there; at runtime the decacher rewrites the slot from the state on
+  // every call site regardless.
   _method_slot_offset = offset++;
+  if (method != NULL) {
     builder()->CreateStore(
       method, slot_addr(method_slot_offset(), YuhuType::Method_type()));
+  }
 
   // Should get the sp value after final allocation, include prologue/main frame/spill areas
   Value* final_sp = builder()->CreateReadStackPointer();
