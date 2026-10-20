@@ -871,7 +871,31 @@ void YuhuTopLevelBlock::register_deopt_bundle(uint64_t statepoint_id) {
       }
     ciType* type = state->local_type_at(i);
     BasicType slot_type = type->basic_type();
-    assert(slot_type == ciTypeFlow::StateVector::T_BOTTOM, "basic type should be T_CONFLICT");
+    // A slot with no materialized YuhuValue is normally ciTypeFlow bottom
+    // (= T_CONFLICT).  But javac slot reuse can leave an *orphaned* wide
+    // high-word marker (T_LONG2 / T_DOUBLE2) or an as-yet-unassigned slot
+    // (T_TOP / T_NULL) whose ciTypeFlow type is a non-bottom placeholder even
+    // though Yuhu holds no value for it -- e.g.
+    // LocalCache$Segment::lockedGetOrLoad, where `long now` occupied slots 8-9
+    // and `astore 8` later reused slot 8 for the synchronized() objectref,
+    // orphaning slot 9 as T_LONG2 (which ciTypeFlow encodes as T_SHORT).
+    // Reaching a T_LONG2/T_DOUBLE2 here guarantees it is NOT backed by a live
+    // wide low-half: that case is consumed by the T_LONG/T_DOUBLE branch above
+    // (which does i++), and the deopt LocationValue generator only pairs when it
+    // sees a T_LONG/T_DOUBLE entry, never a lone padding marker.  So accept every
+    // ciTypeFlow placeholder and append it as-is (this preserves one-entry-per-slot
+    // indexing for the recorder's offset arithmetic and the wide-pair invariant,
+    // and none of these markers is T_OBJECT/T_ARRAY so the OopMap claims no bogus
+    // root).  Keep failing on a genuine concrete type (T_INT/T_LONG/T_FLOAT/
+    // T_DOUBLE/T_OBJECT/T_ARRAY) that unexpectedly has no value -- that is either a
+    // real bug or would claim a valueless slot as an oop root.
+    bool valueless_placeholder =
+        slot_type == (BasicType)ciTypeFlow::StateVector::T_BOTTOM ||  // == T_CONFLICT
+        slot_type == (BasicType)ciTypeFlow::StateVector::T_LONG2   ||
+        slot_type == (BasicType)ciTypeFlow::StateVector::T_DOUBLE2 ||
+        slot_type == (BasicType)ciTypeFlow::StateVector::T_TOP     ||
+        slot_type == (BasicType)ciTypeFlow::StateVector::T_NULL;
+    assert(valueless_placeholder, "valueless local slot must carry a ciTypeFlow placeholder type");
     locals_basic_type_list.append(slot_type);
   }
   
