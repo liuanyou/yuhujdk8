@@ -153,6 +153,32 @@ void YuhuTopLevelBlock::scan_for_traps() {
             // Note: _invokehandle case is not needed here because java_code() converts
             // invokehandle to invokevirtual, so it's handled by the invokevirtual case above.
             // The invokehandle is now supported in do_call() following C1's approach.
+            case Bytecodes::_ldc:
+            case Bytecodes::_ldc_w:
+            case Bytecodes::_ldc2_w: {
+                // ciTypeFlow never traps on ldc: StateVector::do_ldc() pushes the
+                // mirror's klass unconditionally (and turns a T_ILLEGAL constant
+                // into a whole-method record_failure), unlike do_new/do_anewarray/
+                // do_multianewarray which do call trap().  So an unresolved ldc
+                // operand reaches the parser with no trap recorded for its bci.
+                // Install the Reason_unloaded/Action_reinterpret trap here, the
+                // same request C2 emits at this bytecode (opto/parse2.cpp), so the
+                // block ends at the ldc and the interpreter resolves the entry.
+                // Use YuhuConstant so the predicate matches the parser's exactly,
+                // and take the index from the constant pool because the unloaded
+                // Class mirror built by ciObjectFactory::get_unloaded_klass_mirror()
+                // does not remember which klass it stands for.
+                YuhuConstant *constant = YuhuConstant::for_ldc(iter());
+                if (!constant->is_loaded()) {
+                    set_trap(
+                            Deoptimization::make_trap_request(
+                                    Deoptimization::Reason_unloaded,
+                                    Deoptimization::Action_reinterpret,
+                                    iter()->get_constant_pool_index()), bci());
+                    return;
+                }
+            }
+                break;
         }
     }
 

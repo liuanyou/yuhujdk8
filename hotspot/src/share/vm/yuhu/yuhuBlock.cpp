@@ -25,6 +25,7 @@
 
 #include "precompiled.hpp"
 #include "interpreter/bytecodes.hpp"
+#include "runtime/deoptimization.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBlock.hpp"
@@ -174,7 +175,30 @@ void YuhuBlock::parse_bytecode(int start, int limit) {
     case Bytecodes::_ldc_w:
     case Bytecodes::_ldc2_w: {
       YuhuConstant* constant = YuhuConstant::for_ldc(iter());
-      assert(constant->is_loaded(), "trap should handle unloaded classes");
+      if (!constant->is_loaded()) {
+        // The operand has not been resolved yet: either an "ldc <class>" whose
+        // klass is still unloaded (ciKlass::java_mirror() hands back the
+        // pseudo-instance from ciObjectFactory::get_unloaded_klass_mirror(),
+        // which has no handle and no longer remembers which klass it stands
+        // for) or an unresolved MethodType/MethodHandle.  Either way there is
+        // no oop to embed, so do not build a value from it: deopt with
+        // Reason_unloaded/Action_reinterpret and let the interpreter resolve
+        // the entry, the same request C2 emits at this bytecode (see
+        // opto/parse2.cpp).  The trap index has to come from the constant
+        // pool because the unloaded ciObject carries no klass identity.
+        // YuhuTopLevelBlock::scan_for_traps() installs this trap before the
+        // block is emitted, so this path only runs if the scan missed the
+        // bytecode.  Leaving an assert here instead would only have fired in
+        // debug builds: a product build would have read the uninitialised
+        // _object/_type fields of YuhuConstant to make an inline oop.
+        int index = iter()->get_constant_pool_index();
+        do_trap(
+          Deoptimization::make_trap_request(
+            Deoptimization::Reason_unloaded,
+            Deoptimization::Action_reinterpret,
+            index));
+        return;
+      }
       push(constant->value(builder()));
       break;
     }
