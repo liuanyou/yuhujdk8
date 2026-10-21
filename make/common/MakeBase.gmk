@@ -392,10 +392,17 @@ else ifeq ($(OPENJDK_TARGET_OS),macosx)
   # set. Some files get their write permissions removed after being copied to the
   # output dir. When these are copied again to images, xattr would fail. By only clearing
   # attributes when they are present, failing on this is avoided.
+  # On macOS 11+ the kernel tags every file a process creates with com.apple.provenance,
+  # so "attributes are present" is now always true and the guard no longer protects us.
+  # Clearing an attribute requires write permission, which read-only packaged files
+  # (lib/cmm/*.pf and friends are installed 0444) do not give the build user, so the
+  # images step died with "xattr: [Errno 13] Permission denied" unless make ran as root.
+  # Only FinderInfo/ResourceFork/quarantine actually create ._ AppleDouble files, so
+  # treat a failed cleanup as informational instead of a build error.
   define install-file
 	$(MKDIR) -p $(@D)
 	$(CP) -fRP '$<' '$@'
-	if [ -n "`$(XATTR) -l '$@'`" ]; then $(XATTR) -c '$@'; fi
+	if [ -n "`$(XATTR) -l '$@' 2>/dev/null`" ]; then $(XATTR) -c '$@' 2>/dev/null || true; fi
   endef
 else
   define install-file
