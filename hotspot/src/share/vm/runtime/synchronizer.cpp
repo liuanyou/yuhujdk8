@@ -236,7 +236,9 @@ void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
     // Fall through to inflate() ...
   } else
   if (mark->has_locker() && THREAD->is_lock_owned((address)mark->locker())) {
-    assert(lock != mark->locker(), "must not re-lock the same lock");
+      if (!(lock != mark->locker())) {
+          assert(lock != mark->locker(), "must not re-lock the same lock");
+      }
     assert(lock != (BasicLock*)obj->mark(), "don't relock with same BasicLock");
     lock->set_displaced_header(NULL);
     return;
@@ -1294,7 +1296,9 @@ ObjectMonitor * ATTR ObjectSynchronizer::inflate (Thread * Self, oop object) {
           // object is in the mark.  Furthermore the owner can't complete
           // an unlock on the object, either.
           markOop dmw = mark->displaced_mark_helper() ;
-          assert (dmw->is_neutral(), "invariant") ;
+          if (!dmw->is_neutral()) {
+              assert (dmw->is_neutral(), "invariant");
+          }
 
           // Setup monitor fields to proper values -- prepare the monitor
           m->set_header(dmw) ;

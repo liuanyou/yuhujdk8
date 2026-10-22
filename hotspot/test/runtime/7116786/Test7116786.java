@@ -147,7 +147,8 @@ class VerifyErrorCases {
                  "no stackmap frame at jump location or bad jump",
                  "Inconsistent stackmap frames at branch target "),
 
-        new Case("case15", "stackMapTable.cpp", true, "check_new_object",
+        /* Backward jump with uninit is allowed starting with JDK 8 */
+        new Case("case15", "stackMapTable.cpp", false, "check_new_object",
                  "backward jump with uninit",
                  "Uninitialized object exists on backward branch "),
 
