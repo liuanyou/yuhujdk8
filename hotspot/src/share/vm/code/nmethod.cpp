@@ -1074,6 +1074,61 @@ bool nmethod::is_at_poll_or_poll_return(address pc) {
 }
 
 
+// Yuhu stops the JVM at every suspendable point with an ordinary call to a
+// runtime stub (an LLVM statepoint) instead of the patchable poll/poll_return
+// instructions that C1 and C2 emit.  In particular it has nothing equivalent
+// to poll_return, the marker that keeps frame::should_be_deoptimized() and
+// frame::can_be_deoptimized() from deoptimizing a frame that is already on its
+// way out.  Such a call site is reachable here because Yuhu's exit path runs
+// its implicit monitorexit through a vm_call, and every one of those call sites
+// carries a deoptimization bundle.  Deoptimizing them is always wrong: the
+// unpacked interpreter resumes *after* the return bytecode, so the frame is
+// never popped, and the bundle has already dropped the lock it released a few
+// instructions earlier, which is what trips "synchronized methods must have
+// monitors" in vframeArray::unpack_on_stack().  Recognize those sites from the
+// JVM state attached to the pc and treat them exactly like a poll_return.
+bool nmethod::is_at_yuhu_return_pc(address pc) {
+  if (!is_compiled_by_yuhu()) {
+    return false;
+  }
+  if (pc_desc_at(pc) == NULL) {
+    return false;  // no JVM state recorded for this pc
+  }
+
+  ResourceMark rm;
+  ScopeDesc* scope = scope_desc_at(pc);
+  while (scope != NULL) {
+    Method* m = scope->method();
+    int bci = scope->bci();
+    if (m != NULL && bci >= 0 && bci < m->code_size()) {
+      // A scope sitting on a return bytecode has already produced its result.
+      // code_at() returns the stored opcode, which for a rewritten method is a
+      // JVM-internal code (Object.<init> keeps its void return as
+      // _return_register_finalizer), so normalize it through the bytecode table
+      // before range-testing the six returns.
+      Bytecodes::Code code = Bytecodes::code_at(m, bci);
+      if (Bytecodes::is_defined(code)) {
+        code = Bytecodes::java_code(code);
+        if (code >= Bytecodes::_ireturn && code <= Bytecodes::_return) {
+          return true;
+        }
+      }
+      // A synchronized scope that reports no monitor has run its implicit
+      // unlock already; this covers the exceptional exit path, whose bundles
+      // sit on the invoke or throw bytecode that unwound to the handler.
+      if (m->is_synchronized()) {
+        GrowableArray<MonitorValue*>* monitors = scope->monitors();
+        if (monitors == NULL || monitors->length() == 0) {
+          return true;
+        }
+      }
+    }
+    scope = scope->sender();
+  }
+  return false;
+}
+
+
 void nmethod::fix_oop_relocations(address begin, address end, bool initialize_immediates) {
   // re-patch all oop-bearing instructions, just in case some oops moved
   RelocIterator iter(this, begin, end);

@@ -257,7 +257,8 @@ bool frame::should_be_deoptimized() const {
 
   // If at the return point, then the frame has already been popped, and
   // only the return needs to be executed. Don't deoptimize here.
-  return !nm->is_at_poll_return(pc());
+  // Yuhu has no poll_return, so ask it to recognize the equivalent pc.
+  return !nm->is_at_poll_return(pc()) && !nm->is_at_yuhu_return_pc(pc());
 }
 
 bool frame::can_be_deoptimized() const {
@@ -267,7 +268,7 @@ bool frame::can_be_deoptimized() const {
   if( !nm->can_be_deoptimized() )
     return false;
 
-  return !nm->is_at_poll_return(pc());
+  return !nm->is_at_poll_return(pc()) && !nm->is_at_yuhu_return_pc(pc());
 }
 
 void frame::deoptimize(JavaThread* thread) {

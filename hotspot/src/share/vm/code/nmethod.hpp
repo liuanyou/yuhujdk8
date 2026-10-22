@@ -491,6 +491,9 @@ public:
   bool is_at_poll_return(address pc);
   bool is_at_poll_or_poll_return(address pc);
 
+  // Yuhu has no poll_return instruction; see nmethod.cpp for the details.
+  bool is_at_yuhu_return_pc(address pc);
+
   // Scavengable oop support
   bool  on_scavenge_root_list() const                  { return (_scavenge_root_state & 1) != 0; }
  protected:
