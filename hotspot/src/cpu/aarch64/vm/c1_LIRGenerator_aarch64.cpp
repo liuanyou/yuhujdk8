@@ -337,7 +337,10 @@ void LIRGenerator::do_StoreIndexed(StoreIndexed* x) {
     length.load_item();
 
   }
-  if (needs_store_check /*|| x->check_boolean()*/) {
+  if (needs_store_check || x->check_boolean()) {
+    // maybe_mask_boolean() requires a register if the store may be boolean-masked;
+    // load_for_store() may legally leave a constant operand, which aarch64 logic_op
+    // cannot accept as the left input of logical_and.
     value.load_item();
   } else {
     value.load_for_store(x->elt_type());
