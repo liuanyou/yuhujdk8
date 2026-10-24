@@ -12,7 +12,7 @@ echo ""
 # Compile the test
 echo "Compiling OsrTest.java..."
 cd "$SCRIPT_DIR"
-"$JDK_HOME/bin/javac" com/example/OsrTest.java
+"$JDK_HOME/bin/javac" com/example/PlainSpontDeopt.java
 
 if [ $? -ne 0 ]; then
     echo "Compilation failed!"
