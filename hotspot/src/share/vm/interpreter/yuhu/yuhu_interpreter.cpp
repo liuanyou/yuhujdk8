@@ -203,9 +203,7 @@ address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp,
 
     // Get the original and rewritten bytecode.
     Bytecodes::Code code = Bytecodes::java_code_at(method, bcp);
-    if (YuhuInterpreter::bytecode_should_reexecute(code)) {
-        assert(!YuhuInterpreter::bytecode_should_reexecute(code), "should not reexecute");
-    }
+    assert(!YuhuInterpreter::bytecode_should_reexecute(code), "should not reexecute");
 
     const int bci = method->bci_from(bcp);
 

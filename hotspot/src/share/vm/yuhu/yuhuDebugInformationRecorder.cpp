@@ -36,6 +36,7 @@
 #pragma pop_macro("assert")
 
 #include "yuhu/yuhuDebugInformationRecorder.hpp"
+#include "interpreter/yuhu/yuhu_interpreter.hpp"
 
 // File-based logging for debugging
 static FILE* yuhu_stack_map_log = NULL;
@@ -843,10 +844,21 @@ void YuhuDebugInformationRecorder::generate_safepoint_and_describe_scope(DebugIn
                 DebugToken* locals_token = (locals != NULL) ? real_recorder->create_scope_values(locals) : NULL;
                 DebugToken* expressions_token = (expressions != NULL) ? real_recorder->create_scope_values(expressions) : NULL;
                 DebugToken* monitors_token = (monitors != NULL) ? real_recorder->create_monitor_values(monitors) : NULL;
+                // Whether to re-execute the bytecode after deoptimization.
+                // Explicit deopt_call (trap) sites keep reexecute=true; otherwise mirror
+                // C1's IRScopeDebugInfo::should_reexecute(): derive the flag from the
+                // recorded bci through the bytecode_should_reexecute table, and only for
+                // the innermost (topmost) scope -- outer scopes sit on invoke bcis, and
+                // unpack_on_stack asserts reexecute is allowed only for the top frame.
+                bool reexecute = call_site->call_site_type == CallSiteType::deopt_call;
+                if (!reexecute && m == 0 && call_site->bci >= 0) {
+                    Bytecodes::Code code = call_site->inline_node_or_method->target()->java_code_at_bci(call_site->bci);
+                    reexecute = YuhuInterpreter::bytecode_should_reexecute(code);
+                }
                 real_recorder->describe_scope(pc_offset, // PC offset in code (same as passed to add_safepoint)
                                               call_site->inline_node_or_method->target(), // the method being compiled (the caller)
                                               call_site->bci, // the BCI of the invoke bytecode in the caller
-                                              call_site->call_site_type == CallSiteType::deopt_call, // Whether to re-execute the bytecode after deoptimization
+                                              reexecute, // Whether to re-execute the bytecode after deoptimization
                                               false, // Whether this is a MethodHandle invoke
                                               call_site->inline_node_or_method->target()->signature()->return_type()->is_object(), // Whether the return value is an oop
                                               locals_token, // DebugToken* for local variables
