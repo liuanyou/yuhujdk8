@@ -1343,8 +1343,22 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     }
 
   if (YuhuPrintTypeflowOf != NULL) {
-    if (!fnmatch(YuhuPrintTypeflowOf, base_name, 0))
-      flow->print_on(tty);
+      // Support comma-separated patterns, e.g. *putVal*,*addCount*
+      char* patterns_copy = os::strdup(YuhuPrintTypeflowOf);
+      bool matched = false;
+      char* save_ptr = NULL;
+      char* token = strtok_r(patterns_copy, ",", &save_ptr);
+      while (token != NULL) {
+          if (!fnmatch(token, base_name, 0)) {
+              matched = true;
+              break;
+          }
+          token = strtok_r(NULL, ",", &save_ptr);
+      }
+      os::free(patterns_copy);
+      if (matched) {
+          flow->print_on(tty);
+      }
   }
 
   // Create the recorders
