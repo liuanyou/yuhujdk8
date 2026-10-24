@@ -21,6 +21,7 @@ protected:
     address generate_error_exit(const char* msg);
     address generate_return_entry_for(TosState state, int step, size_t index_size);
     address generate_deopt_entry_for(TosState state, int step);
+    address generate_deopt_entry_with_vm_result_for(TosState state, int step);
     address generate_result_handler_for(BasicType type);
     address generate_slow_signature_handler();
     address generate_continuation_for(TosState state);

@@ -84,6 +84,48 @@ address YuhuInterpreterGenerator::generate_deopt_entry_for(TosState state, int s
     return entry;
 }
 
+address YuhuInterpreterGenerator::generate_deopt_entry_with_vm_result_for(TosState state, int step) {
+    guarantee(state == atos, "must be atos");
+    address entry = __ pc();
+    // get oop from vm result
+    __ write_insts_get_vm_result(__ x0, __ x28);
+
+    __ write_insts_restore_bcp();
+    __ write_insts_restore_locals();
+    __ write_insts_restore_constant_pool_cache();
+    __ write_insts_get_method(__ x12);
+    __ write_insts_get_dispatch();
+
+    // Calculate stack limit
+    __ write_inst("ldr x8, [x12, #%d]", in_bytes(Method::const_offset()));
+    __ write_inst("ldrh %s, [x8, #%d]", __ w8, in_bytes(ConstMethod::max_stack_offset()));
+    __ write_inst("add x8, x8, #%d", frame::interpreter_frame_monitor_size()
+                                     + (EnableInvokeDynamic ? 2 : 0));
+    __ write_inst("ldr x9, [x29, #%d]", frame::interpreter_frame_initial_sp_offset * wordSize);
+    __ write_inst("sub x8, x9, x8, uxtx #3");
+    __ write_inst("and sp, x8, #-16");
+
+    // Restore expression stack pointer
+    __ write_inst("ldr x20, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+    // NULL last_sp until next java call
+    __ write_inst("str xzr, [x29, #%d]", frame::interpreter_frame_last_sp_offset * wordSize);
+
+    // handle exceptions
+    {
+        YuhuLabel L;
+        __ write_inst("ldr x8, [x28, #%d]", in_bytes(Thread::pending_exception_offset()));
+        __ write_inst_cbz(__ x8, L);
+        __ write_insts_final_call_VM(__ noreg,
+                                     CAST_FROM_FN_PTR(address,
+                                                      InterpreterRuntime::throw_pending_exception));
+        __ write_insts_stop("should not reach here");
+        __ pin_label(L);
+    }
+
+    __ write_insts_dispatch_next(state, step);
+    return entry;
+}
+
 void YuhuInterpreterGenerator::generate_and_dispatch(YuhuTemplate* t, TosState tos_out) {
     // TODO - skip it for now, it is for debugging/diagnostic tools
 //    if (PrintBytecodeHistogram)                                    histogram_bytecode(t);

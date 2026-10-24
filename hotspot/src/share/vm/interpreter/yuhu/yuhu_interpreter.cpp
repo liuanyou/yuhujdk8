@@ -11,6 +11,7 @@ address YuhuInterpreter::_native_entry_begin = NULL;
 address YuhuInterpreter::_native_entry_end = NULL;
 YuhuEntryPoint YuhuInterpreter::_return_entry[number_of_return_entries];
 YuhuEntryPoint YuhuInterpreter::_deopt_entry[number_of_deopt_entries];
+YuhuEntryPoint YuhuInterpreter::_deopt_entry_with_vm_result[number_of_deopt_entries];
 YuhuEntryPoint YuhuInterpreter::_continuation_entry;
 YuhuEntryPoint YuhuInterpreter::_safept_entry;
 
@@ -202,7 +203,9 @@ address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp,
 
     // Get the original and rewritten bytecode.
     Bytecodes::Code code = Bytecodes::java_code_at(method, bcp);
-    assert(!YuhuInterpreter::bytecode_should_reexecute(code), "should not reexecute");
+    if (YuhuInterpreter::bytecode_should_reexecute(code)) {
+        assert(!YuhuInterpreter::bytecode_should_reexecute(code), "should not reexecute");
+    }
 
     const int bci = method->bci_from(bcp);
 
@@ -254,6 +257,16 @@ address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp,
             type = Bytecode_loadconstant(mh, bci).result_type();
             break;
         }
+        case Bytecodes::_new:
+        case Bytecodes::_newarray:
+        case Bytecodes::_anewarray:
+        case Bytecodes::_multianewarray:
+        {
+            type = Bytecodes::result_type(code);
+            // if vm call is deoptimization, it must be top frame
+            assert(is_top_frame, "must be top frame");
+            return YuhuInterpreter::deopt_entry_with_vm_result(as_TosState(type), length);
+        }
 
         default:
             type = Bytecodes::result_type(code);
@@ -270,6 +283,12 @@ address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp,
 address YuhuInterpreter::deopt_entry(TosState state, int length) {
     guarantee(0 <= length && length < YuhuInterpreter::number_of_deopt_entries, "illegal length");
     return _deopt_entry[length].entry(state);
+}
+
+address YuhuInterpreter::deopt_entry_with_vm_result(TosState state, int length) {
+    guarantee(0 <= length && length < YuhuInterpreter::number_of_deopt_entries, "illegal length");
+    guarantee(state == atos, "must be atos");
+    return _deopt_entry_with_vm_result[length].entry(state);
 }
 
 /**

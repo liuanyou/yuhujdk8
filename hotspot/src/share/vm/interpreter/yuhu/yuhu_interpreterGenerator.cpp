@@ -91,6 +91,9 @@ void YuhuInterpreterGenerator::generate_all() {
                             generate_deopt_entry_for(dtos, i),
                             generate_deopt_entry_for(vtos, i)
                     );
+            YuhuInterpreter::_deopt_entry_with_vm_result[i] = YuhuEntryPoint();
+            // only needed for atos
+            YuhuInterpreter::_deopt_entry_with_vm_result[i].set_entry(atos, generate_deopt_entry_with_vm_result_for(atos, i));
         }
     }
 

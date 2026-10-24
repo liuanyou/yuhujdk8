@@ -145,6 +145,7 @@ protected:
     static address    _native_entry_end;
     static YuhuEntryPoint _return_entry[number_of_return_entries];    // entry points to return to from a call
     static YuhuEntryPoint _deopt_entry[number_of_deopt_entries];      // entry points to return to from a deoptimization
+    static YuhuEntryPoint _deopt_entry_with_vm_result[number_of_deopt_entries]; // entry points to return from a deoptimization of vm call
     static YuhuEntryPoint _continuation_entry;
     static YuhuEntryPoint _safept_entry;
 
@@ -201,6 +202,7 @@ public:
     static int        TosState_as_index(TosState state);
 
     static address deopt_entry(TosState state, int length);
+    static address deopt_entry_with_vm_result(TosState state, int length);
     static address return_entry(TosState state, int length, Bytecodes::Code code);
 
     // Safepoint support
