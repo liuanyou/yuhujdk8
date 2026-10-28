@@ -172,11 +172,15 @@ void YuhuDebugInformationRecorder::embed_call_site_metadata() {
   for (int i = 0; i < get_call_site_count(); i++) {
     uint64_t statepoint_id = get_call_site_statepoint_id(i);
     uint64_t call_target = get_call_site_call_target(i);
+    CallSiteType call_site_type = get_call_site_call_site_type(i);
+    int bci = get_call_site_bci(i);
     
     // Create a tuple: !{i64 statepoint_id, i64 call_target}
     llvm::Metadata* operands[] = {
       llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), statepoint_id)),
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), call_target))
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx), call_target)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx), static_cast<uint8_t>(call_site_type))),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), bci))
     };
     
     call_site_mds.push_back(llvm::MDNode::get(ctx, operands));

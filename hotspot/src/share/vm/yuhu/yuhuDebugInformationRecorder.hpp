@@ -330,6 +330,16 @@ public:
     return _call_site_entries->at(index)->call_target;
   }
 
+    CallSiteType get_call_site_call_site_type(int index) const {
+        assert(index < get_call_site_count(), "index out of bounds");
+        return _call_site_entries->at(index)->call_site_type;
+    }
+
+    int get_call_site_bci(int index) const {
+        assert(index < get_call_site_count(), "index out of bounds");
+        return _call_site_entries->at(index)->bci;
+    }
+
   CallSiteType get_call_site_type_by_statepoint_id(uint64_t statepoint_id) const {
       if (!_call_site_entries) return CallSiteType::none;
       int index = _call_site_entries->find(&statepoint_id, [](void* token, CallSiteEntry* entry) -> bool {
