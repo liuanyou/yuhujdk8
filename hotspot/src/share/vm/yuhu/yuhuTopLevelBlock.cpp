@@ -1130,7 +1130,7 @@ void YuhuTopLevelBlock::do_aload(BasicType basic_type) {
     // (a bitcast would be invalid across address spaces now that element
     // addresses are addrspace(1) GEPs)
     Value *compressed = builder()->CreateLoad(narrow_oop_type, addr, "compressed_oop");
-    value = builder()->CreateDecodeHeapOop(compressed);
+    value = builder()->CreateDecodeHeapOop(compressed, array->jarray_value(), 0);
   } else {
     // Normal load for non-compressed oops or other types
     llvm::Type* element_type = YuhuType::to_arrayType(basic_type);

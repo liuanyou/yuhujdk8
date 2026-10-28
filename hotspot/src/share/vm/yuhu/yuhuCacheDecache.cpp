@@ -54,6 +54,18 @@ void YuhuDecacher::process_stack_slot(int          index,
       value->generic_value(),
       adjusted_offset(value, offset));
   }
+
+  // VerifyOops: validate every reference-typed slot in the caller's
+  // expression stack before we commit to the statepoint call.  A slot
+  // that already holds a stale reference (because an earlier GC moved
+  // or collected the target while a leak in RS4GC tracking or the
+  // card-mark barrier let the frame stay un-updated) fails is_oop()
+  // here, at the earliest point after the previous GC where the
+  // staleness becomes observable.  Leaf call, no statepoint.
+  if (VerifyOops && value != NULL && value->is_jobject()) {
+    builder()->CreateVerifyOops(
+      value->generic_value(), "yuhu verify decache stack slot", NULL, offset);
+  }
 }
 
 void YuhuDecacher::start_monitors(int num_monitors) {
@@ -106,6 +118,14 @@ void YuhuDecacher::process_local_slot(int          index,
       YuhuType::to_stackType(value->basic_type()),
       value->generic_value(),
       adjusted_offset(value, offset));
+  }
+
+  // VerifyOops: same rationale as process_stack_slot, applied to the
+  // caller's locals.  Catches stale references that a leak in RS4GC
+  // tracking let slip through a previous java_call's gc-live set.
+  if (VerifyOops && value != NULL && value->is_jobject()) {
+    builder()->CreateVerifyOops(
+      value->generic_value(), "yuhu verify decache local slot", NULL, offset);
   }
 }
 

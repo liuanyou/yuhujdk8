@@ -173,6 +173,10 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* d2i();
   llvm::Value* d2l();
   llvm::Value* is_subtype_of();
+  // VerifyOops leaf helper.  Reached by CreateVerifyOops; not called
+  // directly by callers -- use CreateVerifyOops which handles the
+  // VerifyOops-off early return and the msg-string materialisation.
+  llvm::Value* verify_oop_wrapper();
   llvm::Value* current_time_millis();
   llvm::Value* sin();
   llvm::Value* cos();
@@ -244,9 +248,56 @@ class YuhuBuilder : public llvm::IRBuilder<> {
  public:
   void CreateUpdateBarrierSet(BarrierSet* bs, llvm::Value* field);
 
+  // Emit a VerifyOops leaf call validating that the given oop-typed
+  // (ptr addrspace(1)) value currently holds a plausible heap reference.
+  // No-op unless VerifyOops is on.  Callers guard the argument with an
+  // is_jobject() check on the corresponding YuhuValue, or pass a freshly
+  // decoded ptr addrspace(1) produced by CreateDecodeHeapOop.  Emitted
+  // sites are decache (locals / expression stack) and every decode_heap_oop
+  // result.  Leaf call -- does not register a statepoint and does not
+  // produce an OopMap entry.
+  //
+  // `holder` (a ptr addrspace(1) base object, or NULL at decache slots) and
+  // `field_off` (field byte offset, or frame slot offset at decache sites)
+  // form a stable location anchor logged alongside the pointer value, so a
+  // stale read stays greppable even when the decoded address is garbage.
+  void CreateVerifyOops(llvm::Value* target, const char* msg,
+                        llvm::Value* holder = NULL, int64_t field_off = 0);
+
   // Compressed oops helpers
  public:
-  llvm::Value* CreateDecodeHeapOop(llvm::Value* compressed_oop);
+  // Internal helper for the two functions below; not for direct use.
+  //
+  // Emit the narrow-oop shift as a single opaque AArch64 lsl/lsr instruction
+  // wrapped in inline asm, and mark it sideeffect so the optimizer can neither
+  // fold it away nor move it.  This is load bearing for GC correctness:
+  // with narrow_oop_base == NULL and narrow_oop_shift == 3 the encode/decode
+  // pair composes to an identity, so plain IR lets InstCombine collapse a
+  // putfield's encode all the way back to the narrowOop read by the matching
+  // getfield.  A narrowOop is an i32, RS4GC only tracks pointer-typed values,
+  // so that value is spilled to a slot which is (correctly) absent from every
+  // OopMap and is never relocated; using it as the source of a reference store
+  // then writes a pre-GC address into a live object.  Passing the oop pointer
+  // directly to the asm also keeps LLVM from materialising a ptrtoint of it,
+  // which would be the same hazard in a different shape.
+  //
+  //   left == true:  i64 zero-extended narrowOop -> i64 full-width heap address
+  //   left == false: ptr addrspace(1) oop        -> i64 narrowOop
+  llvm::Value* CreateOpaqueOopShift(llvm::Value* value, bool left, int shift);
+
+  // Companion of CreateOpaqueOopShift for the base-relative compressed-oop
+  // modes:  returns  (oop - base)  as intptr, again as one opaque, sideeffect
+  // pinned instruction.  The oop is passed as a ptr addrspace(1) operand rather
+  // than through ptrtoint for the same reason given above -- an integer form of
+  // the pointer must never exist as an IR node, because RS4GC cannot relocate an
+  // integer and it would then survive a safepoint unchanged.  Used only when
+  // narrow_oop_base != NULL; the shift is applied by the caller in IR, which is
+  // safe because it consumes this opaque, pinned result.
+  llvm::Value* CreateOpaqueBaseSub(llvm::Value* oop, intptr_t base);
+
+  llvm::Value* CreateDecodeHeapOop(llvm::Value* compressed_oop,
+                                   llvm::Value* verify_holder = NULL,
+                                   int64_t verify_field_off = 0);
   llvm::Value* CreateEncodeHeapOop(llvm::Value* oop);
 
   // Helpers for accessing the code buffer.

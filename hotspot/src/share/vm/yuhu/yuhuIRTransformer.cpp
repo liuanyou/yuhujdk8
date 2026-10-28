@@ -9,6 +9,7 @@
 #include "precompiled.hpp"
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/yuhuIRTransformer.hpp"
+#include "yuhu/yuhuInvariants.hpp"
 #include "yuhu/yuhuRewriteStatepointsForGC.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "llvm/IR/PassManager.h"
@@ -184,10 +185,38 @@ llvm::Expected<llvm::orc::ThreadSafeModule> YuhuIRTransformer::runGCPasses(llvm:
 
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
-        MPM.addPass(YuhuRewriteStatepointsForGC());
-
-        // 6. 运行 Pass Manager
+        // 6. 运行 Pass Manager -- the middle-end prefix on its own, and checked
+        // before RS4GC runs, because RS4GC drops the builder's mark off the
+        // stores it rewrites (measured on dumped IR: the encode marks survive a
+        // run through this pipeline, the store marks do not).  Scanning after it
+        // would find no marked store at all and report that as clean.
         MPM.run(M, MAM);
+
+        // Observer for the narrowOop encode invariant (activity 082).  The
+        // deciding check runs earlier, on a throwaway clone of the same IR, for
+        // the one thing this callback cannot do: there is no ciEnv left here to
+        // record a compile failure against, since this runs from inside ORC
+        // materialization.  Checking the same point of the same pipeline here as
+        // well is what says the clone is a faithful stand-in -- the two lines
+        // disagree only if cloning or the extra pass run changed the answer.
+        if (YuhuCheckNarrowOopInvariant) {
+            unsigned marked = YuhuNarrowOopInvariant::count_marked_stores(M);
+            unsigned violations = YuhuNarrowOopInvariant::scan(M, /*report=*/true);
+            if (YuhuTraceIRCompilation) {
+                errs() << "Yuhu narrowOop invariant: " << marked
+                       << " reference-field store(s) seen before RS4GC in module "
+                       << M.getName() << ", " << violations << " violation(s)\n";
+            }
+            if (violations > 0) {
+                errs() << "Yuhu narrowOop invariant: " << violations
+                       << " reference-field store(s) without an encode left in module "
+                       << M.getName() << " after the middle-end\n";
+            }
+        }
+
+        ModulePassManager rs4gc;
+        rs4gc.addPass(YuhuRewriteStatepointsForGC());
+        rs4gc.run(M, MAM);
 
         // 7. 验证 IR
         if (verifyModule(M, &errs())) {

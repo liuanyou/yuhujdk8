@@ -210,6 +210,26 @@ class YuhuRuntime : public AllStatic {
 
     static bool is_subtype_of(Klass* check_klass, Klass* object_klass);
 
+    // VerifyOops leaf helper emitted by the Yuhu JIT at every decache
+    // (locals / expression-stack) oop-typed slot and immediately after
+    // every CreateDecodeHeapOop.  Mirrors the checks in the shared
+    // StubRoutines::verify_oop stub -- alignment + heap-range mask/bits
+    // equality + non-null klass -- but implemented in C++ so the caller
+    // can reach it as a plain leaf call (no wrapper stub, no non-standard
+    // register shuffling).  No-op when VerifyOops is off.  Must never
+    // safepoint or GC.
+    //
+    // Beyond the (target, msg) pair the caller passes a stable location
+    // anchor so a stale read can be traced through the file log even when
+    // the decoded pointer value itself is garbage: `holder` is the base
+    // object address the field/array-element was loaded from (0 at decache
+    // slots), `field_off` is the field byte offset (or frame slot offset at
+    // decache sites), and `site_id` is a compile-time unique id per emitted
+    // verify call site.
+    static void verify_oop_wrapper(oop target, const char* msg,
+                                   intptr_t holder, int64_t field_off,
+                                   int64_t site_id);
+
   static void throw_ArithmeticException(JavaThread* thread,
                                         const char* file,
                                         int         line);

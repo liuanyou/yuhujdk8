@@ -81,6 +81,9 @@
   diagnostic(ccstr, YuhuMonitorFile, NULL,                                     \
           "Dump YuhuRuntime monitor enter/exit trace to file; no trace when not set") \
                                                                               \
+  diagnostic(ccstr, YuhuVerifyOopFile, NULL,                                   \
+          "Dump YuhuRuntime verify_oop_wrapper trace to file; no trace when not set") \
+                                                                              \
   diagnostic(bool, YuhuTraceIRCompilation, false,                             \
           "Trace IR to object file compilation (print IR and disassemble object file)") \
                                                                               \
@@ -107,6 +110,15 @@
                                                                               \
   diagnostic(bool, YuhuTraceFunction, false,                                  \
           "Trace function")                                                   \
+                                                                              \
+  develop(bool, YuhuCheckNarrowOopInvariant, true,                             \
+          "Fail the compilation if the middle-end removes the compressed-oop " \
+          "encode in front of a narrowOop field store")                        \
+                                                                              \
+  develop(bool, YuhuBreakNarrowOopEncode, false,                               \
+          "Self-test for YuhuCheckNarrowOopInvariant: emit the pre-082 "       \
+          "pointer<->integer encode/decode shape so the check has something "  \
+          "to catch.  Never enable outside an experiment.")                   \
                                                                               \
   diagnostic(bool, YuhuTraceOffset, false,                                    \
           "Trace offset")                                                     \

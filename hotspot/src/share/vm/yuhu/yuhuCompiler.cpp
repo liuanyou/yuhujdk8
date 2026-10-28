@@ -56,6 +56,7 @@
 #include "c1/c1_Runtime1.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "yuhu/yuhuIRTransformer.hpp"
+#include "yuhu/yuhuInvariants.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhuInlinePlanner.hpp"
 
@@ -1477,6 +1478,27 @@ void YuhuCompiler::compile_method(ciEnv*    env,
         tty->print_cr("Yuhu: Generate native code for method %s", base_name);
     }
   
+  // The narrowOop encode invariant (activity 082): a reference-field store must
+  // still be fed by its encode once the middle-end has been over the IR.  If it
+  // is not, what gets written is the narrowOop as it was read before the last
+  // collection -- an i32, so not a GC pointer, so in no OopMap, so never
+  // relocated by a moving collector.  Installing that code does not crash here;
+  // it corrupts a live object and crashes later, somewhere else, which is exactly
+  // how this bug presented.  Check a throwaway clone that has been through the
+  // same passes in the same order, because this is the last point where a ciEnv
+  // is still live to record the failure against -- the real pipeline runs later,
+  // inside the ORC IR-transform callback.  Falling back to C1/C2 costs one
+  // compiled method; missing the violation costs the heap.
+  if (YuhuCheckNarrowOopInvariant) {
+    unsigned violations = YuhuNarrowOopInvariant::check_after_middle_end(function);
+    if (violations > 0) {
+      tty->print_cr("Yuhu: narrowOop encode invariant violated in %s (%u store(s)); not installing", base_name, violations);
+      env->record_failure("Yuhu narrowOop encode invariant violated");
+      YuhuDebugInformationRecorder::release();
+      return;
+    }
+  }
+
   // NEW: Embed call site mappings as metadata before compilation
   // This allows the JITLink plugin to extract virtual address mappings
   recorder->embed_call_site_metadata();

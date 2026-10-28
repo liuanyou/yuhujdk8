@@ -38,6 +38,7 @@
 #include "yuhu/llvmHeaders.hpp"
 #include "yuhu/llvmValue.hpp"
 #include "yuhu/yuhuBuilder.hpp"
+#include "yuhu/yuhuInvariants.hpp"          // YuhuNarrowOopInvariant::mark_encode
 #include <dlfcn.h>
 #include "yuhu/yuhuContext.hpp"
 #include "yuhu/yuhuFunction.hpp"
@@ -449,6 +450,14 @@ Value* YuhuBuilder::is_subtype_of() {
   return make_function((address) YuhuRuntime::is_subtype_of, "KK", "c"); // leaf call
 }
 
+Value* YuhuBuilder::verify_oop_wrapper() {
+  // Leaf call: raw C-function address embedded directly (no RuntimeStub).
+  // Signature is (oop /*ptr addrspace(1)*/, char* /*msg*/, intptr holder,
+  // intptr field_off, intptr site_id) -> void, i.e. "OCxxx" -> "v".
+  // See YuhuRuntime::verify_oop_wrapper for what it does.
+  return make_function((address) YuhuRuntime::verify_oop_wrapper, "OCxxx", "v"); // leaf call
+}
+
 Value* YuhuBuilder::current_time_millis() {
   return make_function((address) os::javaTimeMillis, "", "l"); // leaf call
 }
@@ -841,6 +850,78 @@ void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
             card_entry_ptr);
 }
 
+// VerifyOops leaf-call emitter.  Emits a plain llvm::CallInst to the
+// YuhuRuntime::verify_oop_wrapper C function -- leaf convention: no
+// statepoint, no OopMap, no gc-live contribution.  The callee aborts
+// via ShouldNotReachHere() if the oop fails is_oop(), and prints a
+// tty line tagged with `msg` naming the emission site (decache stack /
+// decache local / decode_heap_oop).  Callers guard the target's LLVM
+// type: pass a ptr addrspace(1) value (a decoded field, an
+// expression-stack or local slot's YuhuValue::generic_value(), etc.).
+// Silently does nothing when VerifyOops is off, so this can sit in the
+// hot IR-build path without a debug-only #ifdef wrapper at the caller.
+void YuhuBuilder::CreateVerifyOops(Value* target, const char* msg, Value* holder, int64_t field_off) {
+  if (!VerifyOops) return;
+  if (target == NULL) return;
+
+  PointerType* PT = dyn_cast<PointerType>(target->getType());
+  assert(PT != NULL && PT->getAddressSpace() == 1, "CreateVerifyOops expects a ptr addrspace(1) target");
+
+  FunctionType* func_type = make_ftype("OCxxx", "v");
+  Value* callee = verify_oop_wrapper();
+
+    // Manual call site registration (can't use call_vm from here)
+    uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+
+    // Extract actual helper address
+    uint64_t helper_address = 0;
+
+    if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+        if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+            if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+                helper_address = IntConst->getZExtValue();
+            }
+        }
+    }
+
+    assert(helper_address != 0, "helper_address should have a value");
+
+    YuhuDebugInformationRecorder::get()->register_call_site(
+            statepoint_id, function()->inline_node_or_method(), helper_address,
+            CallSiteType::leaf_call);
+
+  // Materialise the site tag as an inline char* constant, same shape as
+  // the __FILE__ arg used by throw_ArithmeticException.
+  Value* msg_val = CreateIntToPtr(
+      LLVMValue::intptr_constant((intptr_t) msg),
+      PointerType::getUnqual(YuhuType::jbyte_type()));
+
+  // Stable location anchor materialised as intptr args appended to the leaf
+  // call: the holder base address we loaded from (0 at decache slots), the
+  // field byte offset / frame slot offset, and the per-site statepoint id.
+  // These stay greppable even when the decoded pointer value itself is
+  // garbage, letting a fixed slot's OK->BAD transition be traced across GCs.
+  Value* holder_val = (holder != NULL)
+    ? CreatePtrToInt(holder, YuhuType::intptr_type())
+    : LLVMValue::intptr_constant((intptr_t) 0);
+  Value* field_off_val = LLVMValue::intptr_constant((intptr_t) field_off);
+  Value* site_id_val   = LLVMValue::intptr_constant((intptr_t) statepoint_id);
+
+  std::vector<Value*> args;
+  args.push_back(target);
+  args.push_back(msg_val);
+  args.push_back(holder_val);
+  args.push_back(field_off_val);
+  args.push_back(site_id_val);
+    llvm::CallInst* call = CreateCall(func_type, callee, args);
+
+    llvm::LLVMContext &Ctx = getContext();
+    llvm::AttrBuilder AB(Ctx);
+    AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+    llvm::AttributeList Attrs = llvm::AttributeList::get(Ctx, llvm::AttributeList::FunctionIndex, AB);
+    call->setAttributes(Attrs);
+}
+
 // Helpers for accessing the code buffer
 
 Value* YuhuBuilder::code_buffer_address(int offset) {
@@ -919,7 +1000,7 @@ Value* YuhuBuilder::CreateInlineOopForStaticField(ciField* field, const char* na
         load_inst->setOrdering(llvm::AtomicOrdering::SequentiallyConsistent);
     }
     if (UseCompressedOops) {
-        field_value = CreateDecodeHeapOop(load_inst);
+        field_value = CreateDecodeHeapOop(load_inst, mirror_oop, field_offset);
     } else {
         field_value = load_inst;
     }
@@ -1273,7 +1354,58 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     }
 }
 
-Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop) {
+Value* YuhuBuilder::CreateOpaqueOopShift(Value* value, bool left, int shift) {
+  // AArch64: shift the input register by a compile-time constant amount.  $0 is
+  // the output operand, $1 the single input.  Both are 64-bit registers, which
+  // is why the decode side is fed the zero-extended narrowOop and the encode
+  // side the pointer itself (a 64-bit address in aspace 1).
+  std::string asm_string = std::string(left ? "lsl $0, $1, #" : "lsr $0, $1, #") +
+                           std::to_string(shift);
+
+  FunctionType* asm_type = FunctionType::get(YuhuType::intptr_type(),
+                                             {value->getType()}, false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    asm_string,
+    "=r,r",         // out: general purpose register; in: general purpose register
+    true,           // Has side effects: yes -- pin the shift to this point, so it
+                    // is never hoisted above nor sunk below an intervening
+                    // safepoint (that would reintroduce the stale-narrow bug by
+                    // scheduling the narrow's computation instead of folding it)
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+
+  return CreateCall(asm_type, asm_func, std::vector<Value*>{value},
+                    left ? "decoded_oop_addr" : "compressed_oop");
+}
+
+Value* YuhuBuilder::CreateOpaqueBaseSub(Value* oop, intptr_t base) {
+  // AArch64: subtract the narrow-oop base from the pointer.  The base travels
+  // as a register operand rather than an immediate because a 4Gb-aligned base is
+  // not encodable in a single sub immediate field; the constant is not a
+  // pointer, so materialising it costs nothing in GC terms.
+  FunctionType* asm_type = FunctionType::get(YuhuType::intptr_type(),
+                                             {oop->getType(), YuhuType::intptr_type()},
+                                             false);
+  llvm::InlineAsm* asm_func = llvm::InlineAsm::get(
+    asm_type,
+    "sub $0, $1, $2",
+    "=r,r,r",       // out: register; in: the oop register, the base register
+    true,           // Has side effects: yes -- keep the subtraction pinned here
+    false,          // Is align stack: no
+    llvm::InlineAsm::AD_ATT
+  );
+
+  return CreateCall(asm_type, asm_func,
+                    std::vector<Value*>{oop, LLVMValue::intptr_constant(base)},
+                    "heap_oop_delta");
+}
+
+Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop,
+                                        Value* verify_holder,
+                                        int64_t verify_field_off) {
+  Value* result;
   // Check if compressed oops are enabled
   if (UseCompressedOops) {
     // Create a call to the runtime function that handles compressed oop decoding
@@ -1292,24 +1424,46 @@ Value* YuhuBuilder::CreateDecodeHeapOop(Value* compressed_oop) {
     // Convert compressed oop to intptr type
     Value* compressed_as_int = CreateIntCast(compressed_oop, YuhuType::intptr_type(), false);
     
-    // Shift left by the narrow oop shift
-    if (shift > 0) {
-      Value* shifted = CreateShl(compressed_as_int, LLVMValue::intptr_constant(shift));
-      // Add the base address
-      Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
-      Value* result_int = CreateAdd(base_as_int, shifted);
-      return CreateIntToPtr(result_int, YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
+    // Emit the shift opaquely, then fold in the base.
+    //
+    // In this order a single instruction is enough for every compressed-oop
+    // mode, because the base arithmetic no longer needs to be opaque: with the
+    // shift hidden inside the asm there is nothing for the encode side to
+    // cancel, so add/sub of a constant around an opaque value gives the
+    // optimizer no identity to collapse.  The add is also safe to leave in IR --
+    // its only user is the inttoptr below, in this same block -- so no integer
+    // form of the pointer ever escapes the decode site.
+    //
+    // shift == 0 takes the same path: "lsl #0" is a legal move and is still
+    // opaque.
+    Value* decoded_int;
+    if (YuhuBreakNarrowOopEncode) {
+      // See CreateEncodeHeapOop: rebuild the foldable pre-082 decode so that
+      // YuhuCheckNarrowOopInvariant has something to catch.
+      decoded_int = (shift > 0) ? CreateShl(compressed_as_int, LLVMValue::intptr_constant(shift))
+                               : compressed_as_int;
     } else {
-      // If shift is 0, just add to base
-      Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
-      Value* result_int = CreateAdd(base_as_int, compressed_as_int);
-      return CreateIntToPtr(result_int, YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
+      decoded_int = CreateOpaqueOopShift(compressed_as_int, /*left=*/true, shift);
     }
+    if (base != NULL) {
+      decoded_int = CreateAdd(LLVMValue::intptr_constant((intptr_t)base), decoded_int);
+    }
+    result = CreateIntToPtr(decoded_int, YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
   } else {
     // If compressed oops are not used, just return the value as-is (cast to oop*)
-    return CreateIntToPtr(CreateIntCast(compressed_oop, YuhuType::intptr_type(), false), 
+    result = CreateIntToPtr(CreateIntCast(compressed_oop, YuhuType::intptr_type(), false), 
                          YuhuType::oop_addrspace1_type()); // FIXED - object is allocated in heap
   }
+
+  // VerifyOops: check the freshly decoded full-width address right at its
+  // materialisation point.  A stale narrowOop read from a heap field (because
+  // a previous putfield wrote it after its target had already been collected)
+  // decodes to an out-of-heap-range address and is caught here, at the exact
+  // field+offset + bci that produced it -- not at the next getfield or call,
+  // which is what the shared StubRoutines::verify_oop path only surfaces.
+  CreateVerifyOops(result, "yuhu verify decode_heap_oop",
+                   verify_holder, verify_field_off);
+  return result;
 }
 
 Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
@@ -1323,21 +1477,54 @@ Value* YuhuBuilder::CreateEncodeHeapOop(Value* oop) {
     
     address base = Universe::narrow_oop_base();
     int shift = Universe::narrow_oop_shift();
-    
-    // Convert oop pointer to integer
-    Value* oop_as_int = CreatePtrToInt(oop, YuhuType::intptr_type());
-    Value* base_as_int = LLVMValue::intptr_constant((intptr_t)base);
-    
-    // Subtract the base address
-    Value* delta = CreateSub(oop_as_int, base_as_int);
-    
-    // Shift right by the narrow oop shift
-    if (shift > 0) {
-      Value* shifted = CreateLShr(delta, LLVMValue::intptr_constant(shift));
-      return CreateIntCast(shifted, YuhuType::jint_type(), false);
-    } else {
-      return CreateIntCast(delta, YuhuType::jint_type(), false);
+
+    if (YuhuBreakNarrowOopEncode) {
+      // Self-test for YuhuCheckNarrowOopInvariant, and develop-flag only, so it
+      // cannot be enabled in a product build.  Rebuild the pre-082 shape: the
+      // pointer taken apart with a ptrtoint and plain IR shifts, and
+      // deliberately left unmarked.  Combined with the matching decode in
+      // CreateDecodeHeapOop this round trip folds back into an identity again,
+      // which is what the invariant check is there to notice and fail.
+      Value* as_int = CreatePtrToInt(oop, YuhuType::intptr_type());
+      if (base != NULL) {
+        as_int = CreateSub(as_int, LLVMValue::intptr_constant((intptr_t)base));
+      }
+      if (shift > 0) {
+        as_int = CreateLShr(as_int, LLVMValue::intptr_constant(shift));
+      }
+      return CreateIntCast(as_int, YuhuType::jint_type(), false);
     }
+
+    if (base == NULL) {
+      // The ptr addrspace(1) is handed directly to the shift -- deliberately no
+      // CreatePtrToInt here, because an integer form of the pointer would be a
+      // value the optimizer may keep live across a safepoint without GC being
+      // able to relocate it, i.e. the very bug this is fixing.  Truncating to
+      // the narrowOop happens at the store, just after the shift of the
+      // (relocated) pointer.
+      Value* shifted = CreateOpaqueOopShift(oop, /*left=*/false, shift);
+      // Tell YuhuNarrowOopInvariant that this call is the encode a reference
+      // field store is required to sit behind; the check looks for the mark and
+      // not for the asm string, so changing the string here does not silently
+      // turn the safety net off.
+      YuhuNarrowOopInvariant::mark_encode(shifted);
+      return CreateIntCast(shifted, YuhuType::jint_type(), false);
+    }
+
+    // Base-relative mode.  The subtraction has to live inside the asm too, for
+    // exactly the reason above: any other shape needs a ptrtoint of the oop,
+    // and that integer would be live across every safepoint between the getfield
+    // and this putfield -- which is precisely how the stale narrow got written
+    // back into the heap.  The shift can then stay in IR, because it consumes an
+    // opaque, pinned value and so cannot be folded away or scheduled earlier.
+    // Universe::initialize_heap pairs a non-NULL base with shift > 0 (heap
+    // reserved above 32Gb), but shift == 0 is handled correctly as well.
+    Value* delta = CreateOpaqueBaseSub(oop, (intptr_t)base);
+    YuhuNarrowOopInvariant::mark_encode(delta);
+    if (shift > 0) {
+      delta = CreateLShr(delta, LLVMValue::intptr_constant(shift));
+    }
+    return CreateIntCast(delta, YuhuType::jint_type(), false);
   } else {
     // If compressed oops are not used, just return the pointer value cast to appropriate type
     return CreatePtrToInt(oop, YuhuType::intptr_type());

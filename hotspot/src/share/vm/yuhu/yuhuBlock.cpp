@@ -1265,7 +1265,9 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
                 stack_type->isPointerTy() &&
                 UseCompressedOops) {
                 // Call decode_heap_oop to convert narrowOop to oop
-                field_value = builder()->CreateDecodeHeapOop(field_value);
+                field_value = builder()->CreateDecodeHeapOop(field_value,
+                                                             object,
+                                                             field->offset_in_bytes());
             }
         }
 
@@ -1314,6 +1316,19 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
                 field_value, type, basic_type != T_CHAR);
     }
 
+    // Store-side VerifyOops (mirror of the decode-site check).  Verifies the
+    // reference VALUE at the instant it is written into the field, anchored by
+    // holder + offset.  If the stored value already fails is_oop here, the stale
+    // pointer was produced upstream (an under-reported GC root flowing into this
+    // putfield) -- a different ORIGIN than a valid value that later goes stale in
+    // the field because its GC card was never made visible.  Leaf call: no OopMap,
+    // no safepoint, no gc-live contribution.  Gated by VerifyOops (develop flag,
+    // compiled out of product builds), so this costs nothing when not debugging.
+    if (!field->type()->is_primitive_type()) {
+        builder()->CreateVerifyOops(field_value, "yuhu verify putfield_heap_oop",
+                                    object, (int64_t) field->offset_in_bytes());
+    }
+
     // Handle compressed oops for object reference fields
     if (!field->type()->is_primitive_type() && UseCompressedOops) {
         // Encode full pointer to compressed oop (ptr addrspace(1)* -> i32)
@@ -1326,11 +1341,24 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
             PointerType::getUnqual(type),
             "addr");
 
+    // A reference field written under compressed oops is an i32 store, which in
+    // IR is indistinguishable from an int field copy -- and only the reference
+    // case is unsafe, because only its value went through an encode that the
+    // middle-end can cancel.  So hand that knowledge to the IR, where
+    // YuhuNarrowOopInvariant can find the store again after optimization and
+    // check that the encode is still in front of it.  See activity 082.
+    const bool mark_narrow_store = !field->type()->is_primitive_type() && UseCompressedOops;
+
+    llvm::StoreInst *store = NULL;
     if (field->is_volatile()) {
         field_value = builder()->CreateBitCast(field_value, type);
-        builder()->CreateAtomicStore(field_value, addr);
+        store = builder()->CreateAtomicStore(field_value, addr);
     } else {
-        builder()->CreateStore(field_value, addr);
+        store = builder()->CreateStore(field_value, addr);
+    }
+
+    if (mark_narrow_store) {
+        YuhuNarrowOopInvariant::mark_store(store);
     }
 
     if (!field->type()->is_primitive_type()) {

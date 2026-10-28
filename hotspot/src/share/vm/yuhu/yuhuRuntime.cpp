@@ -36,6 +36,9 @@
 #include "yuhu/yuhuRuntime.hpp"
 #include "yuhu/yuhu_globals.hpp"
 #include "interpreter/linkResolver.hpp"
+#include "oops/instanceKlass.hpp"
+#include "memory/universe.hpp"
+#include "gc_interface/collectedHeap.hpp"
 #ifdef TARGET_ARCH_aarch64
 #include "asm/yuhu/yuhu_macroAssembler.hpp"
 #endif
@@ -89,6 +92,34 @@ static void yuhu_monitor_log_init() {
         if (yuhu_monitor_log) { \
             fprintf(yuhu_monitor_log, fmt "\n", ##__VA_ARGS__); \
             fflush(yuhu_monitor_log); \
+        } \
+    } while(0)
+
+// File-based logging for Yuhu VerifyOops oop-verification tracing.
+// Controlled by the -XX:+UnlockDiagnosticVMOptions -XX:YuhuVerifyOopFile=<path>
+// flag: a line is emitted for every oop that reaches verify_oop_wrapper (both
+// OK and BAD), so the history of an address across the decode/decache sites
+// can be reconstructed by grepping this file for the pointer; no trace when
+// the flag is unset. Kept in its own file so the (very hot) per-decode stream
+// does not interleave with the monitor or stack-map traces. Requires the
+// VerifyOops develop flag to also be on, since verify_oop_wrapper early-
+// returns before any logging when VerifyOops is off.
+static FILE* yuhu_verify_oop_log = NULL;
+static int yuhu_verify_oop_log_opened = 0;
+static void yuhu_verify_oop_log_init() {
+    if (!yuhu_verify_oop_log_opened) {
+        yuhu_verify_oop_log_opened = 1;
+        if (YuhuVerifyOopFile != NULL) {
+            yuhu_verify_oop_log = fopen(YuhuVerifyOopFile, "a");
+        }
+    }
+}
+#define YUHU_VERIFY_OOP_LOG(fmt, ...) \
+    do { \
+        yuhu_verify_oop_log_init(); \
+        if (yuhu_verify_oop_log) { \
+            fprintf(yuhu_verify_oop_log, fmt "\n", ##__VA_ARGS__); \
+            fflush(yuhu_verify_oop_log); \
         } \
     } while(0)
 
@@ -509,6 +540,53 @@ void YuhuRuntime::dump(const char *name, intptr_t value) {
 
 bool YuhuRuntime::is_subtype_of(Klass* check_klass, Klass* object_klass) {
   return object_klass->is_subtype_of(check_klass);
+}
+
+// Leaf helper reached from Yuhu JIT-compiled code when -XX:+VerifyOops is
+// set.  Emitted at every decache slot holding an oop (locals + expression
+// stack, before each java_call / vm_call / safepoint_poll / deopt_call) and
+// at every CreateDecodeHeapOop result.  Because the caller treats this as a
+// leaf call, we must not safepoint, allocate, or throw.  The actual check
+// uses oopDesc::is_oop(true) which is the same plausibility test the
+// shared StubRoutines::verify_oop aarch64 stub performs (object alignment,
+// Universe::verify_oop_mask/bits equality, non-null klass), just done in
+// C++ instead of hand-written assembly so no wrapper stub or non-standard
+// register-ABI juggling is needed.  A failed check aborts with a tty line
+// naming the emission site plus the offending address; the ShouldNotReachHere
+// path produces a hs_err with the caller's return PC, which maps to the
+// exact statepoint id / bci in the nmethod disassembly.
+void YuhuRuntime::verify_oop_wrapper(oop target, const char* msg,
+                                     intptr_t holder, int64_t field_off,
+                                     int64_t site_id) {
+  if (!VerifyOops) return;
+  if (target == NULL) return;
+  bool ok = target->is_oop(true);
+  // Emit one line per visit regardless of outcome.  The decoded oop address
+  // is NOT a reliable grep key: a stale read is often the OLD (now-dead)
+  // address of the referent, but a genuinely corrupt decode produces a number
+  // with no prior history.  The stable anchor is the (site_id, holder,
+  // field_off) triple -- grep the log by that triple to watch a fixed slot
+  // flip OK->BAD across GCs even when the pointer value itself is garbage.
+  YUHU_VERIFY_OOP_LOG("[yuhu-verify] site=%lu %s holder=" PTR_FORMAT " off=%ld oop=" PTR_FORMAT " %s",
+                      (unsigned long) site_id,
+                      msg != NULL ? msg : "?",
+                      p2i((address) holder),
+                      (long) field_off,
+                      p2i((address) target),
+                      ok ? "OK" : "BAD");
+  if (!ok) {
+    tty->print_cr("Yuhu VerifyOops: site=%lu %s holder=" PTR_FORMAT " off=%ld broken oop " PTR_FORMAT,
+                  (unsigned long) site_id,
+                  msg != NULL ? msg : "?",
+                  p2i((address) holder),
+                  (long) field_off,
+                  p2i((address) target));
+    // A broken oop can arrive that way for many reasons, and nothing printed
+    // here can distinguish them, so report the fact and trap: the hs_err from
+    // ShouldNotReachHere carries the caller's return PC, which maps to the
+    // exact statepoint id / bci in the nmethod disassembly.
+    ShouldNotReachHere();
+  }
 }
 
 void YuhuRuntime::debug_stack_overflow_check(JavaThread* thread,
