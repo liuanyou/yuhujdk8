@@ -75,6 +75,23 @@ class YuhuBuilder;
 // scan runs on the pre-RS4GC IR at both entry points below; a scan of the
 // post-RS4GC artifact would find no marked store at all and report that as clean.
 //
+// Marks can also be lost inside the middle-end itself, and that has been observed
+// on a real workload.  A lost mark has two causes with opposite meaning, so
+// check_after_middle_end() always follows each site into the clone through
+// CloneModule's value map and tells them apart:
+//
+//   deleted   -- the store is gone.  It cannot write a stale narrowOop, because
+//     it does not write at all; the missing field write is a different question;
+//   rewritten -- the store is still there and still writes but carries no mark,
+//     so the scan below never saw it.  This is the only way the check can be
+//     blind, so such stores are walked by def chain individually and a violation
+//     among them counts like any other.
+//
+// That classification is the deciding part and runs on every compilation.  The
+// printing of it is gated on YuhuTraceIRCompilation, because a mark lost on a
+// block that proved unreachable is ordinary optimizer behaviour and shows up
+// several times in a normal application start-up; violations are never gated.
+//
 // The check is then: for every marked store, the def chain of the stored value
 // must not reach a narrow (i32) load out of the heap without crossing a marked
 // encode.  Reach one and the encode is gone -- report it, and fail the
@@ -114,6 +131,9 @@ class YuhuNarrowOopInvariant : public AllStatic {
   // leaves the original IR untouched.  This exists so that a violation can
   // turn into a clean ciEnv failure: the real pipeline runs later, inside the
   // ORC IR-transform callback, where there is no ciEnv left to record against.
+  // Whenever a mark did not survive the prefix it is classified, and any store
+  // that was rewritten without its mark is re-checked by def chain (see the class
+  // comment).  The classification always runs; its reporting is trace-gated.
   static unsigned check_after_middle_end(llvm::Function* function);
 };
 

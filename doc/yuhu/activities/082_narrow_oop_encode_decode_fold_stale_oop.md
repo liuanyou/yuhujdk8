@@ -374,7 +374,8 @@ default-on.
    *unconditionally* (the dumped IR is identical whether the net is on or off — only the checking
    is flag-gated):
    - `!yuhu.narrow_oop_store` on the putfield/putstatic `StoreInst`
-     (`yuhuBlock.cpp:1348-1362`, marked when `!field->type()->is_primitive_type() && UseCompressedOops`);
+     (`yuhuBlock.cpp:1348-1362`, marked when `!field->type()->is_primitive_type() && UseCompressedOops`)
+     — and *only* there; the `aastore` element store is not marked, see §11 item 3;
    - `!yuhu.narrow_oop_encode` on the encode's inline-asm call (`yuhuBuilder.cpp:1510`, `:1523`).
 
    Marks — not pattern-matching on the asm string — because changing the asm string must not be
@@ -413,16 +414,66 @@ the observer saw 0 marked stores (the poison emits no marks) while the deciding 
 violations, and on the clean run both agree store-for-store. Its value is that a clone/observer
 mismatch would mean cloning or the pass split changed the answer.
 
-### 9.4 The check cannot go blind silently
+### 9.4 The check cannot go blind silently — and a count is not an answer
 
-- If a pass rebuilds a marked store and the mark is lost, a **warning** names the count and says a
-  clean result for that module is not proof (`yuhuInvariants.cpp:319-327`). Report-only, because a
-  pass may legitimately delete a store that turned out to be dead.
-- If marked encodes disappear, a second **warning** asks for a human look at the dumped IR
-  (`yuhuInvariants.cpp:334-342`): a sideeffect asm can only vanish by folding, or by deletion of
-  an unreachable block — the latter is not the bug.
-- With `-XX:+YuhuTraceIRCompilation` a line always prints the store/encode counts seen and kept
-  plus the violation count, which proves the check ran; a silent pass cannot.
+A mark that vanishes *inside* the middle-end says something about the check, not about the bug. The
+first version of this reporting only counted the losses (`1 of 15 reference-field store mark(s)
+vanished while module normal was being optimized. ... find which pass dropped the mark.`) and it
+**did** fire on a real workload — but it could not answer the question it told the reader to go and
+ask, because a vanished mark has two causes with opposite meaning and a count cannot tell them
+apart:
+
+- **deleted** — the `StoreInst` was destroyed. It writes nothing, so it cannot write a stale
+  narrowOop; this invariant is not the issue. A live-looking heap field write disappearing is a bug
+  of its own, but the IR dump answers it, not this net.
+- **rewritten** — the store is still there and still writes, but no longer carries the mark, so
+  `scan()` never looked at it. **This is the only way the check can report clean without having
+  seen the store**, and a warning that merely says "go find out which" leaves a real fold installed.
+
+So `check_after_middle_end` now follows every marked site into its own clone. In LLVM 20,
+`CloneModule(M, vmap)` (`Transforms/Utils/Cloning.h:51`) fills a `ValueToValueMapTy`, which is
+`ValueMap<const Value*, WeakTrackingVH>` (`Transforms/Utils/ValueMapper.h:37`): the entries null
+themselves out when the cloned instruction is destroyed, which is precisely the deletion signal,
+and no dangling pointer is ever read. Each site is then classified (`yuhuInvariants.cpp:285-303`,
+`MarkFate`): missing from the map or a nulled handle → *deleted*; present with the metadata →
+*kept*; present without it → *rewritten*.
+
+Report shape, printed only when a mark was actually lost (`:474-504`):
+
+```
+Yuhu narrowOop invariant: reference-field store marks in module normal after the middle-end: 14 kept, 1 deleted, 0 rewritten without a mark
+    deleted in <mangled fn name> block <label>: store i32 ... , !yuhu.narrow_oop_store
+    deleted stores write nothing, so they cannot store a stale narrowOop; but if the field write
+    is missing from the installed code that is a separate bug -- check this method in the IR dump (-XX:+YuhuDumpIRToFile)
+```
+
+The encodes get the same three-way accounting (`:496-504`). They are reported and *not* acted on: an
+encode is sideeffect asm, so only a fold or the deletion of a block that proved unreachable can
+remove it, the two look identical in the value map, and the def-chain walk — which stops at *any*
+call, marked or not — is what decides.
+
+A *rewritten* store is the interesting one and is handled there and then: its def chain is walked
+without the mark (`:342-351`) and anything it finds is added to the deciding total, so it fails the
+compilation exactly like a marked violation. The report says how many were re-checked:
+`rewritten stores were re-checked by def chain without the mark: N violation(s)`.
+
+None of this is paid for on the common path: a site holds one `llvm::Instruction*` into the original
+module (which outlives the clone) and all naming/printing happens at report time (`print_lost_site`,
+`:263`), capped at 8 lines per category, so a pathological method cannot flood the log.
+
+With `-XX:+YuhuTraceIRCompilation` the summary line always prints both totals and how many kept
+their mark, which proves the check ran — a silent pass cannot:
+`... 15 reference-field store(s) (14 still marked) and 15 encode(s) (14 still marked) checked after
+InstCombine+SimplifyCFG in module normal, 0 violation(s)`.
+
+**Reporting is trace-gated; the deciding is not.** A mark lost to an unreachable block is ordinary
+optimizer behaviour, and on a real application it prints several times per start-up, so the kept /
+deleted / rewritten lines and their per-site detail appear only under `-XX:+YuhuTraceIRCompilation`
+(`yuhuInvariants.cpp:338`, `:356`, `:481`, `:506`). What runs regardless: the classification itself
+and the def-chain re-scan of every `rewritten` store, whose violations still count into the deciding
+total and still print and still refuse the compilation with no flag set. So the blind spot is still
+closed by default; what is quiet by default is the announcement that a mark vanished — see §9.10 for
+when that quiet costs something.
 
 ### 9.5 It closes the §6.3 hole, which is the argument for having it
 
@@ -444,6 +495,10 @@ slowdebug/debug guarantee, not a shipping one; that is worth deciding about deli
   something to catch. Poisoning only the encode does not reproduce the fold — the opaque `lsl`
   decode still blocks it. Never enable outside an experiment.
 
+Neither flag gates what a *violation* does, and violations print unconditionally. The loss reporting
+of §9.4 is gated on the pre-existing `-XX:+YuhuTraceIRCompilation`, which is a `product` diagnostic
+flag, so it exists in product builds too.
+
 ### 9.7 Verification
 
 One purpose-built workload (a method that reads a narrowOop field into a local, allocates between
@@ -460,6 +515,7 @@ workload lived in `/tmp`.
 | C | B + `-XX:-YuhuCheckNarrowOopInvariant` | **did not crash in 8 runs** (5 plain, 3 with `VerifyOops`): all exit 0 with the poisoned code installed. An earlier run of this configuration *did* SIGSEGV at `# j NI.main(...)+79`, and that crash is not reproducible now — withdrawn as evidence. What the poisoned-store IR actually shows is in §9.8 |
 | D | javac in-process over `test_yuhu/com/example/*.java`, `-J-XX:YuhuCompileOnlyOf='com.sun.tools.javac.*'`, threshold 1 | 250 invariant lines over 125 installs, largest method 5 stores / 5 encodes, **0 violations, 0 refusals, 0 warnings** → no false positive found. The run then aborted with `SEGV_ACCERR` in `JavacParser.typetag` inside `ThreadLocalStorage::thread()`; **it aborts identically with `-XX:-YuhuCheckNarrowOopInvariant`**, so that is a pre-existing, unrelated defect worth its own activity, not caused by the check |
 | perf | A vs C alternating | inside noise at this scale; not a meaningful measurement |
+| E | A and B re-run after §9.4's classification landed, both with `-XX:+YuhuLLVMInlining` | A: exit 0, `NI_DONE`, 0 violations, **no loss line**, and the trace line reports every site `still marked` — so the value-map walk executes and resolves correctly on every site. B: exit 0, 300 violation reports / 290 refusals / 0 installs, no loss line (the poison emits no marks, so there is nothing to lose) |
 
 ### 9.8 What the poison run says, and the check's real coverage limit
 
@@ -484,19 +540,103 @@ builder's IR that the deciding check refused *was* foldable. Two consequences:
    scan must be re-anchored there. Recorded as open item 7.
 2. **The store mark is not durable.** Because RS4GC drops it, a post-RS4GC scan would find *no*
    marked store in any method and report every module clean — the most convincing possible false
-   green. That is why §9.4's vanish-warning exists, and it is the single most important thing this
-   session learned about the file pair.
+   green. That is why §9.4 classifies every lost mark instead of counting them, and it is the single
+   most important thing this session learned about the file pair.
 
 `make CONF=macosx-aarch64-normal-server-slowdebug hotspot` clean (15 s incremental); the rebuilt
 `libjvm.dylib` was republished to `build/macosx-aarch64-normal-server-slowdebug/jdk/lib/server/`
 and re-signed. **Note:** `build/.../images/j2sdk-bundle/jdk1.8.0.jdk/Contents/Home/jre/lib/server/libjvm.dylib`,
-which `test_yuhu/*.sh` scripts load, was *not* touched and is stale relative to this build.
+which `test_yuhu/*.sh` scripts load, was *not* touched at that point and was stale relative to this
+build. It has since been republished and re-signed as well — a run from the `j2sdk-bundle` path (as in
+§9.9) loads that copy, so both trees have to be refreshed for a rebuild to be observable.
 
 Build gotcha found on the way (worth recording for every future LLVM-side file): a raw LLVM header
 included *after* `llvmHeaders.hpp` pulls `<cassert>`, which replaces the two-argument HotSpot
 `assert(p, msg)` macro that `llvmHeaders.hpp` takes care to restore, and then `ci/*.hpp` fails to
 compile with *too many arguments provided to function-like macro invocation*. HotSpot headers
 first, raw LLVM headers last (`yuhuInvariants.cpp:26-46`).
+
+### 9.9 It fired on a real application, which is what forced §9.4
+
+The first chance the anti-blindness reporting got outside the purpose-built workload was an
+application run, not a test:
+
+```
+<images>/j2sdk-bundle/jdk1.8.0.jdk/Contents/Home/bin/java \
+  -XX:+UseYuhuInt -XX:+UseYuhuCompiler -XX:TieredStopAtLevel=6 -XX:+YuhuLLVMInlining -jar mhdcrm-app.jar
+
+Yuhu narrowOop invariant: 1 of 15 reference-field store mark(s) vanished while module normal was being optimized. ...
+Yuhu narrowOop invariant: 1 of 15 compressed-oop encode(s) are gone from module normal after the middle-end. ...
+```
+
+What that says, and what it does not: one module of the application reached the check with 15 marked
+reference-field stores and 15 marked encodes, and exactly one of each did not survive
+InstCombine+SimplifyCFG. No violation line was printed, so the check found no stale narrow feeding a
+store it could see. Nothing in those two lines distinguishes the two readings of the disappearance,
+which is why the count-only version was replaced by the classification in §9.4. The likely benign
+reading is one block that proved unreachable taking its store and its encode with it — the pair going
+down together is what suggests a shared region rather than two unrelated events — but *likely* is not
+a guarantee, and the rewritten-store case is precisely the one a count cannot see. Two other notes
+from the same exchange: the run used `-XX:+YuhuLLVMInlining`, which is what the earlier local
+validations had not been exercising; and the copy of `libjvm.dylib` under
+`images/j2sdk-bundle/.../Home/jre/lib/server/` is what such a run actually loads, so it has to be
+republished along with `jdk/lib/server/` or the observation is being made on an older build.
+
+### 9.10 What a `deleted` line means: the regex case, resolved
+
+Re-running the application on the classifying build produced:
+
+```
+    deleted    in java.util.regex.Pattern::compile_t1793244976078 block not_zero136:
+      store i32 %252, ptr addrspace(1) %addr140, align 4, !yuhu.narrow_oop_store
+deleted in <the encode of the same value, same block>  !yuhu.narrow_oop_encode
+... 14 kept, 1 deleted, 0 rewritten without a mark ... 0 violation(s)
+```
+
+`0 rewritten` + `0 violation(s)` is what makes this an easy case for the invariant: the net never
+lost sight of a live store. The remaining question belonged to §9.4's *deleted* reading — was that
+arm genuinely unreachable? Reproduced locally (no application needed: `Pattern` internals alone, with
+`-XX:CompileCommand=yuhuonly,java.util.regex.Pattern.compile -XX:YuhuComplexityThreshold=1
+-XX:+YuhuDumpIRToFile`), and replaying the two passes separately with stock `opt` gives the mechanism:
+
+- **`Pattern::expr`, block `not_zero`** — the arm is guarded by `%39 = icmp ne ptr addrspace(1)
+  %local_5_, null`, and the SSA for that local is `%local_5_ = phi [null, %no_exception],
+  [%local_5_12, %no_exception72]` with `%local_5_12 = phi [null, %no_exception], [%local_5_12,
+  %no_exception72]`: every non-self incoming is `null`, so the value is *provably* null and the
+  icmp folds to `false`. The putfield the builder emitted for a null-valued local is dead code.
+  InstCombine alone is enough (with `instcombine` only, the store marks in that module go 2 → 0;
+  `simplifycfg` alone changes nothing).
+- **`Pattern::group0`, block `bci_792`** — the arm is guarded by `%result == 1` where `%result` flows
+  from `%nonnull_result = phi i32 [1, %is_instance], [2, %not_instance]`, i.e. an **inlined
+  `instanceof`** whose operand's type is statically known; it folds to the other constant and the
+  putfield's region becomes unreachable.
+
+Fingerprint to remember: **a store and its encode disappearing together, from the same block, is
+arm deletion** — a fold would consume the encode and leave the store (that is §9.8's shape), and a
+rebuild would show up as `rewritten`. Both cases above were also behavior-neutral: a regex battery
+(7 patterns × 300 rounds, groups and `matches()`) produced byte-identical output against the same
+JVM at `-XX:TieredStopAtLevel=4 -XX:-UseYuhuCompiler` and against `-Xint`.
+
+What `deleted` still does **not** prove, and the two-minute check on any new line of this shape: a
+count of erased dead code is reassuring only if the unreachability was established by a *constant*.
+This repository has a documented mechanism (see the `ni:1` non-integral-address-space note: a
+constant-derived `ptr addrspace(1)` reaching a branch condition) by which an `icmp ne <oop>, null`
+folds to **poison** instead of to `false`, `br i1 poison` makes *both* arms unreachable, and
+reachable code — putfields, statepoints, deopt bundles, whole inlined bodies — is physically erased.
+In the `expr` replay above, poison is indeed present (`phi ptr addrspace(1) [poison, %no_exception]`,
+`br i1 poison`), but only *inside* the subtree that the already-sound `icmp ne null, null → false`
+fold had cut off: the deciding proof was the null-only phi, not the poison. So the procedure for
+every new `deleted` report is: `-XX:+YuhuDumpIRToFile`, replay `opt -passes=instcombine` on the
+pre-opt module, and look at the *guard of the named block*. Guard folds on a constant (null local,
+known klass, inlined instanceof) → dead code, correct. Guard folds to `poison`, or the block still
+had a live predecessor → that is the `ni:1` erasure, a lost field write, and a different activity.
+The classifier cannot make this call by itself: it knows a store vanished, not why.
+
+Verified after the reporting became trace-gated, on this same `Pattern` reproduction: without
+`-XX:+YuhuTraceIRCompilation` a full run prints **no** loss line at all and still finishes correct
+(`PD_DONE acc=500000`); with it, the `0 kept, 2 deleted` report and the per-site lines return;
+with the poison on and **no** trace flag, 41 refusals still print and `Pattern::compile` is never
+installed while the program still computes the right answer through the C1/C2 fallback.
 
 ## 10. Cleanup Done Alongside
 
@@ -525,9 +665,13 @@ instruction:
    would have caught, which is the argument for having it instead of relying on review.
 2. **`test_yuhu/scoped_repro/run_scoped.sh:28`** still passes the deleted
    `-XX:+YuhuVerifyOopFields`, so the script aborts with *Unrecognized VM option*.
-3. **Array element paths** (`aastore` / `aaload`) are covered by construction — they go through
-   the same two helpers — but were never exercised, because the reproducer's compile scope did
-   not include array-heavy methods.
+3. **Array element paths** (`aastore` / `aaload`) are covered by the *fix* — they go through the same
+   two helpers — but **not by the check**: `mark_store` is called only from the field-write path
+   (`yuhuBlock.cpp:1361`), while `YuhuTopLevelBlock::do_astore` encodes at `yuhuTopLevelBlock.cpp:1225`
+   and stores at `:1241` without marking, so `scan()` never inspects an array element store and a
+   folded encode there would be reported as clean. The encode *is* marked (the mark lives in the
+   encode helper), so the def-chain walk would still stop correctly at it — the gap is only that the
+   store is not a scan starting point. Closing it is two lines at `:1241`.
 4. **Machine-code re-verification is a manual step.** Dump the disassembly of the fixed build and
    confirm the old `[sp, #24]` reference spill slot is gone and the `finally` restore now reads
    `ldr` from the oop slot → `lsr #3` → `str w?, [x?, #128]`. See
@@ -554,6 +698,24 @@ instruction:
 9. **Unrelated crash surfaced while testing:** in-process javac over `test_yuhu/com/example/*.java`
    with threshold 1 aborts (`SEGV_ACCERR` in `ThreadLocalStorage::thread()` called from
    `JavacParser.typetag`) identically with and without the new check — needs its own activity.
+10. ~~**The two loss-reporting branches are untested locally.**~~ **Exercised** — a `Pattern`
+    compilation deleted a marked store and its encode, both branches printed, the classification was
+    right, and the mechanism was traced to a provably-dead arm (§9.10). What is still not exercised
+    locally is a `rewritten` site (a live store that lost its mark), which is the only case the net
+    cannot see without the re-scan.
+11. **A `deleted` reference-field store is only benign once its unreachability has been checked** —
+    see §9.10 for the procedure and for the `ni:1` poison mechanism that can erase *reachable*
+    regions through the same code path. If a `deleted` report ever turns out to sit under a guard
+    that folded to poison rather than to a constant, that is a lost heap assignment and needs its
+    own activity.
+12. **The loss reporting is silent by default (§9.4), and the cost of that is specifically the
+    poison class.** A violation is never silent — it prints and refuses with no flag. But a *live*
+    region erased by a `poison`-folded branch (§9.10) is reported only as a lost mark, and those now
+    need `-XX:+YuhuTraceIRCompilation` to appear. So the workflow that catches that class is
+    opt-in: when regex/collector/framework code behaves as if an assignment did not happen, re-run
+    once with the trace flag and grep `after the middle-end`. If that class ever needs to be caught
+    automatically, the check to add is not a mark count — it is an assertion that no branch condition
+    in the module derives from a constant `inttoptr` into `ptr addrspace(1)`.
 
 ## 12. Files and Artifacts
 
@@ -572,7 +734,9 @@ Modified for the invariant check (§9), later the same day:
   Shark-lineage value tracking (`YuhuCompileInvariants` / `YuhuTargetInvariants`) and were left
   untouched — open item 1's "contains no check" was about the file, not about them.
 - `hotspot/src/share/vm/yuhu/yuhuInvariants.cpp` — mark helpers (`:80`, `:88`), the def-chain walk
-  (`:142`), `scan` (`:234`), the clone-based deciding check with the two warnings (`:264`).
+  (`:142`), `scan` (`:370`), the clone-based deciding check (`:400`) and the mark-retention
+  classification that replaced its two count-only warnings (`MarkedSite`/`collect_marked`/`classify`/
+  `classify_sites`, `:239-358`).
 - `hotspot/src/share/vm/yuhu/yuhu_globals.hpp:114-121` — `YuhuCheckNarrowOopInvariant` (true),
   `YuhuBreakNarrowOopEncode` (false), both `develop`.
 - `hotspot/src/share/vm/yuhu/yuhuBlock.cpp:1348-1362` — capture the putfield/putstatic `StoreInst`
