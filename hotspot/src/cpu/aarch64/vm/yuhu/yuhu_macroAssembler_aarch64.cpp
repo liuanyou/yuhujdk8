@@ -2565,7 +2565,11 @@ address YuhuMacroAssembler::write_insts_g1_write_barrier_pre(YuhuRegister obj,
     write_inst_regs("add %s, %s, x8", tmp, tmp); // tmp := tmp + *buffer_adr
 
     // Record the previous value
-    write_inst_regs("str, %s, [%s, #0]", pre_val, tmp);
+    // Matches MacroAssembler::g1_write_barrier_pre: str(pre_val, Address(tmp, 0)).
+    // The mnemonic takes no operand, so no comma may follow it -- machine_code()
+    // hands the rendered string to the MC parser, which aborts the VM during
+    // YuhuInterpreter::initialize() on anything it cannot parse.
+    write_inst_regs("str %s, [%s, #0]", pre_val, tmp);
     write_inst_b(done);
 
     pin_label(runtime);

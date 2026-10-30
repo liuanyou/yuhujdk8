@@ -231,7 +231,13 @@ public:
         return (YuhuRegister) (reg - (xzr - wzr));
     }
     static uint64_t bit(YuhuRegister reg, bool should_set = true) {
-        assert(reg >= x0 && reg <= x30, "Unknown register");
+        // A caller that does not need the bit passes a placeholder for `reg` --
+        // write_insts_g1_write_barrier_pre builds its push/pop mask with
+        // bit(obj, obj != noreg), so bit(noreg, false) is a normal call.  Only a
+        // bit that is really being set needs a real register, and encoding()
+        // asserts that.  Matches MacroAssembler::bit, which takes no register
+        // validation: return (need) ? (1 << r) : 0.
+        assert((reg >= x0 && reg <= x30) || reg == noreg, "Unknown register");
         return should_set ? 1 << encoding(reg) : 0;
     }
     static int encoding(YuhuRegister reg) {
