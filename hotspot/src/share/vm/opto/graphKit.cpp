@@ -3226,8 +3226,10 @@ Node* GraphKit::insert_mem_bar_leading_store(int opcode, Node* precedent) {
   mb->set_req(TypeFunc::Memory,  reset_memory());
   Node* membar = _gvn.transform(mb);
 #ifdef ASSERT
-  // Set _pair_idx to this node's idx so trailing membar can match it
-  mb->as_MemBar()->set_pair_idx(mb->_idx);
+  // Set _pair_idx on the node we keep: GVN may have returned an existing
+  // barrier instead of mb, and the trailing half is compared against this
+  // index by MemBarNode::trailing_membar().
+  membar->as_MemBar()->set_pair_idx(membar->_idx);
 #endif
   set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
   set_all_memory_call(membar);
@@ -3255,8 +3257,14 @@ Node* GraphKit::insert_mem_bar_trailing_store(int opcode, Node* precedent) {
   if (leading != NULL && leading->is_MemBar() && leading->as_MemBar()->leading_store()) {
     mb->set_pair_idx(leading->as_MemBar()->pair_idx());
   }
+  uint pair_idx = mb->pair_idx();
 #endif
   Node* membar = _gvn.transform(mb);
+#ifdef ASSERT
+  // GVN may have returned an existing barrier; carry the pair index over to the
+  // node that is actually kept in the graph.
+  membar->as_MemBar()->set_pair_idx(pair_idx);
+#endif
   set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
   set_all_memory_call(membar);
   return membar;
@@ -3271,8 +3279,8 @@ Node* GraphKit::insert_mem_bar_leading_load_store(int opcode, Node* precedent) {
   mb->set_req(TypeFunc::Memory,  reset_memory());
   Node* membar = _gvn.transform(mb);
 #ifdef ASSERT
-  // Set _pair_idx to this node's idx so trailing membar can match it
-  mb->as_MemBar()->set_pair_idx(mb->_idx);
+  // Set _pair_idx on the node we keep (see insert_mem_bar_leading_store).
+  membar->as_MemBar()->set_pair_idx(membar->_idx);
 #endif
   set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
   set_all_memory_call(membar);
@@ -3300,8 +3308,14 @@ Node* GraphKit::insert_mem_bar_trailing_load_store(int opcode, Node* precedent) 
   if (leading != NULL && leading->is_MemBar() && leading->as_MemBar()->leading_load_store()) {
     mb->set_pair_idx(leading->as_MemBar()->pair_idx());
   }
+  uint pair_idx = mb->pair_idx();
 #endif
   Node* membar = _gvn.transform(mb);
+#ifdef ASSERT
+  // GVN may have returned an existing barrier; carry the pair index over to the
+  // node that is actually kept in the graph.
+  membar->as_MemBar()->set_pair_idx(pair_idx);
+#endif
   set_control(_gvn.transform(new (C) ProjNode(membar, TypeFunc::Control)));
   set_all_memory_call(membar);
   return membar;

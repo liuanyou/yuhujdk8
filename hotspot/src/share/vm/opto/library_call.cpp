@@ -2621,6 +2621,15 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
 
   Node* p = NULL;
   Node* store = NULL;
+  // Leading release barrier of a volatile store.  It is upgraded to a
+  // LeadingStore barrier (the head of a barrier pair) further down only if the
+  // access was not lowered into the heap/native diamond, because in that shape
+  // the trailing barrier is anchored on the diamond merge and the arm-local
+  // store does not dominate it, which leaves the pair with no legal schedule
+  // (PhaseCFG::find_deepest_input rejects unordered input blocks).
+  Node* leading_bar = NULL;
+  // Set when the volatile store is created inside the heap arm of that diamond.
+  bool store_in_diamond = false;
   if (is_volatile) {
     // We need to emit leading and trailing CPU membars (see below) in
     // addition to memory membars when is_volatile. This is a little
@@ -2631,7 +2640,7 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
     need_mem_bar = true;
     // For Stores, place a memory ordering barrier now (before store).
     if (is_store)
-      insert_mem_bar_leading_store(Op_MemBarRelease);
+      leading_bar = insert_mem_bar(Op_MemBarRelease);
   }
 
   // Memory barrier to prevent normal and 'unsafe' accesses from
@@ -2712,6 +2721,10 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
         // of it. So we need to emit code to conditionally do the proper type of
         // store.
 
+        // The store created below lives in one arm of this diamond while the
+        // trailing barrier will be anchored on its merge, so it cannot serve as
+        // the barrier's precedent.
+        store_in_diamond = true;
         IdealKit ideal(this);
 #define __ ideal.
         // QQQ who knows what probability is here??
@@ -2730,25 +2743,20 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
           // For volatile stores, use release memory order to satisfy aarch64.ad's assert
           if (is_volatile) {
             Node* ideal_store = __ store_release(__ ctrl(), adr, val, type, alias_type->index());
-            // Store the Store node for later use as precedent in trailing membar
-            // In IdealKit, the Store node is managed internally, but we need it for the membar
-            // We'll get it from memory state after final_sync
-            (void) ideal_store; // Store node is in IdealKit's memory state
+            // Not used as a barrier precedent: this store sits on the native arm
+            // of the diamond, so it does not dominate the merge the trailing
+            // barrier is anchored on.
+            (void) ideal_store; // Owned by IdealKit's memory state
           } else {
             __ store(__ ctrl(), adr, val, type, alias_type->index(), false);
           }
         } __ end_if();
         // Final sync IdealKit and GraphKit.
         final_sync(ideal);
-        // After final_sync, get the Store node from memory state for trailing membar
-        // The Store node should be the memory state at the alias index
-        if (is_volatile && is_store && store == NULL) {
-          Node* mem = memory(alias_type->index());
-          // The memory state should be the Store node we just created
-          if (mem->is_Store()) {
-            store = mem;
-          }
-        }
+        // control() is now the merge of the diamond.  The heap-arm store is not
+        // an input of it (the native arm reaches the merge without it), so this
+        // access keeps standalone barriers; the native-arm store is deliberately
+        // not captured either, since it is on the other arm.
 #undef __
       }
     }
@@ -2760,11 +2768,29 @@ bool LibraryCallKit::inline_unsafe_access(bool is_native_ptr, bool is_store, Bas
       // Pass load node as precedent to ensure membar follows the load
       insert_mem_bar_trailing_load(Op_MemBarAcquire, p);
     else {
-      // Volatile store: insert trailing membar after store
-      // Pass store node as precedent to ensure membar follows the store
-      // For IdealKit case, store should be set from memory state after final_sync
-      assert(store != NULL, "store should not be NULL for volatile store");
-      insert_mem_bar_trailing_store(Op_MemBarVolatile, store);
+      // Volatile store: insert trailing membar after store.
+      // The store may only be used as the barrier's precedent when it dominates
+      // control(); that fails for the heap/native diamond above.  Leading and
+      // trailing kinds must be decided together: aarch64.ad pairs a LeadingStore
+      // release barrier with its TrailingStore volatile barrier and cannot work
+      // with half a pair (unnecessary_release() follows the pairing).
+      // Ordering does not depend on the precedent: the barrier's memory input is
+      // the merge of all slices, which already contains the store's memory state.
+      bool pair_barriers = !store_in_diamond
+                           && leading_bar != NULL
+                           && store != NULL && store->is_Store();
+      if (pair_barriers) {
+        MemBarNode* lb = leading_bar->as_MemBar();
+        lb->set_leading_store();
+#ifdef ASSERT
+        lb->set_pair_idx(lb->_idx);
+#endif
+        insert_mem_bar_trailing_store(Op_MemBarVolatile, store);
+      } else {
+        assert(store == NULL || store->is_Store() || store->is_top(),
+               "volatile store should be a Store or top");
+        insert_mem_bar(Op_MemBarVolatile);
+      }
     }
   }
 

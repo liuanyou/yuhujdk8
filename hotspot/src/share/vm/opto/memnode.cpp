@@ -2628,9 +2628,12 @@ MemBarNode* StoreNode::trailing_membar() const {
           trailing_mb = u->as_MemBar();
 #ifdef ASSERT
           Node* leading = u->as_MemBar()->leading_membar();
-          assert(leading->Opcode() == Op_MemBarRelease, "incorrect membar");
-          assert(leading->as_MemBar()->leading_store(), "incorrect membar pair");
-          assert(leading->as_MemBar()->trailing_membar() == u, "incorrect membar pair");
+          assert(leading != NULL, "trailing membar without a leading half");
+          if (leading != NULL) {
+            assert(leading->Opcode() == Op_MemBarRelease, "incorrect membar");
+            assert(leading->as_MemBar()->leading_store(), "incorrect membar pair");
+            assert(leading->as_MemBar()->trailing_membar() == u, "incorrect membar pair");
+          }
 #endif
         } else {
           assert(u->as_MemBar()->standalone(), "");
@@ -3065,7 +3068,14 @@ MemBarNode* MemBarNode::trailing_membar() const {
         multis.pop();
       }
     } while (multis.size() > 0);
-  } while (!trailing->is_MemBar() || !trailing->as_MemBar()->trailing());
+  } while (trailing != NULL &&
+           (!trailing->is_MemBar() || !trailing->as_MemBar()->trailing()));
+
+  if (trailing == NULL) {
+    // Every path from this leading barrier was walked and none of them ends on
+    // a trailing barrier: this membar has no pair.  Callers must not elide.
+    return NULL;
+  }
 
   MemBarNode* mb = trailing->as_MemBar();
   assert((mb->_kind == TrailingStore && _kind == LeadingStore) ||

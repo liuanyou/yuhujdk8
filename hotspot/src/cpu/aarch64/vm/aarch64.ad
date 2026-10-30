@@ -1276,11 +1276,20 @@ bool unnecessary_release(const Node *n)
     return false;
   } else {
     Node* trailing = barrier->trailing_membar();
+    // A leading barrier whose trailing half is missing cannot be elided: let
+    // the real membar be emitted rather than following an incomplete pair.
+    if (trailing == NULL) {
+      return false;
+    }
     MemBarNode* trailing_mb = trailing->as_MemBar();
     assert(trailing_mb->trailing(), "Not a trailing membar?");
     assert(trailing_mb->leading_membar() == n, "inconsistent leading/trailing membars");
 
-    Node* mem = trailing_mb->in(MemBarNode::Precedent);
+    Node* mem = (trailing_mb->req() > MemBarNode::Precedent) ? trailing_mb->in(MemBarNode::Precedent) : NULL;
+    // Same reasoning: no precedent means nothing to fold the release into.
+    if (mem == NULL) {
+      return false;
+    }
     if (mem->is_Store()) {
       // For volatile stores, the Store node should be marked as release (MemOrd::release)
       // to allow aarch64.ad optimizations. This is set when creating the Store node
@@ -1314,10 +1323,26 @@ bool unnecessary_volatile(const Node *n)
   // Unsafe accesses. The Store node's _mo field (MemOrd::release) is used by
   // aarch64.ad to optimize volatile store patterns (e.g., eliding membars when
   // using stlr instructions).
-  assert(!release || (mbvol->in(MemBarNode::Precedent)->is_Store() && mbvol->in(MemBarNode::Precedent)->as_Store()->is_release()), "");
+  // Without such a precedent the store may not even dominate this barrier (it
+  // can sit on one arm of a diamond while the barrier is anchored on its
+  // merge), so emit a real membar instead of relying on an stlr.
+  // Read the slot only for a trailing-store barrier: a plain MemBarVolatile has
+  // no Precedent input at all (req() == TypeFunc::Parms).
+  Node* precedent = NULL;
+  if (release) {
+    precedent = (mbvol->req() > MemBarNode::Precedent) ? mbvol->in(MemBarNode::Precedent) : NULL;
+    if (precedent == NULL || !precedent->is_Store() ||
+        !precedent->as_Store()->is_release()) {
+      return false;
+    }
+  }
+  assert(!release || (precedent->is_Store() && precedent->as_Store()->is_release()), "");
 #ifdef ASSERT
   if (release) {
     Node* leading = mbvol->leading_membar();
+    if (leading == NULL) {
+      return false;
+    }
     assert(leading->Opcode() == Op_MemBarRelease, "");
     assert(leading->as_MemBar()->leading_store(), "");
     assert(leading->as_MemBar()->trailing_membar() == mbvol, "");
