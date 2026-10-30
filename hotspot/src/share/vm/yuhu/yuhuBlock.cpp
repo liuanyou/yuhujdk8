@@ -1330,6 +1330,15 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
     }
 
     // Handle compressed oops for object reference fields
+    //
+    // Keep the decoded reference to the side: G1's remembered-set barrier
+    // decides by comparing the real address of the field against the real
+    // address of the value being stored, so it cannot look at the 32 encoded
+    // bits -- the same reason TemplateTable::do_oop_store copies the value into
+    // a scratch register before store_heap_oop smashes it.  Card-table heaps
+    // ignore the argument.
+    Value *ref_value = field_value;
+
     if (!field->type()->is_primitive_type() && UseCompressedOops) {
         // Encode full pointer to compressed oop (ptr addrspace(1)* -> i32)
         field_value = builder()->CreateEncodeHeapOop(field_value);
@@ -1349,6 +1358,11 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
     // check that the encode is still in front of it.  See activity 082.
     const bool mark_narrow_store = !field->type()->is_primitive_type() && UseCompressedOops;
 
+    // SATB pre barrier, while the field still holds the value being replaced.
+    if (!field->type()->is_primitive_type()) {
+        builder()->CreatePreBarrierSet(oopDesc::bs(), thread(), addr);
+    }
+
     llvm::StoreInst *store = NULL;
     if (field->is_volatile()) {
         field_value = builder()->CreateBitCast(field_value, type);
@@ -1362,7 +1376,7 @@ void YuhuBlock::do_field_access(bool is_get, bool is_field) {
     }
 
     if (!field->type()->is_primitive_type()) {
-        builder()->CreateUpdateBarrierSet(oopDesc::bs(), addr);
+        builder()->CreateUpdateBarrierSet(oopDesc::bs(), thread(), addr, ref_value);
     }
 }
 

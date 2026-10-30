@@ -246,7 +246,43 @@ class YuhuBuilder : public llvm::IRBuilder<> {
 
   // HotSpot memory barriers
  public:
-  void CreateUpdateBarrierSet(BarrierSet* bs, llvm::Value* field);
+  // The pre/post pair around a reference store.  Which barrier set is in play
+  // is answered by dispatching on its kind, exactly like
+  // GraphKit::pre_barrier() and GraphKit::post_barrier(): a card-table heap
+  // (Serial, Parallel) needs only the dirty-card write afterwards, while G1
+  // needs a SATB pre barrier before the store plus a remembered-set post
+  // barrier after it.
+  //
+  // CreatePreBarrierSet must run BEFORE the field is overwritten because it
+  // logs the value that was in the field; CreateUpdateBarrierSet runs after.
+  //   field   : address of the reference field being written
+  //   new_val : the oop being stored, decoded (uncompressed) or null.  G1's
+  //             region-crossing test needs the real address, which is why
+  //             TemplateTable::do_oop_store copies the value aside before
+  //             store_heap_oop smashes it with the encoded bits.  Ignored by
+  //             the card-table barrier.
+  void CreatePreBarrierSet(BarrierSet* bs, llvm::Value* thread, llvm::Value* field);
+  void CreateUpdateBarrierSet(BarrierSet* bs, llvm::Value* thread,
+                              llvm::Value* field, llvm::Value* new_val);
+
+  // True when the barrier set wants the G1 pair.  Public so the store sites
+  // can say why they hand over a decoded value.
+  static bool needs_g1_write_bars(BarrierSet* bs);
+
+  // Barrier internals, one kind each; called through the two entry points
+  // above.  They create their own basic blocks and leave the insertion point
+  // in the join block, so the caller keeps emitting into straight-line code.
+  void CreateCardTablePostBarrier(BarrierSet* bs, llvm::Value* field);
+  void CreateG1PreBarrier(llvm::Value* thread, llvm::Value* field);
+  void CreateG1PostBarrier(BarrierSet* bs, llvm::Value* thread,
+                           llvm::Value* field, llvm::Value* new_val);
+
+  // Plain call to a JRT_LEAF C function, same convention as the VerifyOops
+  // sites: no statepoint, no OopMap, no gc-live contribution, and the site is
+  // recorded as CallSiteType::leaf_call.  LLVM's allocator spills whatever is
+  // live across it, so unlike the machine-code barriers these need no push/pop.
+  void CreateBarrierLeafCall(llvm::Value* callee, llvm::FunctionType* func_type,
+                             llvm::Value* arg0, llvm::Value* arg1);
 
   // Emit a VerifyOops leaf call validating that the given oop-typed
   // (ptr addrspace(1)) value currently holds a plausible heap reference.

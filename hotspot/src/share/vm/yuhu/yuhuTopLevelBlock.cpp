@@ -1199,6 +1199,9 @@ void YuhuTopLevelBlock::do_astore(BasicType basic_type) {
   check_bounds(array, index);
 
   Value *value;
+  // The decoded element, kept aside because G1's remembered-set barrier tests
+  // the real address of the reference being stored; card-table heaps ignore it.
+  Value *ref_value = NULL;
   switch (basic_type) {
   case T_BYTE:
   case T_CHAR:
@@ -1221,6 +1224,7 @@ void YuhuTopLevelBlock::do_astore(BasicType basic_type) {
 
   case T_OBJECT:
     value = svalue->jobject_value();
+    ref_value = value;               // before the encode turns it into 32 bits
     if (UseCompressedOops) {
         value = builder()->CreateEncodeHeapOop(value); // ptr addrspace(1) → i32
     }
@@ -1238,10 +1242,15 @@ void YuhuTopLevelBlock::do_astore(BasicType basic_type) {
   Value *addr = builder()->CreateArrayAddress(
     array->jarray_value(), basic_type, index->jint_value(), "addr");
 
+  // Same order as TemplateTable::do_oop_store: SATB pre barrier while the
+  // element still holds its old value, store, then the post barrier.
+  if (basic_type == T_OBJECT)
+    builder()->CreatePreBarrierSet(oopDesc::bs(), thread(), addr);
+
   builder()->CreateStore(value, addr);
 
   if (basic_type == T_OBJECT) // XXX or T_ARRAY?
-    builder()->CreateUpdateBarrierSet(oopDesc::bs(), addr);
+    builder()->CreateUpdateBarrierSet(oopDesc::bs(), thread(), addr, ref_value);
 }
 
 void YuhuTopLevelBlock::do_return(BasicType type) {
@@ -2328,14 +2337,39 @@ void YuhuTopLevelBlock::do_new() {
   Value *slow_object = NULL;
   Value *object      = NULL;
 
+  // Only a heap that exports its shared bump pointer may be CASed inline.
+  // C1 (C1_MacroAssembler::try_allocate) answers this by choosing between
+  // tlab_allocate and eden_allocate, and MacroAssembler::eden_allocate starts
+  // with "if (CMSIncrementalMode || !supports_inline_contig_alloc())
+  // b(slow_case)"; the template table caches the same expression as
+  // allow_shared_alloc.  CollectedHeap::top_addr()/end_addr() guarantee false
+  // on a heap that says "no" -- G1, and ParallelScavengeHeap under UseNUMA,
+  // which instead hands back the sentinel (HeapWord**)-1 -- so without this
+  // gate a tier-6 compile of any method containing "new" aborts the compiler
+  // thread on those heaps.  Same expression as YuhuTemplateTable's.
+  const bool allow_shared_alloc =
+    Universe::heap()->supports_inline_contig_alloc() && !CMSIncrementalMode;
+
   // The fast path
-  if (!Klass::layout_helper_needs_slow_path(klass->layout_helper())) {
+  //
+  // A heap with no shared bump pointer still gets the thread-local TLAB bump
+  // below, so G1 keeps an inline fast path and only an exhausted TLAB goes to
+  // the runtime (YuhuRuntime::new_instance refills the TLAB, exactly like the
+  // C1 stub and OptoRuntime::new_instance_C).  With no TLAB and no shared
+  // allocation there is nothing to inline, and this method takes the slow path
+  // for the object, the same exit as a klass whose layout_helper needs it.
+  if (!Klass::layout_helper_needs_slow_path(klass->layout_helper()) &&
+      (UseTLAB || allow_shared_alloc)) {
     if (UseTLAB) {
       got_tlab          = function()->CreateBlock("got_tlab");
-      heap_alloc        = function()->CreateBlock("heap_alloc");
+      if (allow_shared_alloc) {
+        heap_alloc      = function()->CreateBlock("heap_alloc");
+      }
     }
-    retry               = function()->CreateBlock("retry");
-    got_heap            = function()->CreateBlock("got_heap");
+    if (allow_shared_alloc) {
+      retry             = function()->CreateBlock("retry");
+      got_heap          = function()->CreateBlock("got_heap");
+    }
     initialize          = function()->CreateBlock("initialize");
     slow_alloc_and_init = function()->CreateBlock("slow_alloc_and_init");
     push_object         = function()->CreateBlock("push_object");
@@ -2360,7 +2394,7 @@ void YuhuTopLevelBlock::do_new() {
 
       builder()->CreateCondBr(
         builder()->CreateICmpULE(new_top, end),
-        got_tlab, heap_alloc);
+        got_tlab, allow_shared_alloc ? heap_alloc : slow_alloc_and_init);
 
       builder()->SetInsertPoint(got_tlab);
       tlab_object = builder()->CreateIntToPtr(
@@ -2369,54 +2403,61 @@ void YuhuTopLevelBlock::do_new() {
       builder()->CreateStore(new_top, top_addr);
       builder()->CreateBr(initialize);
 
-      builder()->SetInsertPoint(heap_alloc);
+      if (allow_shared_alloc) {
+        builder()->SetInsertPoint(heap_alloc);
+      }
     }
 
-    // Heap allocation
-    Value *top_addr = builder()->CreateIntToPtr(
-        LLVMValue::intptr_constant((intptr_t) Universe::heap()->top_addr()),
-      PointerType::getUnqual(YuhuType::intptr_type()),
-      "top_addr");
+    // Heap allocation.  Emitted only when the heap exports its bump pointer;
+    // this mirrors MacroAssembler::eden_allocate, whose guard this replaces,
+    // and unlike that helper the unsupported case never even reaches here.
+    if (allow_shared_alloc) {
+      Value *top_addr = builder()->CreateIntToPtr(
+          LLVMValue::intptr_constant((intptr_t) Universe::heap()->top_addr()),
+        PointerType::getUnqual(YuhuType::intptr_type()),
+        "top_addr");
 
-    Value *end = builder()->CreateLoad(
-      YuhuType::intptr_type(),  // Explicitly pass type for LLVM 20+
-      builder()->CreateIntToPtr(
-        LLVMValue::intptr_constant((intptr_t) Universe::heap()->end_addr()),
-        PointerType::getUnqual(YuhuType::intptr_type())),
-      "end");
+      Value *end = builder()->CreateLoad(
+        YuhuType::intptr_type(),  // Explicitly pass type for LLVM 20+
+        builder()->CreateIntToPtr(
+          LLVMValue::intptr_constant((intptr_t) Universe::heap()->end_addr()),
+          PointerType::getUnqual(YuhuType::intptr_type())),
+        "end");
 
-    builder()->CreateBr(retry);
-    builder()->SetInsertPoint(retry);
+      builder()->CreateBr(retry);
+      builder()->SetInsertPoint(retry);
 
-    Value *old_top = builder()->CreateLoad(YuhuType::intptr_type(), top_addr, "top");
-    Value *new_top = builder()->CreateAdd(
-      old_top, LLVMValue::intptr_constant(size_in_bytes));
+      Value *old_top = builder()->CreateLoad(YuhuType::intptr_type(), top_addr, "top");
+      Value *new_top = builder()->CreateAdd(
+        old_top, LLVMValue::intptr_constant(size_in_bytes));
 
-    builder()->CreateCondBr(
-      builder()->CreateICmpULE(new_top, end),
-      got_heap, slow_alloc_and_init);
+      builder()->CreateCondBr(
+        builder()->CreateICmpULE(new_top, end),
+        got_heap, slow_alloc_and_init);
 
-    builder()->SetInsertPoint(got_heap);
-    heap_object = builder()->CreateIntToPtr(
-      old_top, YuhuType::oop_addrspace1_type(), "heap_object"); // FIXED - object is allocated in heap
+      builder()->SetInsertPoint(got_heap);
+      heap_object = builder()->CreateIntToPtr(
+        old_top, YuhuType::oop_addrspace1_type(), "heap_object"); // FIXED - object is allocated in heap
 
-    // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
+      // LLVM 20+ requires alignment and success/failure ordering for CreateAtomicCmpXchg
 #if LLVM_VERSION_MAJOR >= 20
-    Value *check = builder()->CreateAtomicCmpXchg(
-      top_addr, old_top, new_top,
-      llvm::MaybeAlign(HeapWordSize),  // Alignment
-      llvm::AtomicOrdering::SequentiallyConsistent,  // Success ordering
-      llvm::AtomicOrdering::SequentiallyConsistent);  // Failure ordering
+      Value *check = builder()->CreateAtomicCmpXchg(
+        top_addr, old_top, new_top,
+        llvm::MaybeAlign(HeapWordSize),  // Alignment
+        llvm::AtomicOrdering::SequentiallyConsistent,  // Success ordering
+        llvm::AtomicOrdering::SequentiallyConsistent);  // Failure ordering
 #else
-    Value *check = builder()->CreateAtomicCmpXchg(top_addr, old_top, new_top, llvm::AtomicOrdering::SequentiallyConsistent);
+      Value *check = builder()->CreateAtomicCmpXchg(top_addr, old_top, new_top, llvm::AtomicOrdering::SequentiallyConsistent);
 #endif
-    // Extract the success flag from the result (second element of the struct)
-    Value *success = builder()->CreateExtractValue(check, 1, "success");
-    builder()->CreateCondBr(success, initialize, retry);
+      // Extract the success flag from the result (second element of the struct)
+      Value *success = builder()->CreateExtractValue(check, 1, "success");
+      builder()->CreateCondBr(success, initialize, retry);
+    } // allow_shared_alloc
 
     // Initialize the object
     builder()->SetInsertPoint(initialize);
-    if (tlab_object) {
+    if (tlab_object && heap_object) {
+      // Both fast paths exist: TLAB bump plus a shared-Eden CAS.
       PHINode *phi = builder()->CreatePHI(
         YuhuType::oop_addrspace1_type(), 0, "fast_object"); // FIXED - phi node should use oop_addrspace1_type as used in slow path and fast path
       phi->addIncoming(tlab_object, got_tlab);
@@ -2424,7 +2465,10 @@ void YuhuTopLevelBlock::do_new() {
       fast_object = phi;
     }
     else {
-      fast_object = heap_object;
+      // Only one of them was emitted: the TLAB bump under a heap such as G1
+      // that has no inlineable shared allocation, or the shared CAS alone when
+      // -XX:-UseTLAB.
+      fast_object = tlab_object ? tlab_object : heap_object;
     }
 
       // Convert oop (ptr addrspace(1)) → intptr_t → ptr (address space 0)

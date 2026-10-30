@@ -52,6 +52,15 @@
 #include "oops/oop.inline.hpp"
 #include "classfile/javaClasses.hpp"
 #include "oops/typeArrayOop.hpp"
+// Write-barrier emission: barrier set flavours, card table, the per-thread
+// PtrQueues behind the G1 barriers and the region grain constant.
+#include "memory/barrierSet.hpp"
+#include "memory/cardTableModRefBS.hpp"
+#if INCLUDE_ALL_GCS
+#include "gc_implementation/g1/g1SATBCardTableModRefBS.hpp"
+#include "gc_implementation/g1/heapRegion.hpp"
+#include "gc_implementation/g1/ptrQueue.hpp"
+#endif // INCLUDE_ALL_GCS
 
 using namespace llvm;
 
@@ -820,11 +829,78 @@ CallInst* YuhuBuilder::CreateDump(Value* value) {
 #endif // PRODUCT
 
 // HotSpot memory barriers
+//
+// Two shapes, chosen by the barrier set kind the way GraphKit::pre_barrier()
+// and GraphKit::post_barrier() choose them:
+//
+//   card table (Serial, Parallel)  only the deferred dirty-card write, which
+//                                  is the whole barrier because these heaps
+//                                  scan the card table at the collection.
+//   G1 (SATB card table)           pre barrier logs the value the field is
+//                                  about to lose, post barrier puts the card
+//                                  into the per-thread dirty-card queue so the
+//                                  remembered set learns about the cross-region
+//                                  reference.  Marking a card is not enough
+//                                  here: G1 collects regions from the RS, and
+//                                  an unlogged card means a lost root.
+//
+// The G1 sequences are the IR port of MacroAssembler::g1_write_barrier_pre /
+// _post, which Yuhu already generates for the interpreter as
+// YuhuMacroAssembler::write_insts_g1_write_barrier_pre / _post: same thread
+// offsets, same tests in the same order, same SharedRuntime leaf entries on
+// the queue-full edges, and the same order around the store as
+// TemplateTable::do_oop_store (pre, store, post).
 
-void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
-    if (bs->kind() != BarrierSet::CardTableModRef)
-        Unimplemented();
+bool YuhuBuilder::needs_g1_write_bars(BarrierSet* bs) {
+  switch (bs->kind()) {
+#if INCLUDE_ALL_GCS
+    case BarrierSet::G1SATBCT:
+    case BarrierSet::G1SATBCTLogging:
+      return true;
+#endif
+    default:
+      return false;
+  }
+}
 
+void YuhuBuilder::CreatePreBarrierSet(BarrierSet* bs, Value* thread, Value* field) {
+  if (needs_g1_write_bars(bs)) {
+#if INCLUDE_ALL_GCS
+    CreateG1PreBarrier(thread, field);
+#endif
+    return;
+  }
+  switch (bs->kind()) {
+    case BarrierSet::CardTableModRef:
+    case BarrierSet::CardTableExtension:
+    case BarrierSet::ModRef:
+      // C2 emits no pre barrier for these either -- nothing observes a
+      // concurrent marking phase, so the value being overwritten is uninteresting.
+      return;
+    default:
+      Unimplemented();
+  }
+}
+
+void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* thread,
+                                        Value* field, Value* new_val) {
+  if (needs_g1_write_bars(bs)) {
+#if INCLUDE_ALL_GCS
+    CreateG1PostBarrier(bs, thread, field, new_val);
+#endif
+    return;
+  }
+  switch (bs->kind()) {
+    case BarrierSet::CardTableModRef:
+    case BarrierSet::CardTableExtension:
+      CreateCardTablePostBarrier(bs, field);
+      break;
+    default:
+      Unimplemented();
+  }
+}
+
+void YuhuBuilder::CreateCardTablePostBarrier(BarrierSet* bs, Value* field) {
     CardTableModRefBS* ctbs = (CardTableModRefBS*) bs;
 
     // 1. 计算卡表索引（仍然需要 ptrtoint，但只取地址值）
@@ -849,6 +925,211 @@ void YuhuBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
             LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card_val()),
             card_entry_ptr);
 }
+
+// Leaf call used by the two queue-full edges below.
+void YuhuBuilder::CreateBarrierLeafCall(Value* callee, FunctionType* func_type,
+                                       Value* arg0, Value* arg1) {
+  uint64_t statepoint_id = YuhuStatepointIDGenerator::next();
+
+  uint64_t helper_address = 0;
+  if (auto* CastInst = llvm::dyn_cast<llvm::ConstantExpr>(callee)) {
+    if (CastInst->getOpcode() == llvm::Instruction::IntToPtr) {
+      if (auto* IntConst = llvm::dyn_cast<llvm::ConstantInt>(CastInst->getOperand(0))) {
+        helper_address = IntConst->getZExtValue();
+      }
+    }
+  }
+  assert(helper_address != 0, "barrier runtime must be a baked-in address");
+
+  YuhuDebugInformationRecorder::get()->register_call_site(
+      statepoint_id, function()->inline_node_or_method(), helper_address,
+      CallSiteType::leaf_call);
+
+  std::vector<Value*> args;
+  args.push_back(arg0);
+  args.push_back(arg1);
+  llvm::CallInst* call = CreateCall(func_type, callee, args);
+
+  llvm::LLVMContext &Ctx = getContext();
+  llvm::AttrBuilder AB(Ctx);
+  AB.addAttribute("statepoint-id", std::to_string(statepoint_id));
+  call->setAttributes(llvm::AttributeList::get(
+      Ctx, llvm::AttributeList::FunctionIndex, AB));
+}
+
+#if INCLUDE_ALL_GCS
+// Snapshot-at-the-beginning pre barrier: log the oop currently in the field
+// into this thread's SATB queue, so a concurrent mark that is in progress
+// still treats the object we are about to drop as reachable.
+void YuhuBuilder::CreateG1PreBarrier(Value* thread, Value* field) {
+  // The three addresses the machine sequence builds out of JavaThread's
+  // inlined SATB PtrQueue (MacroAssembler::g1_write_barrier_pre).
+  const int q_active = (int) in_bytes(JavaThread::satb_mark_queue_offset() + PtrQueue::byte_offset_of_active());
+  const int q_index  = (int) in_bytes(JavaThread::satb_mark_queue_offset() + PtrQueue::byte_offset_of_index());
+  const int q_buf    = (int) in_bytes(JavaThread::satb_mark_queue_offset() + PtrQueue::byte_offset_of_buf());
+
+  BasicBlock* log     = function()->CreateBlock("satb_log");
+  BasicBlock* index   = function()->CreateBlock("satb_index");
+  BasicBlock* push    = function()->CreateBlock("satb_push");
+  BasicBlock* runtime = function()->CreateBlock("satb_runtime");
+  BasicBlock* done    = function()->CreateBlock("satb_done");
+
+  // Is marking active?  Byte or word wide, following PtrQueue::_active.
+  llvm::Type* active_type;
+  if (in_bytes(PtrQueue::byte_width_of_active()) == 4) {
+    active_type = YuhuType::jint_type();
+  } else {
+    assert(in_bytes(PtrQueue::byte_width_of_active()) == 1, "Assumption");
+    active_type = YuhuType::jbyte_type();
+  }
+  Value* active = CreateValueOfStructEntry(
+      thread, in_ByteSize(q_active),
+      active_type, "satb_active");
+  CreateCondBr(
+      CreateICmpNE(CreateIntCast(active, YuhuType::intptr_type(), false),
+                   LLVMValue::intptr_constant(0)),
+      log, done);
+
+  // Do we need to load the previous value?  The store address plays the role
+  // of the machine sequence's `obj` argument, so this is its obj != noreg arm:
+  // read the field as it is right now, and decode it because the queue holds
+  // real addresses.
+  SetInsertPoint(log);
+  Value* pre_val;
+  if (UseCompressedOops) {
+    Value* bits = CreateLoad(YuhuType::jint_type(), field, "satb_pre_bits");
+    pre_val = CreateDecodeHeapOop(bits);
+  } else {
+    pre_val = CreateLoad(YuhuType::oop_addrspace1_type(), field, "satb_pre_val");
+  }
+  // Is the previous value null?  g1_wb_pre asserts a null never reaches it,
+  // because this test is expected to be compiled out.
+  CreateCondBr(CreateICmpNE(pre_val, LLVMValue::null()), index, done);
+
+  // Can we store the original value in the thread's buffer?
+  SetInsertPoint(index);
+  Value* index_addr = CreateAddressOfStructEntry(
+      thread, in_ByteSize(q_index),
+      PointerType::getUnqual(YuhuType::intptr_type()), "satb_index_addr");
+  Value* index_val = CreateLoad(YuhuType::intptr_type(), index_addr, "satb_index");
+  CreateCondBr(CreateICmpNE(index_val, LLVMValue::intptr_constant(0)), push, runtime);
+
+  SetInsertPoint(push);
+  Value* new_index = CreateSub(index_val, LLVMValue::intptr_constant(wordSize));
+  CreateStore(new_index, index_addr);
+  Value* buffer = CreateValueOfStructEntry(
+      thread, in_ByteSize(q_buf),
+      YuhuType::intptr_type(), "satb_buf");
+  Value* slot = CreateIntToPtr(CreateAdd(buffer, new_index),
+      PointerType::getUnqual(YuhuType::intptr_type()), "satb_slot");
+  CreateStore(CreatePtrToInt(pre_val, YuhuType::intptr_type()), slot);
+  CreateBr(done);
+
+  // Queue exhausted: hand it to the runtime, which refills and enqueues.
+  SetInsertPoint(runtime);
+  CreateBarrierLeafCall(
+      make_function(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), "OT", "v"),
+      make_ftype("OT", "v"), pre_val, thread);
+  CreateBr(done);
+
+  SetInsertPoint(done);
+}
+
+// Remembered-set post barrier for a store of new_val at field.
+void YuhuBuilder::CreateG1PostBarrier(BarrierSet* bs, Value* thread,
+                                     Value* field, Value* new_val) {
+  CardTableModRefBS* ctbs = (CardTableModRefBS*) bs;
+  // JavaThread's inlined dirty-card PtrQueue, as in
+  // MacroAssembler::g1_write_barrier_post.
+  const int q_index = (int) in_bytes(JavaThread::dirty_card_queue_offset() + PtrQueue::byte_offset_of_index());
+  const int q_buf   = (int) in_bytes(JavaThread::dirty_card_queue_offset() + PtrQueue::byte_offset_of_buf());
+
+  BasicBlock* not_null = function()->CreateBlock("g1pb_not_null");
+  BasicBlock* card     = function()->CreateBlock("g1pb_card");
+  BasicBlock* dirty    = function()->CreateBlock("g1pb_dirty");
+  BasicBlock* index    = function()->CreateBlock("g1pb_index");
+  BasicBlock* push     = function()->CreateBlock("g1pb_push");
+  BasicBlock* runtime  = function()->CreateBlock("g1pb_runtime");
+  BasicBlock* done     = function()->CreateBlock("g1pb_done");
+
+  Value* store_int = CreatePtrToInt(field, YuhuType::intptr_type(), "g1_store_addr");
+  Value* val_int   = CreatePtrToInt(new_val, YuhuType::intptr_type(), "g1_new_val");
+
+  // Does the store cross heap regions?  A region-local reference never enters
+  // the remembered set, so this is the barrier's common exit.
+  Value* cross = CreateLShr(
+      CreateXor(store_int, val_int),
+      LLVMValue::intptr_constant(HeapRegion::LogOfHRGrainBytes), "g1_cross_regions");
+  CreateCondBr(CreateICmpNE(cross, LLVMValue::intptr_constant(0)), not_null, done);
+
+  // Crosses regions, storing NULL?
+  SetInsertPoint(not_null);
+  CreateCondBr(CreateICmpNE(val_int, LLVMValue::intptr_constant(0)), card, done);
+
+  // Storing region crossing non-NULL: is the card already dirty?
+  SetInsertPoint(card);
+  Value* card_index = CreateLShr(store_int,
+      LLVMValue::intptr_constant(ctbs->card_shift), "g1_card_index");
+  Value* card_addr = CreateGEP(
+      YuhuType::jbyte_type(),
+      CreateIntToPtr(LLVMValue::intptr_constant((intptr_t) ctbs->byte_map_base),
+                     PointerType::getUnqual(YuhuType::jbyte_type()), "g1_card_table"),
+      card_index, "g1_card_addr");
+  // The young value means the card is already in the remembered set.
+  LoadInst* young = CreateLoad(YuhuType::jbyte_type(), card_addr, "g1_card_young");
+  young->setVolatile(true);   // do not let the two reads below collapse into one
+  CreateCondBr(
+      CreateICmpEQ(CreateIntCast(young, YuhuType::intptr_type(), false),
+                   LLVMValue::intptr_constant((int) G1SATBCardTableModRefBS::g1_young_card_val())),
+      done, dirty);
+
+  SetInsertPoint(dirty);
+  // membar(StoreLoad): the reference store has to be visible before the card
+  // is inspected, otherwise a collection could see a dirty card and miss the
+  // pointer it describes.  Both card reads are volatile so the middle-end
+  // cannot fold them across each other.
+  CreateFence(llvm::AtomicOrdering::SequentiallyConsistent, llvm::SyncScope::System);
+  LoadInst* again = CreateLoad(YuhuType::jbyte_type(), card_addr, "g1_card_dirty");
+  again->setVolatile(true);
+  assert((int) CardTableModRefBS::dirty_card_val() == 0, "must be 0");
+  CreateCondBr(
+      CreateICmpEQ(CreateIntCast(again, YuhuType::intptr_type(), false),
+                   LLVMValue::intptr_constant((int) CardTableModRefBS::dirty_card_val())),
+      done, index);
+
+  // Storing a region crossing, non-NULL oop and the card is clean: dirty it
+  // and log the card address.
+  SetInsertPoint(index);
+  StoreInst* mark = CreateStore(
+      LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card_val()), card_addr);
+  mark->setVolatile(true);
+
+  Value* index_addr = CreateAddressOfStructEntry(
+      thread, in_ByteSize(q_index),
+      PointerType::getUnqual(YuhuType::intptr_type()), "g1_dcq_index_addr");
+  Value* index_val = CreateLoad(YuhuType::intptr_type(), index_addr, "g1_dcq_index");
+  CreateCondBr(CreateICmpNE(index_val, LLVMValue::intptr_constant(0)), push, runtime);
+
+  SetInsertPoint(push);
+  Value* new_index = CreateSub(index_val, LLVMValue::intptr_constant(wordSize));
+  CreateStore(new_index, index_addr);
+  Value* buffer = CreateValueOfStructEntry(
+      thread, in_ByteSize(q_buf),
+      YuhuType::intptr_type(), "g1_dcq_buf");
+  Value* slot = CreateIntToPtr(CreateAdd(buffer, new_index),
+      PointerType::getUnqual(YuhuType::intptr_type()), "g1_dcq_slot");
+  CreateStore(CreatePtrToInt(card_addr, YuhuType::intptr_type()), slot);
+  CreateBr(done);
+
+  SetInsertPoint(runtime);
+  CreateBarrierLeafCall(
+      make_function(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post), "xT", "v"),
+      make_ftype("xT", "v"), CreatePtrToInt(card_addr, YuhuType::intptr_type()), thread);
+  CreateBr(done);
+
+  SetInsertPoint(done);
+}
+#endif // INCLUDE_ALL_GCS
 
 // VerifyOops leaf-call emitter.  Emits a plain llvm::CallInst to the
 // YuhuRuntime::verify_oop_wrapper C function -- leaf convention: no
