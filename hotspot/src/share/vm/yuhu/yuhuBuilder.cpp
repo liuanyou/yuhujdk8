@@ -471,17 +471,23 @@ Value* YuhuBuilder::current_time_millis() {
   return make_function((address) os::javaTimeMillis, "", "l"); // leaf call
 }
 
+// The Math helpers below must be referenced by a baked-in address, not by
+// their LLVM intrinsic name: YuhuIntrinsics extracts the helper address from
+// the inttoptr constant in order to register the call site, and a named
+// llvm.* callee comes back as an llvm::Function*, which carries no address
+// to extract (assert "helper_address should have a value").  SharedRuntime::d*
+// is also what C1, C2 and the interpreter call on this platform, so tier-6
+// results stay bit-identical to the other tiers.
 Value* YuhuBuilder::sin() {
-  return make_function("llvm.sin.f64", "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dsin, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::cos() {
-  return make_function("llvm.cos.f64", "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dcos, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::tan() {
-  // Explicit cast to function pointer to resolve overload ambiguity
-  return make_function((address) (double (*)(double))::tan, "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dtan, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::atan2() {
@@ -490,23 +496,26 @@ Value* YuhuBuilder::atan2() {
 }
 
 Value* YuhuBuilder::sqrt() {
-  return make_function("llvm.sqrt.f64", "d", "d"); // leaf call
+  // No SharedRuntime::dsqrt on hardware FP (it is __SOFTFP__/PPC only), so
+  // libm's correctly-rounded sqrt is used; C1/C2 emit the fsqrt instruction.
+  // Explicit cast to function pointer to resolve overload ambiguity
+  return make_function((address) (double (*)(double))::sqrt, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::log() {
-  return make_function("llvm.log.f64", "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dlog, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::log10() {
-  return make_function("llvm.log10.f64", "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dlog10, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::pow() {
-  return make_function("llvm.pow.f64", "dd", "d"); // leaf call
+  return make_function((address) SharedRuntime::dpow, "dd", "d"); // leaf call
 }
 
 Value* YuhuBuilder::exp() {
-  return make_function("llvm.exp.f64", "d", "d"); // leaf call
+  return make_function((address) SharedRuntime::dexp, "d", "d"); // leaf call
 }
 
 Value* YuhuBuilder::fabs() {
