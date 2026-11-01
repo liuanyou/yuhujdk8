@@ -45,7 +45,7 @@
   develop(bool, YuhuTraceInlining, false,                                    \
           "Trace inlining decisions during compilation")                     \
                                                                               \
-  develop(bool, YuhuLLVMInlining, false,                                     \
+  product(bool, YuhuLLVMInlining, false,                                     \
           "Inline eligible callees as separate LLVM functions merged by the " \
           "AlwaysInliner pass instead of only supporting the bytecode-level " \
           "inliner for straight-line callees")                               \
