@@ -3967,7 +3967,7 @@ DATE_WHEN_GENERATED=1389186094
 # If we are requested to print additional help, do that and then exit.
 # This must be the very first call.
 
-if test "x$CONFIGURE_PRINT_TOOLCHAIN_LIST" !=x; then
+if test "x$CONFIGURE_PRINT_TOOLCHAIN_LIST" != x; then
   $PRINTF "The following toolchains are available as arguments to --with-toolchain-type.\n"
   $PRINTF "Which are valid to use depends on the build platform.\n"
   for toolchain in $VALID_TOOLCHAINS_all; do
