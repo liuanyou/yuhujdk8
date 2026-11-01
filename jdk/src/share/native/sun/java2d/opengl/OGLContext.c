@@ -36,6 +36,7 @@
 #include "OGLRenderQueue.h"
 #include "OGLSurfaceData.h"
 #include "GraphicsPrimitiveMgr.h"
+#include "jvm.h"
 #include "Region.h"
 
 /**
