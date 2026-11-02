@@ -305,6 +305,36 @@ void YuhuDebugInformationRecorder::register_symbol(uint64_t addr, uint64_t start
     }
 }
 
+void YuhuDebugInformationRecorder::register_symbol_fixup(uint64_t word_addr, uint64_t target_addr, int64_t addend, SymbolFixupKind kind) {
+    SymbolEntry* symbol_entry = NULL;
+    for (int i = 0; i < _symbol_entries->length(); ++i) {
+        SymbolEntry* entry = _symbol_entries->at(i);
+        if (word_addr >= entry->start && word_addr < entry->end) {
+            symbol_entry = entry;
+            break;
+        }
+    }
+    assert(symbol_entry != NULL, "interior fixup must belong to a registered symbol");
+    if (symbol_entry == NULL) {
+        return;
+    }
+    if (symbol_entry->fixups == NULL) {
+        symbol_entry->fixups = new (_arena) GrowableArray<SymbolFixup*>(_arena, 4, 0, (SymbolFixup*)NULL);
+    }
+    // adrp-style edges can produce two edges for one word; record it once
+    for (int i = 0; i < symbol_entry->fixups->length(); ++i) {
+        if (symbol_entry->fixups->at(i)->word_addr == word_addr) {
+            return;
+        }
+    }
+    auto fixup = new (_arena) SymbolFixup();
+    fixup->word_addr = word_addr;
+    fixup->target_addr = target_addr;
+    fixup->addend = addend;
+    fixup->kind = kind;
+    symbol_entry->fixups->append(fixup);
+}
+
 void YuhuDebugInformationRecorder::register_edge(uint32_t offset, EdgeTargetType edge_target_type, uint64_t target_address) {
     int index = _edge_entries->find(&offset, [](void* token, EdgeEntry* entry) -> bool {
         return *((uint64_t*)token) == entry->offset;

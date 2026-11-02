@@ -1433,6 +1433,159 @@ StoreInst* YuhuBuilder::CreateAtomicStore(Value* val, Value* ptr, unsigned align
   return Insert(new StoreInst(val, ptr, isVolatile, llvm::Align(align), ordering, llvm::SyncScope::System), name);
 }
 
+// Copy one registered const/data symbol into cb->consts() exactly once (memoized
+// via copied_symbol_srcs/dsts), then rewrite its interior pointers: linker edges
+// whose SOURCE is the symbol's own bytes, recorded by extractCallSites (e.g. the
+// elements of a merged-switch pointer table in __DATA,__const addressing
+// __DATA,__data oop/metadata slots).  A plain memcpy is not enough for those:
+// the words hold raw arena addresses, and the arena is released right after
+// install (release_last_code_blob_unlocked + RT->remove()).  If the symbol is a
+// data-section slot, its metadata/oop value is materialized in the copy and the
+// consts reloc attached (the handling the got_symbol branch used to do inline).
+// Returns the destination base address inside consts.
+//
+// Interior target remapping:
+//  - label inside the function's LLVM code: rebased with the same delta as the
+//    code copy (code_start + adapter_size + (target - llvm_code_start));
+//  - another registered const/data symbol: recursively copied, word points at
+//    the copy;
+//  - anything else (metaspace pointer, sentinel oop index, runtime function):
+//    immortal value, kept as is.
+// Both remapped absolute64 words are builder-time CodeBuffer addresses, so they
+// also carry an internal_word_Relocation anchored on the word itself: the second
+// hop of the insts -> consts -> consts chain.  CodeBuffer::relocate_code_to
+// repairs it during the scratch-buffer -> nmethod move (same-section target:
+// self-relative difference rewritten through DataRelocation::set_value's
+// addr_in_const() raw-store path; code-label target: pack strengthens the
+// record to section_word_type and re-bases against the destination insts base),
+// exactly like the adrp anchor of the first hop.  Without that record the word
+// would keep pointing into the scratch consts area after the copy.
+static address copy_symbol_into_consts(SymbolEntry* symbol_entry, SymbolCopyContext& ctx,
+                                       GrowableArray<uint64_t>& copied_symbol_srcs,
+                                       GrowableArray<uint64_t>& copied_symbol_dsts,
+                                       GrowableArray<RelocEntry>& reloc_entries) {
+    int idx = copied_symbol_srcs.find(symbol_entry->start);
+    if (idx >= 0) {
+        // already copied
+        return (address)copied_symbol_dsts.at(idx);
+    }
+    address new_symbol_addr = ctx.cb->consts()->end();
+    size_t symbol_size = symbol_entry->end - symbol_entry->start;
+    memcpy(new_symbol_addr, (address) symbol_entry->start, symbol_size);
+    ctx.cb->consts()->set_end(new_symbol_addr + symbol_size);
+    // memoize before fixups recurse, so shared or cyclic targets reuse this copy
+    copied_symbol_srcs.append(symbol_entry->start);
+    copied_symbol_dsts.append((uint64_t)new_symbol_addr);
+
+    assert(symbol_size == 0 || *(address*)(symbol_entry->start) == *(address*)new_symbol_addr, "copied content should match");
+
+    GrowableArray<SymbolFixup*>* fixups = symbol_entry->fixups;
+    if (fixups != NULL) {
+        for (int i = 0; i < fixups->length(); ++i) {
+            SymbolFixup* fixup = fixups->at(i);
+            assert(fixup->word_addr >= symbol_entry->start && fixup->word_addr < symbol_entry->end, "fixup word should be inside the symbol");
+            address dst_word = new_symbol_addr + (fixup->word_addr - symbol_entry->start);
+            uint64_t new_target = fixup->target_addr;
+            bool remapped = false;
+            if (fixup->target_addr >= (uint64_t)ctx.llvm_code_start &&
+                fixup->target_addr < (uint64_t)(ctx.llvm_code_start + ctx.llvm_code_size)) {
+                // label inside the LLVM code: same rebase as the code copy itself
+                new_target = (uint64_t)(ctx.code_start + ctx.adapter_size) + (fixup->target_addr - (uint64_t)ctx.llvm_code_start);
+                remapped = true;
+            } else {
+                SymbolEntry* target_symbol = ctx.recorder->get_symbol_by_range_addr(fixup->target_addr);
+                if (target_symbol != NULL) {
+                    // another module symbol: point at (and thereby create) its consts copy
+                    address new_target_symbol = copy_symbol_into_consts(target_symbol, ctx, copied_symbol_srcs, copied_symbol_dsts, reloc_entries);
+                    new_target = (uint64_t)(new_target_symbol + (fixup->target_addr - target_symbol->start));
+                    remapped = true;
+                }
+                // else: external/immortal - keep the value
+            }
+            switch (fixup->kind) {
+            case SymbolFixupKind::absolute64: {
+                assert(((uintptr_t)dst_word & 7) == 0, "absolute64 fixup must be 8-byte aligned");
+                uint64_t expect = (uint64_t)((int64_t)fixup->target_addr + fixup->addend);
+                guarantee(*(uint64_t*)fixup->word_addr == expect, "interior absolute64 content should match the link-time edge");
+                uint64_t new_value = (uint64_t)((int64_t)new_target + fixup->addend);
+                *(uint64_t*)dst_word = new_value;
+                if (remapped) {
+                    // Hop 2 of the insts -> consts -> consts (or -> insts) chain:
+                    // the word now holds the target's builder-time CodeBuffer
+                    // address; the internal_word record re-bases it onto the
+                    // nmethod when the sections move.
+                    RelocEntry interior_entry{};
+                    interior_entry.offset = dst_word - ctx.code_start;
+                    interior_entry.reloc_type = relocInfo::relocType::internal_word_type;
+                    interior_entry.target = new_value;
+                    interior_entry.section_type = CodeBuffer::SECT_CONSTS;
+                    reloc_entries.append(interior_entry);
+                }
+                break;
+            }
+            case SymbolFixupKind::relative64: {
+                int64_t expect = (int64_t)fixup->target_addr - (int64_t)fixup->word_addr + fixup->addend;
+                guarantee((int64_t)*(uint64_t*)fixup->word_addr == expect, "interior relative64 content should match the link-time edge");
+                *(int64_t*)dst_word = (int64_t)new_target - (int64_t)dst_word + fixup->addend;
+                break;
+            }
+            case SymbolFixupKind::relative32: {
+                uint32_t expect = (uint32_t)(fixup->target_addr - fixup->word_addr + fixup->addend);
+                guarantee(*(uint32_t*)fixup->word_addr == expect, "interior relative32 content should match the link-time edge");
+                *(uint32_t*)dst_word = (uint32_t)((int64_t)new_target - (int64_t)dst_word + fixup->addend);
+                break;
+            }
+            default:
+                ShouldNotReachHere();
+            }
+        }
+    }
+
+    if (symbol_entry->section_type == SectionType::data_section) {
+        // materialize the slot value in the copy (sentinel indices become real
+        // oops via oop_type reloc + initialize_immediates; metaspace pointers are
+        // already correct and only need their metadata_type reloc)
+        uint64_t target_value = *(uint64_t*)(symbol_entry->addr);
+        auto global_var = ctx.recorder->get_global_var_by_target_value(target_value);
+        assert(global_var != NULL, "global var should exist");
+        if (global_var->global_var_type == GlobalVarType::metadata) {
+            ::Metadata* metadata = (::Metadata*)(uintptr_t) target_value;
+            assert(metadata != NULL && metadata->is_metaspace_object(), "metadata must be a metaspace object");
+            // allocate_metadata_index() deduplicates, so several uses of the same
+            // Metadata* share one pool entry while each keeps its own relocation.
+            int metadata_index = ctx.cb->oop_recorder()->allocate_metadata_index(metadata);
+            assert(metadata_index > 0, "metadata_index must be > 0");
+
+            RelocEntry reloc_entry2{};
+            // consts section is at last end of code buffer, create metadata reloc at consts section
+            reloc_entry2.offset = new_symbol_addr - ctx.code_start;
+            reloc_entry2.reloc_type = relocInfo::relocType::metadata_type;
+            reloc_entry2.spec_index = metadata_index;
+            reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
+            reloc_entries.append(reloc_entry2);
+        } else if (global_var->global_var_type == GlobalVarType::oop) {
+            jobject jobj = global_var->oop;
+            assert(jobj != NULL, "jobj must not be NULL");
+
+            // Allocate real oop_index from the final OopRecorder (like C1 does)
+            int oop_index = ctx.cb->oop_recorder()->allocate_oop_index(jobj);
+            // patch data directly
+            bool oop_index_patched = YuhuAddressPatcher::patch_oop_index((uint64_t*)new_symbol_addr, oop_index);
+            assert(oop_index_patched, "should patch successfully");
+
+            RelocEntry reloc_entry2{};
+            reloc_entry2.offset = new_symbol_addr - ctx.code_start;
+            reloc_entry2.reloc_type = relocInfo::relocType::oop_type;
+            reloc_entry2.spec_index = oop_index;
+            reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
+            reloc_entries.append(reloc_entry2);
+        } else {
+            ShouldNotReachHere();
+        }
+    }
+    return new_symbol_addr;
+}
+
 void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, size_t llvm_code_size, CodeBuffer* cb, address code_start, size_t adapter_size) {
     if (llvm_code_start == NULL || llvm_code_size == 0 || code_start == NULL) {
         return;
@@ -1461,6 +1614,8 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
     GrowableArray<uint64_t> copied_symbol_srcs; // symbol_entry->start
     GrowableArray<uint64_t> copied_symbol_dsts; // address in cb->consts()
     GrowableArray<std::pair<uint64_t, uint64_t>> copied_symbols;
+
+    SymbolCopyContext ctx(recorder, cb, llvm_code_start, llvm_code_size, code_start, adapter_size);
 
     // process edge entries
     auto edge_entries = recorder->edge_entries();
@@ -1497,25 +1652,10 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 auto symbol_entry = recorder->get_symbol_by_range_addr(function_address);
                 assert(symbol_entry != NULL, "Symbol should exist");
 
-                address new_table_addr;
-                int idx = copied_symbol_srcs.find(symbol_entry->start);
-                if (idx >= 0) {
-                    new_table_addr = (address)copied_symbol_dsts.at(idx);
-                } else {
-                    new_table_addr = cb->consts()->end();
-                    size_t symbol_size = symbol_entry->end - symbol_entry->start;
-                    memcpy(new_table_addr, (address) symbol_entry->start, symbol_size);
-                    cb->consts()->set_end(new_table_addr + symbol_size);
-                    copied_symbol_srcs.append(symbol_entry->start);
-                    copied_symbol_dsts.append((uint64_t)new_table_addr);
-                }
+                address new_symbol_addr = copy_symbol_into_consts(symbol_entry, ctx, copied_symbol_srcs, copied_symbol_dsts, reloc_entries);
 
                 // get new function address with offset
-                address new_target_address = (function_address - symbol_entry->start) + new_table_addr;
-                // target value should be copied successfully
-                if (idx == -1) {
-                    assert(*(uint64_t *) function_address == *(uint64_t *) (new_target_address), "target value should match");
-                }
+                address new_target_address = (function_address - symbol_entry->start) + new_symbol_addr;
                 bool new_jump_table_patched = YuhuAddressPatcher::patch_new_adrp(edge_instr, (uint64_t)new_target_address);
                 assert(new_jump_table_patched && YuhuAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
@@ -1525,45 +1665,7 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
                 reloc_entry.target = (uint64_t) new_target_address;
                 reloc_entry.section_type = CodeBuffer::SECT_INSTS;
                 reloc_entries.append(reloc_entry);
-                if (symbol_entry->section_type == SectionType::data_section) {
-                    uint64_t target_value = *(uint64_t*)(function_address);
-                    auto global_var = recorder->get_global_var_by_target_value(target_value);
-                    assert(global_var != NULL, "global var should exist");
-                    if (global_var->global_var_type == GlobalVarType::metadata) {
-                        ::Metadata* metadata = (::Metadata*)(uintptr_t) target_value;
-                        assert(metadata != NULL && metadata->is_metaspace_object(), "metadata must be a metaspace object");
-                        // allocate_metadata_index() deduplicates, so several uses of the same
-                        // Metadata* share one pool entry while each keeps its own relocation.
-                        int metadata_index = cb->oop_recorder()->allocate_metadata_index(metadata);
-                        assert(metadata_index > 0, "metadata_index must be > 0");
-
-                        RelocEntry reloc_entry2{};
-                        // consts section is at last end of code buffer, create metadata reloc at consts section
-                        reloc_entry2.offset = new_target_address - code_start;
-                        reloc_entry2.reloc_type = relocInfo::relocType::metadata_type;
-                        reloc_entry2.spec_index = metadata_index;
-                        reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
-                        reloc_entries.append(reloc_entry2);
-                    } else if (global_var->global_var_type == GlobalVarType::oop) {
-                        jobject jobj = global_var->oop;
-                        assert(jobj != NULL, "jobj must not be NULL");
-
-                        // Allocate real oop_index from the final OopRecorder (like C1 does)
-                        int oop_index = cb->oop_recorder()->allocate_oop_index(jobj);
-                        // patch data directly
-                        bool oop_index_patched = YuhuAddressPatcher::patch_oop_index((uint64_t*)new_target_address, oop_index);
-                        assert(oop_index_patched, "should patch successfully");
-
-                        RelocEntry reloc_entry2{};
-                        reloc_entry2.offset = new_target_address - code_start;
-                        reloc_entry2.reloc_type = relocInfo::relocType::oop_type;
-                        reloc_entry2.spec_index = oop_index;
-                        reloc_entry2.section_type = CodeBuffer::SECT_CONSTS;
-                        reloc_entries.append(reloc_entry2);
-                    } else {
-                        ShouldNotReachHere();
-                    }
-                }
+                // data-section slot value materialization happens inside copy_symbol_into_consts
             }
         } else if (edge->edge_target_type == EdgeTargetType::const_symbol) {
             uint32_t* edge_instr = (uint32_t*)(code_start + adapter_size + offset_in_func);
@@ -1572,23 +1674,10 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             auto const_symbol_entry = recorder->get_symbol_by_section_type_and_range_addr(SectionType::const_section, edge->target_address);
             assert(const_symbol_entry != NULL, "Const symbol should exist");
 
-            address new_table_addr;
-            int idx = copied_symbol_srcs.find(const_symbol_entry->start);
-            if (idx >= 0) {
-                new_table_addr = (address)copied_symbol_dsts.at(idx);
-            } else {
-                new_table_addr = cb->consts()->end();
-                size_t symbol_size = const_symbol_entry->end - const_symbol_entry->start;
-                memcpy(new_table_addr, (address) const_symbol_entry->start, symbol_size);
-                cb->consts()->set_end(new_table_addr + symbol_size);
-                copied_symbol_srcs.append(const_symbol_entry->start);
-                copied_symbol_dsts.append((uint64_t)new_table_addr);
-            }
+            address new_symbol_addr = copy_symbol_into_consts(const_symbol_entry, ctx, copied_symbol_srcs, copied_symbol_dsts, reloc_entries);
 
             // get new function address with offset
-            address new_target_address = (edge->target_address - const_symbol_entry->start) + new_table_addr;
-            // simply compare first byte, may not be accurate, but better than nothing
-            assert(*(uint8_t*)(edge->target_address) == *(uint8_t*)(new_target_address), "copied content should match");
+            address new_target_address = (edge->target_address - const_symbol_entry->start) + new_symbol_addr;
             bool new_jump_table_patched = YuhuAddressPatcher::patch_new_adrp(edge_instr, (uint64_t)new_target_address);
             assert(new_jump_table_patched && YuhuAddressScanner::is_adrp_with_add_pattern(edge_instr), "should patch successfully");
 
@@ -1638,10 +1727,40 @@ void YuhuBuilder::scan_and_generate_all_relocations(address llvm_code_start, siz
             assert(reloc_entry.section_type == CodeBuffer::SECT_INSTS, "");
             cb->relocate((address)(instr), reloc_entry.reloc_type);
         } else if (reloc_entry.reloc_type == relocInfo::relocType::internal_word_type) {
-            assert(reloc_entry.section_type == CodeBuffer::SECT_INSTS, "");
-            cb->relocate((address)(instr), internal_word_Relocation::spec((address)reloc_entry.target));
+            if (reloc_entry.section_type == CodeBuffer::SECT_INSTS) {
+                cb->relocate((address)(instr), internal_word_Relocation::spec((address)reloc_entry.target));
+            } else {
+                // Interior pointer word inside a copied symbol: the site is an
+                // 8-byte data word in cb->consts(), and the move repair goes
+                // through internal_word_Relocation::fix_relocation_after_move's
+                // addr_in_const() raw-store path (see copy_symbol_into_consts).
+                assert(reloc_entry.section_type == CodeBuffer::SECT_CONSTS, "");
+                cb->consts()->relocate((address)instr, internal_word_Relocation::spec((address)reloc_entry.target));
+            }
         }
     }
+
+#ifdef ASSERT
+    // Safety net: after all copies and interior fixups, no copied symbol may still
+    // hold a raw pointer into the LLVM arena (code blocks or registered symbols):
+    // such a word would be stale once release_last_code_blob_unlocked() and
+    // RT->remove() free the blocks, turning a runtime dereference into SIGSEGV.
+    for (int i = 0; i < copied_symbol_dsts.length(); ++i) {
+        SymbolEntry* sym = recorder->get_symbol_by_range_addr(copied_symbol_srcs.at(i));
+        assert(sym != NULL, "memo source should resolve to a registered symbol");
+        if (sym == NULL) {
+            continue;
+        }
+        auto dst = (address) copied_symbol_dsts.at(i);
+        size_t size = sym->end - sym->start;
+        for (size_t off = 0; off + 8 <= size; off += 8) {
+            uint64_t word = *(uint64_t*)(dst + off);
+            bool stale_text = word >= (uint64_t)llvm_code_start && word < (uint64_t)(llvm_code_start + llvm_code_size);
+            bool stale_symbol = (word != 0) && (recorder->get_symbol_by_range_addr(word) != NULL);
+            guarantee(!stale_text && !stale_symbol, "copied symbol retains a pointer into the LLVM arena");
+        }
+    }
+#endif
 }
 
 Value* YuhuBuilder::CreateOpaqueOopShift(Value* value, bool left, int shift) {

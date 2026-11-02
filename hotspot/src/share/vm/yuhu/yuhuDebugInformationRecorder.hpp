@@ -84,12 +84,34 @@ public:
     jobject oop = NULL;
 };
 
+// A pointer stored INSIDE a registered const/data symbol, e.g. one element of a
+// merged-switch pointer table in __DATA,__const whose value is the address of an
+// __DATA,__data oop/metadata slot.  Captured at PostFixup time, when JITLink has
+// already applied the edge, so word content == target (+ addend, or target - word
+// for delta kinds).  The builder rewrites these words after copying the symbol
+// into cb->consts(), because the arena the raw content points into is released
+// right after install (release_last_code_blob_unlocked + RT->remove()).
+enum class SymbolFixupKind : uint8_t {
+    absolute64 = 0, // Data64:   8-byte absolute address, 8-byte aligned
+    relative64 = 1, // Delta64:  8-byte target-minus-place delta
+    relative32 = 2  // Delta32:  4-byte target-minus-place delta
+};
+
+class SymbolFixup : public ResourceObj {
+public:
+    uint64_t word_addr;      // absolute address of the pointer word inside the symbol
+    uint64_t target_addr;    // edge target symbol address as resolved by JITLink
+    int64_t addend;          // edge addend
+    SymbolFixupKind kind;
+};
+
 class SymbolEntry : public ResourceObj {
 public:
     uint64_t addr;
     uint64_t start;
     uint64_t end;
     SectionType section_type;
+    GrowableArray<SymbolFixup*>* fixups = NULL; // interior pointers, filled by extractCallSites
 };
 
 // adrp + ldr generates 2 edge entries, but points to the same target address with different offsets
@@ -413,6 +435,9 @@ public:
   void register_global_var(uint64_t unique_id, GlobalVarType global_var_type, uint64_t target_value, jobject jobj = NULL);
 
   void register_symbol(uint64_t address, uint64_t start, uint64_t end, SectionType section_type);
+
+  // attach an interior-pointer fixup to the symbol whose range contains word_addr
+  void register_symbol_fixup(uint64_t word_addr, uint64_t target_addr, int64_t addend, SymbolFixupKind kind);
 
   void register_edge(uint32_t offset, EdgeTargetType edge_target_type, uint64_t target_address);
 

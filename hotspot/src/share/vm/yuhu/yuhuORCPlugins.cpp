@@ -227,6 +227,69 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
         }
     }
 
+    // Collect interior fixups: linker edges whose SOURCE bytes live inside a
+    // registered const/data symbol.  visitEdges below only walks __text blocks,
+    // so a data-block-sourced edge (e.g. one element of a merged-switch pointer
+    // table in __DATA,__const addressing an __DATA,__data oop/metadata slot)
+    // would otherwise never be seen, and the builder's memcpy into cb->consts()
+    // would carry the raw arena address verbatim - stale after RT->remove().
+    // This runs at PostFixup time, so edge content is already resolved and can
+    // be validated against the edge here.
+    for (auto &Section : G.sections()) {
+        StringRef sec_name = Section.getName();
+        if (!sec_name.ends_with("__const") && !sec_name.ends_with("__data")) {
+            continue;
+        }
+        for (auto *Block : Section.blocks()) {
+            for (auto &Edge : Block->edges()) {
+                auto Kind = Edge.getKind();
+                if (Kind == llvm::jitlink::Edge::GenericEdgeKind::KeepAlive) {
+                    continue;
+                }
+                uint64_t word_addr = Block->getFixupAddress(Edge).getValue();
+                if (recorder->get_symbol_by_range_addr(word_addr) == NULL) {
+                    continue; // edge source is not inside a registered symbol
+                }
+                uint64_t target_addr = Edge.getTarget().getAddress().getValue();
+                int64_t addend = Edge.getAddend();
+                // Classify by content rather than by kind: the Mach-O arm64 pointer edge
+                // kinds are not exposed by LLVM's public headers, while at PostFixup time
+                // the word content is already the final linked value.
+                SymbolFixupKind fixup_kind = SymbolFixupKind::absolute64;
+                bool handled = false;
+                if ((word_addr & 7) == 0) {
+                    uint64_t content = *(uint64_t*)word_addr;
+                    if (content == (uint64_t)((int64_t)target_addr + addend)) {
+                        fixup_kind = SymbolFixupKind::absolute64;
+                        handled = true;
+                    } else if ((int64_t)content == (int64_t)target_addr - (int64_t)word_addr + addend) {
+                        fixup_kind = SymbolFixupKind::relative64;
+                        handled = true;
+                    } else if ((uint32_t)content == (uint32_t)((int64_t)target_addr - (int64_t)word_addr + addend)) {
+                        fixup_kind = SymbolFixupKind::relative32;
+                        handled = true;
+                    }
+                } else if ((word_addr & 3) == 0) {
+                    uint32_t content = *(uint32_t*)word_addr;
+                    if (content == (uint32_t)((int64_t)target_addr - (int64_t)word_addr + addend)) {
+                        fixup_kind = SymbolFixupKind::relative32;
+                        handled = true;
+                    }
+                }
+                if (!handled) {
+                    if (YuhuTraceMachineCode) {
+                        // unknown interior shape: never silently drop it - surface at compile time.
+                        // the builder's debug-only stale-pointer sweep will flag it if it matters.
+                        errs() << "Warning: unhandled interior fixup kind " << G.getEdgeKindName(Kind)
+                               << " at " << word_addr << " -> " << target_addr << "\n";
+                    }
+                    continue;
+                }
+                recorder->register_symbol_fixup(word_addr, target_addr, addend, fixup_kind);
+            }
+        }
+    }
+
     GrowableArray<SymbolEntry> got_symbol_entries;
 
     for (auto &Section : G.sections()) {
@@ -266,6 +329,14 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
         llvm::jitlink::Symbol* found_func;
         for (auto *Sym : Section.symbols()) {
             if (!Sym->hasName()) {
+                if (YuhuTraceMachineCode) {
+                    errs() << "[CallSite Extractor] Sym, address: " << Sym->getAddress().getValue()
+                           << ", start: " << Sym->getRange().Start.getValue()
+                           << ", end: " << Sym->getRange().End.getValue()
+                           << ", section name: " << Section.getName() << "\n";;
+
+                    Disassembler::decode((address)Sym->getRange().Start.getValue(), (address)Sym->getRange().End.getValue(), tty);
+                }
                 continue;
             }
             if (recorder->get_mangled_func_name() == ((*(Sym->getName())).str())) {
@@ -282,6 +353,8 @@ llvm::Error CallSiteExtractorPlugin::extractCallSites(llvm::jitlink::LinkGraph &
                 // Populate func size
                 recorder->set_func_size(Sym->getRange().End.getValue() - Sym->getRange().Start.getValue());
                 break;
+            } else {
+                ShouldNotReachHere();
             }
         }
         if (!found_func) {

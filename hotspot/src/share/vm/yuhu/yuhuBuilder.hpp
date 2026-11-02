@@ -42,6 +42,7 @@
 
 // Forward declarations
 class YuhuFunction;
+class YuhuDebugInformationRecorder;
 
 class RelocEntry : public ResourceObj {
 public:
@@ -50,6 +51,22 @@ public:
     int spec_index;
     uint64_t target;
     int section_type;
+};
+
+// Context for copying registered const/data symbols into the nmethod consts section.
+class SymbolCopyContext : public ResourceObj {
+public:
+    YuhuDebugInformationRecorder* recorder;
+    CodeBuffer* cb;
+    address llvm_code_start;
+    size_t llvm_code_size;
+    address code_start;
+    size_t adapter_size;
+
+    SymbolCopyContext(YuhuDebugInformationRecorder* recorder2, CodeBuffer* cb2, address llvm_code_start2,
+                      size_t llvm_code_size2, address code_start2, size_t adapter_size2) :
+                      recorder(recorder2), cb(cb2), llvm_code_start(llvm_code_start2),
+                      llvm_code_size(llvm_code_size2), code_start(code_start2), adapter_size(adapter_size2) {}
 };
 
 class YuhuBuilder : public llvm::IRBuilder<> {
