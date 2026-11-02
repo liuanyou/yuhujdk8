@@ -16747,7 +16747,7 @@ if test "x$OPENJDK_TARGET_OS" = "xmacosx"; then
 
   # DEVELOPER_DIR could also be provided directly
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking Determining if we need to set DEVELOPER_DIR" >&5
-  as_echo_n "checking Determining if we need to set DEVELOPER_DIR... " >&6; }
+  $as_echo_n "checking Determining if we need to set DEVELOPER_DIR... " >&6; }
   if test -n "$DEVELOPER_DIR"; then
     if test ! -d "$DEVELOPER_DIR"; then
       as_fn_error $? "Xcode Developer path does not exist: $DEVELOPER_DIR, please provide a path to the Xcode application bundle using --with-xcode-path" "$LINENO" 5
