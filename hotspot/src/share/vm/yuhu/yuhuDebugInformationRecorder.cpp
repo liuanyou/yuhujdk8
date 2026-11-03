@@ -54,8 +54,8 @@ static void yuhu_stack_map_log_init() {
         } \
     } while(0)
 
-// Initialize static TLS index
-int YuhuDebugInformationRecorder::_tls_index = -1;
+// Per-thread instance pointer (zero-initialized in every thread by the runtime)
+thread_local YuhuDebugInformationRecorder* YuhuDebugInformationRecorder::_self = NULL;
 
 // Constructor
 YuhuDebugInformationRecorder::YuhuDebugInformationRecorder()
@@ -100,35 +100,24 @@ YuhuDebugInformationRecorder::~YuhuDebugInformationRecorder() {
   delete _arena;
 }
 
-// Initialize thread-local storage index
-void YuhuDebugInformationRecorder::initialize_tls() {
-  if (_tls_index == -1) {
-    _tls_index = os::allocate_thread_local_storage();
-  }
-}
-
-// Get thread-local instance (creates if not exists)
+// Get the calling thread's instance (creates it on first use).
+// Storage is a plain C++ thread_local pointer, so no pthread key and no
+// index-allocation step exist any more; each thread's cell starts zero-
+// initialized and the recorder itself lives on the C heap.
 YuhuDebugInformationRecorder* YuhuDebugInformationRecorder::get() {
-  YuhuDebugInformationRecorder* recorder = 
-    (YuhuDebugInformationRecorder*) os::thread_local_storage_at(_tls_index);
-  
-  if (recorder == NULL) {
+  if (_self == NULL) {
     // Allocate on C heap to survive ResourceMark scope changes
-    recorder = new (ResourceObj::C_HEAP, mtCompiler) YuhuDebugInformationRecorder();
-    os::thread_local_storage_at_put(_tls_index, recorder);
+    _self = new (ResourceObj::C_HEAP, mtCompiler) YuhuDebugInformationRecorder();
   }
-  
-  return recorder;
+
+  return _self;
 }
 
-// Release thread-local instance
+// Release the calling thread's instance
 void YuhuDebugInformationRecorder::release() {
-  YuhuDebugInformationRecorder* recorder = 
-    (YuhuDebugInformationRecorder*) os::thread_local_storage_at(_tls_index);
-  
-  if (recorder != NULL) {
-    delete recorder;
-    os::thread_local_storage_at_put(_tls_index, NULL);
+  if (_self != NULL) {
+    delete _self;
+    _self = NULL;
   }
 }
 

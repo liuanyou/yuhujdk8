@@ -98,9 +98,10 @@ struct YuhuCompiler::Impl {
 private:
     YuhuContext* _normal_context;   // prototype: seeds triple/DataLayout
     YuhuContext* _native_context;
-    // TLS index holding the calling compiler thread's YuhuContext.
-    // Allocated once at startup, before any compiler thread exists.
-    int _context_tls_index;
+    // The calling compiler thread's own context (nullptr until first use).
+    // Plain C++11 thread-local storage: one cell per thread, created lazily
+    // by that thread in context(); no pthread key involved.
+    static thread_local YuhuContext* _self_context;
     // DataLayout string applied to _normal_context's module; captured so
     // that lazily created per-thread contexts are configured identically.
     std::string _normal_data_layout;
@@ -136,13 +137,6 @@ public:
         // CompileThread_lock in the lock order, meaning it needs a higher rank.
         _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
         _llvm_inline_disabled_lock = new Monitor(Mutex::nonleaf + 6, "YuhuLLVMInlineDisabledLock");
-
-        // Allocate the TLS slot for per-compiler-thread contexts once, here
-        // at startup (single threaded), so no lazy index allocation can race
-        // once more than one Yuhu compiler thread exists.  Same for the
-        // debug recorder's index, which compile_method allocates lazily.
-        _context_tls_index = os::allocate_thread_local_storage();
-        YuhuDebugInformationRecorder::initialize_tls();
 
         MutexLocker locker(execution_engine_lock());
 
@@ -469,16 +463,13 @@ public:
             // generate_native_code clones exactly the calling thread's
             // module.  Created lazily on first use; compiler threads are
             // never destroyed, so the context lives for the process' life.
-            YuhuContext* ctx =
-                (YuhuContext*)os::thread_local_storage_at(_context_tls_index);
-            if (ctx == NULL) {
-                ctx = new YuhuContext("normal");
+            if (_self_context == NULL) {
+                _self_context = new YuhuContext("normal");
                 if (!_normal_data_layout.empty()) {
-                    ctx->module()->setDataLayout(_normal_data_layout);
+                    _self_context->module()->setDataLayout(_normal_data_layout);
                 }
-                os::thread_local_storage_at_put(_context_tls_index, ctx);
             }
-            return ctx;
+            return _self_context;
         }
         else {
             assert(AdapterHandlerLibrary_lock->owned_by_self(), "should be");
@@ -877,6 +868,10 @@ YuhuCompiler::YuhuCompiler()
   // All done
   set_state(initialized);
 }
+
+// Per-compiler-thread context pointer (zero-initialized in every thread by
+// the runtime; minted lazily in Impl::context()).
+thread_local YuhuContext* YuhuCompiler::Impl::_self_context = NULL;
 
 YuhuCompiler::~YuhuCompiler() {
   // std::unique_ptr<llvm::orc::LLJIT> will automatically clean up
@@ -1400,8 +1395,8 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   size_t llvm_code_size = 0;
   size_t effective_code_size = 0;
 
-    // Initialize thread-local debug information recorder
-    YuhuDebugInformationRecorder::initialize_tls();
+    // Thread-local debug information recorder (this thread's instance is
+    // created on first get() below)
     YuhuDebugInformationRecorder* recorder = YuhuDebugInformationRecorder::get();
     // Reset recorder to clear any stale data from previous compilations
     recorder->reset();

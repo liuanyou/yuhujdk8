@@ -208,8 +208,9 @@ private:
   // LLVM Module reference for embedding metadata
   llvm::Module* _module;
 
-  // Thread-local storage index
-  static int _tls_index;
+  // The calling thread's recorder instance (nullptr until first get()).
+  // Plain C++11 thread-local storage: one cell per thread, no pthread key.
+  static thread_local YuhuDebugInformationRecorder* _self;
 
   void check_frame_layout_info() const {
       assert(_total_frame_size_in_bytes != -1 && _num_of_prologue_registers != -1, "prologue data is not initialized");
@@ -256,7 +257,6 @@ public:
   ~YuhuDebugInformationRecorder();
   
   // Thread-local storage management
-  static void initialize_tls();
   static YuhuDebugInformationRecorder* get();
   static void release();
   void set_module(llvm::Module* mod) { _module = mod; }
