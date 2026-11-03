@@ -35,6 +35,10 @@
 
 #define YUHU_FLAGS(develop, develop_pd, product, product_pd, diagnostic, notproduct) \
                                                                               \
+  /* compiler threads */                                                      \
+  product(intx, YuhuCompilerThreads, 2,                                      \
+          "Number of Yuhu compiler threads")                                  \
+                                                                              \
   /* inlining */                                                              \
   product(intx, YuhuMaxInlineSize, 32,                                       \
           "Maximum bytecode size of methods to inline when using Yuhu")      \

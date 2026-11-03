@@ -728,8 +728,18 @@ void generate_stk_args(YuhuMacroAssembler* masm, int frame_size_in_bytes, Growab
 address YuhuRuntime::generate_static_call_stub(ciMethod* target_method, 
                                                 ciMethod* current_method,
                                                 GrowableArray<BasicType>* stk_basic_types) {
-  // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_STATIC_CALL);
+  // Check stub cache first.  The table itself is guarded by _stub_cache_lock
+  // (BasicHashtable is not thread safe once several threads build IR).
+  // Between the locked find below and the locked add at the end of the
+  // creation a racing thread can miss the cache and emit a duplicate stub;
+  // that is benign (both stubs behave identically, each nmethod references
+  // the one it embedded) and preferable to holding the lock across code
+  // emission.
+  YuhuRuntimeStub* cached;
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    cached = _stub_cache->find(target_method, current_method, YUHUSTUB_STATIC_CALL);
+  }
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -876,7 +886,10 @@ address YuhuRuntime::generate_static_call_stub(ciMethod* target_method,
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_STATIC_CALL, stub);
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    _stub_cache->add(target_method, current_method, YUHUSTUB_STATIC_CALL, stub);
+  }
   
   return stub_addr;
 }
@@ -886,8 +899,12 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
                                                  ciMethod* current_method, 
                                                  int vtable_index,
                                                  GrowableArray<BasicType>* stk_basic_types) {
-  // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_VIRTUAL_CALL);
+  // Check stub cache first (locking rationale: see generate_static_call_stub)
+  YuhuRuntimeStub* cached;
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    cached = _stub_cache->find(target_method, current_method, YUHUSTUB_VIRTUAL_CALL);
+  }
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -1027,7 +1044,10 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
     }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_VIRTUAL_CALL, stub);
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    _stub_cache->add(target_method, current_method, YUHUSTUB_VIRTUAL_CALL, stub);
+  }
   
   return stub_addr;
 }
@@ -1036,8 +1056,12 @@ address YuhuRuntime::generate_virtual_call_stub(ciMethod* target_method,
 address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method, 
                                                    ciMethod* current_method,
                                                    GrowableArray<BasicType>* stk_basic_types) {
-  // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INTERFACE_CALL);
+  // Check stub cache first (locking rationale: see generate_static_call_stub)
+  YuhuRuntimeStub* cached;
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INTERFACE_CALL);
+  }
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -1219,7 +1243,10 @@ address YuhuRuntime::generate_interface_call_stub(ciMethod* target_method,
     }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_INTERFACE_CALL, stub);
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    _stub_cache->add(target_method, current_method, YUHUSTUB_INTERFACE_CALL, stub);
+  }
   
   return stub_addr;
 }
@@ -1336,8 +1363,12 @@ address YuhuRuntime::generate_indeterminate_interface_call_stub(ciMethod* target
                                                             ciMethod* current_method,
                                                             GrowableArray<BasicType>* reg_basic_types,
                                                             GrowableArray<BasicType>* stk_basic_types) {
-  // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL);
+  // Check stub cache first (locking rationale: see generate_static_call_stub)
+  YuhuRuntimeStub* cached;
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    cached = _stub_cache->find(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL);
+  }
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -1531,7 +1562,10 @@ address YuhuRuntime::generate_indeterminate_interface_call_stub(ciMethod* target
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL, stub);
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    _stub_cache->add(target_method, current_method, YUHUSTUB_INDETERMINATE_INTERFACE_CALL, stub);
+  }
 
   return stub_addr;
 }
@@ -1547,8 +1581,12 @@ address YuhuRuntime::generate_dynamic_call_stub(ciMethod* target_method,
                                                 ciMethod* current_method,
                                                 GrowableArray<BasicType>* reg_basic_types,
                                                 GrowableArray<BasicType>* stk_basic_types) {
-  // Check stub cache first
-  YuhuRuntimeStub* cached = _stub_cache->find(target_method, current_method, YUHUSTUB_DYNAMIC_CALL);
+  // Check stub cache first (locking rationale: see generate_static_call_stub)
+  YuhuRuntimeStub* cached;
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    cached = _stub_cache->find(target_method, current_method, YUHUSTUB_DYNAMIC_CALL);
+  }
   if (cached != NULL) {
     if (YuhuTraceInstalls) {
         if (YuhuStackMapFile != NULL) {
@@ -1730,7 +1768,10 @@ address YuhuRuntime::generate_dynamic_call_stub(ciMethod* target_method,
   }
 
   // Add to stub cache
-  _stub_cache->add(target_method, current_method, YUHUSTUB_DYNAMIC_CALL, stub);
+  {
+    MonitorLockerEx locker(_stub_cache_lock, Mutex::_no_safepoint_check_flag);
+    _stub_cache->add(target_method, current_method, YUHUSTUB_DYNAMIC_CALL, stub);
+  }
 
   return stub_addr;
 }
@@ -1767,6 +1808,7 @@ address YuhuRuntime::_handle_deoptimization_stub = NULL;
 
 // Stub cache for sharing YuhuRuntimeStubs
 YuhuRuntimeStubHashtable* YuhuRuntime::_stub_cache = NULL;
+Monitor* YuhuRuntime::_stub_cache_lock = NULL;
 
 // ============================================================================
 // YuhuRuntimeStubCacheKey implementation
@@ -1858,6 +1900,7 @@ void YuhuRuntimeStubHashtable::add(ciMethod* target, ciMethod* current, YuhuStub
 // Initialize all VM call stubs
 void YuhuRuntime::initialize_vm_stubs() {
   // Initialize stub cache
+  _stub_cache_lock = new Monitor(Mutex::nonleaf + 7, "YuhuStubCacheLock");
   _stub_cache = new YuhuRuntimeStubHashtable(1009);  // prime number for better distribution
   _new_instance_stub = generate_vm_stub("yuhu_new_instance_stub", (address) YuhuRuntime::new_instance);
   _newarray_stub = generate_vm_stub("yuhu_newarray_stub", (address) YuhuRuntime::newarray);

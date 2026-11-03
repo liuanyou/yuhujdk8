@@ -89,14 +89,21 @@ namespace {
 
 struct YuhuCompiler::Impl {
     // Each thread generating IR needs its own context.  The normal
-    // context is used for bytecode methods, and is protected from
-    // multiple simultaneous accesses by being restricted to the
-    // compiler thread.  The native context is used for JNI methods,
-    // and is protected from multiple simultaneous accesses by the
-    // adapter handler library lock.
+    // context is used for bytecode methods.  There is one normal context
+    // per compiler thread (lazily created, reached through TLS; see
+    // context() below) because llvm::LLVMContext/Module mutation during
+    // IR construction is not thread safe.  The native context is used for
+    // JNI methods, and is protected from multiple simultaneous accesses
+    // by the adapter handler library lock.
 private:
-    YuhuContext* _normal_context;
+    YuhuContext* _normal_context;   // prototype: seeds triple/DataLayout
     YuhuContext* _native_context;
+    // TLS index holding the calling compiler thread's YuhuContext.
+    // Allocated once at startup, before any compiler thread exists.
+    int _context_tls_index;
+    // DataLayout string applied to _normal_context's module; captured so
+    // that lazily created per-thread contexts are configured identically.
+    std::string _normal_data_layout;
     // The LLVM execution engine is the JIT we use to generate native
     // code.  It is thread safe, but we need to protect it with a lock
     // of our own because otherwise LLVM's lock and HotSpot's locks
@@ -129,6 +136,13 @@ public:
         // CompileThread_lock in the lock order, meaning it needs a higher rank.
         _execution_engine_lock = new Monitor(Mutex::nonleaf + 6, "YuhuExecutionEngineLock");
         _llvm_inline_disabled_lock = new Monitor(Mutex::nonleaf + 6, "YuhuLLVMInlineDisabledLock");
+
+        // Allocate the TLS slot for per-compiler-thread contexts once, here
+        // at startup (single threaded), so no lazy index allocation can race
+        // once more than one Yuhu compiler thread exists.  Same for the
+        // debug recorder's index, which compile_method allocates lazily.
+        _context_tls_index = os::allocate_thread_local_storage();
+        YuhuDebugInformationRecorder::initialize_tls();
 
         MutexLocker locker(execution_engine_lock());
 
@@ -272,6 +286,7 @@ public:
                 _normal_context->module()->setDataLayout(DLStr);
                 _native_context->module()->setDataLayout(DLStr);
                 DLStrWithNI = DLStr;
+                _normal_data_layout = DLStr;
 
                 // DEBUG: Verify DataLayout was set
                 std::string verify1 = _normal_context->module()->getDataLayout().getStringRepresentation();
@@ -449,7 +464,21 @@ public:
 
     YuhuContext* context() const {
         if (JavaThread::current()->is_Compiler_thread()) {
-            return _normal_context;
+            // Every Yuhu compiler thread builds IR into a module of its own:
+            // llvm::LLVMContext and llvm::Module are not thread safe, and
+            // generate_native_code clones exactly the calling thread's
+            // module.  Created lazily on first use; compiler threads are
+            // never destroyed, so the context lives for the process' life.
+            YuhuContext* ctx =
+                (YuhuContext*)os::thread_local_storage_at(_context_tls_index);
+            if (ctx == NULL) {
+                ctx = new YuhuContext("normal");
+                if (!_normal_data_layout.empty()) {
+                    ctx->module()->setDataLayout(_normal_data_layout);
+                }
+                os::thread_local_storage_at_put(_context_tls_index, ctx);
+            }
+            return ctx;
         }
         else {
             assert(AdapterHandlerLibrary_lock->owned_by_self(), "should be");
@@ -463,10 +492,6 @@ public:
 
     llvm::orc::LLJIT* jit() const {
         assert(execution_engine_lock()->owned_by_self(), "should be");
-        return _jit.get();
-    }
-
-    llvm::orc::LLJIT* jit_without_lock() const {
         return _jit.get();
     }
 
@@ -826,34 +851,21 @@ public:
     }
 
     void eraseFunctions() {
-        // Remove any existing functions with the same name in both modules to avoid
-        // duplicated symbols (e.g., LLVM auto-suffix ".1") and potential EE failures.
-        // Also clear all other functions from the module to avoid conflicts from
-        // previously compiled methods (e.g., Matrix::multiply appearing in encodeArrayLoop IR)
-        {
-            llvm::Module* mod_normal = _normal_context->module();
-            llvm::Module* mod_native = _native_context->module();
+        // Remove all functions from the calling thread's own module to avoid
+        // conflicts from previously compiled methods (e.g. Matrix::multiply
+        // appearing in encodeArrayLoop IR) and duplicated symbols.
+        // With per-thread contexts this only ever touches the caller's own
+        // module: a compiler thread its own normal context, the adapter
+        // handler path the native context (protected by its own lock).
+        llvm::Module* mod = context()->module();
 
-            // Clear all functions from normal module
-            if (mod_normal != NULL) {
-                std::vector<llvm::Function*> to_erase;
-                for (auto& func : mod_normal->getFunctionList()) {
-                    to_erase.push_back(&func);
-                }
-                for (llvm::Function* func : to_erase) {
-                    func->eraseFromParent();
-                }
+        if (mod != NULL) {
+            std::vector<llvm::Function*> to_erase;
+            for (auto& func : mod->getFunctionList()) {
+                to_erase.push_back(&func);
             }
-
-            // Clear all functions from native module
-            if (mod_native != NULL) {
-                std::vector<llvm::Function*> to_erase;
-                for (auto& func : mod_native->getFunctionList()) {
-                    to_erase.push_back(&func);
-                }
-                for (llvm::Function* func : to_erase) {
-                    func->eraseFromParent();
-                }
+            for (llvm::Function* func : to_erase) {
+                func->eraseFromParent();
             }
         }
     }
@@ -1503,13 +1515,20 @@ void YuhuCompiler::compile_method(ciEnv*    env,
   // This allows the JITLink plugin to extract virtual address mappings
   recorder->embed_call_site_metadata();
 
-  llvm::orc::ResourceTrackerSP RT = _p_impl->jit_without_lock()->getMainJITDylib().createResourceTracker();
-
   // Generate native code.  It's unpleasant that we have to drop into
   // the VM to do this -- it blocks safepoints -- but I can't see any
   // other way to handle the locking.
+  llvm::orc::ResourceTrackerSP RT;
   {
     ThreadInVMfromNative tiv(JavaThread::current());
+    // Creating a resource tracker mutates the shared JITDylib, so it must
+    // hold the engine lock like every other ORC mutation.  The lock is
+    // released before generate_native_code(), which re-acquires it
+    // internally (the Monitor is not reentrant).
+    {
+      MutexLocker locker(_p_impl->execution_engine_lock());
+      RT = _p_impl->jit()->getMainJITDylib().createResourceTracker();
+    }
     _p_impl->generate_native_code(RT, entry, function, base_name);
 
     address code_start = entry->code_start();
@@ -1776,8 +1795,14 @@ void YuhuCompiler::compile_method(ciEnv*    env,
     // This frees the C heap memory and clears the TLS slot
     YuhuDebugInformationRecorder::release();
 
-    if (auto Err = RT->remove()) {
-        llvm::consumeError(std::move(Err));
+    // RT->remove() tears down definitions in the shared execution graph;
+    // with more than one compiler thread it must hold the engine lock.
+    {
+      ThreadInVMfromNative tiv(JavaThread::current());
+      MutexLocker locker(_p_impl->execution_engine_lock());
+      if (auto Err = RT->remove()) {
+          llvm::consumeError(std::move(Err));
+      }
     }
 }
 
@@ -1812,6 +1837,14 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
     YuhuCodeBuffer cb(*yuhu_masm);
     YuhuBuilder builder(&cb, NULL);  // no function context for native wrapper
 
+    // Clear leftovers from previous wrapper builds out of the native
+    // module (on the adapter-handler context, which is this thread's) so
+    // that the module cloned below contains only this wrapper.  compile_method
+    // used to wipe the native module as a side effect of its own erase;
+    // with per-thread contexts the wipe must happen here, under the
+    // adapter handler library lock that already protects this context.
+    _p_impl->eraseFunctions();
+
     // Emit the entry point
     YuhuEntry *entry = (YuhuEntry *) cb.malloc(sizeof(YuhuEntry));
 
@@ -1819,7 +1852,15 @@ nmethod* YuhuCompiler::generate_native_wrapper(MacroAssembler* masm,
     YuhuNativeWrapper *wrapper = YuhuNativeWrapper::build(
             &builder, target, name, arg_types, return_type);
 
-    llvm::orc::ResourceTrackerSP  RT = _p_impl->jit_without_lock()->getMainJITDylib().createResourceTracker();
+    // Tracker creation mutates the shared JITDylib; serialize it with the
+    // compiler threads through the engine lock.  The thread is in _thread_in_vm
+    // here (generate_native_code below already relies on that for its own
+    // MutexLocker), so no state transition is needed.
+    llvm::orc::ResourceTrackerSP RT;
+    {
+      MutexLocker locker(_p_impl->execution_engine_lock());
+      RT = _p_impl->jit()->getMainJITDylib().createResourceTracker();
+    }
 
     // Generate native code (also handles symbol removal and RT->remove())
     _p_impl->generate_native_code(RT, entry, wrapper->function(), name);
@@ -1862,10 +1903,15 @@ const char* YuhuCompiler::methodname(const char* klass, const char* method) {
 }
 
 const char* YuhuCompiler::funcname(const char *base_name) {
+    // A millisecond timestamp alone is no longer unique once two compiler
+    // threads can be naming functions at the same moment (and the same
+    // method may be requeued after a failed install).  Mix in a process-
+    // global atomic sequence so ORC symbol names can never collide.
+    static volatile jint name_seq = 0;
     auto now = std::chrono::system_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
     std::ostringstream oss;
-    oss << base_name << "_t" << ms;
+    oss << base_name << "_t" << ms << "_" << Atomic::add(1, &name_seq);
     std::string str = oss.str();  // Store string to avoid dangling pointer
     char *buf = NEW_RESOURCE_ARRAY(char, str.length() + 1);
 

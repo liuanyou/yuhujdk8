@@ -57,6 +57,7 @@
 #endif
 #ifdef YUHU
 #include "yuhu/yuhuCompiler.hpp"
+#include "yuhu/yuhu_globals.hpp"   // YuhuCompilerThreads (flags are declared per-TU)
 #endif
 
 #ifdef DTRACE_ENABLED
@@ -815,10 +816,15 @@ void CompileBroker::compilation_init() {
 
 #ifdef YUHU
   // YUHU compiler can coexist with C1 and C2
-  // Get YUHU compiler count from policy (if supported) or use default
-  // For now, use a simple approach: if YUHU is defined, create one compiler
-  // TODO: Add policy support for YUHU compiler count
-  yuhu_count = 1;  // Default to 1 YUHU compiler thread
+  // The YUHU compiler thread count comes from YuhuCompilerThreads.  More
+  // than one thread is safe only because each Yuhu compiler thread builds
+  // IR into its own llvm context/module (see YuhuCompiler::Impl::context())
+  // and all ORC execution-engine mutations are serialized on the
+  // YuhuExecutionEngineLock.
+  yuhu_count = YuhuCompilerThreads;
+  if (yuhu_count < 1) {
+    yuhu_count = 1;
+  }
   _compilers[2] = new YuhuCompiler();
 #endif // YUHU
 

@@ -33,6 +33,7 @@
 class ciMethod;
 class Symbol;
 class YuhuRuntimeStub;
+class Monitor;
 
 // Stable cache key for a method: (klass_name, method_name, signature, access_flags)
 // All Symbol* are interned in HotSpot, so pointer comparison is safe.
@@ -98,6 +99,12 @@ public:
 class YuhuRuntime : public AllStatic {
   // Stub cache for sharing YuhuRuntimeStubs
   static YuhuRuntimeStubHashtable* _stub_cache;
+
+  // Guards _stub_cache find/add.  BasicHashtable is not thread safe and the
+  // cache is read and written both by Yuhu compiler threads (IR build) and
+  // by the adapter handler library path.  Rank is distinct from the Yuhu
+  // execution engine lock (nonleaf+6); the two are never held nested.
+  static Monitor* _stub_cache_lock;
 
   // VM call stubs (RuntimeStub wrappers)
  private:
