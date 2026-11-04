@@ -15,7 +15,11 @@ Key Features:
   * AArch64 Support - Fully optimized for ARM64 architecture
   * JSR 292 Support - invokedynamic and invokehandle bytecode support for lambdas
     and MethodHandle invocations
-  * Method Inlining - Automatic inlining of eligible methods for improved performance
+  * Method Inlining - Two inliners at every call site: a bytecode-level inliner that
+    pastes straight-line callees into the caller (on by default), and an LLVM-IR
+    inliner that compiles the callee as its own alwaysinline function and flattens it
+    into the caller - for callees containing branches, loops, nested invokes, monitors
+    or athrow (-XX:+YuhuLLVMInlining, off by default)
   * Exception Handling - Comprehensive implicit exception support with deoptimization
   * On-Stack Replacement - Compile long-running loops mid-execution
 
@@ -31,11 +35,14 @@ Implementation Status:
   ✅ Safepoint Mechanism - Complete (OopMap generation, GC integration)
   ✅ Lock/Monitor Support - Complete (synchronized semantics with CAS fast-path)
   ✅ Exception Handling - Complete (exception handler and unwind handler)
-  ✅ Deoptimization - Complete (trap mechanism with ciTypeFlow integration)
-  ✅ Method Inlining - Complete (YuhuInliner with type-based eligibility checks)
+  ✅ Deoptimization - Complete (trap mechanism with ciTypeFlow integration, per-bytecode
+    reexecute decisions, and one scope description per inline level)
+  ✅ Method Inlining - Complete (bytecode inliner on by default; LLVM-IR inliner behind -XX:+YuhuLLVMInlining)
   ✅ invokedynamic Support - Complete (lambda expressions, CallSite resolution)
   ✅ invokehandle Support - Complete (MethodHandle.invoke() following C1's conversion logic)
   ✅ On-Stack Replacement (OSR) - Complete (long-running loop compilation)
+  ✅ G1 GC Integration - Complete (pre and post write barriers plus SATB, emitted in the
+    same order as the template interpreter)
   ⚠️ Runtime Support - Partial (frame walking compatibility with HotSpot still improving)
   ⚠️ Optimizations - LLVM-based (leverages LLVM optimization passes)
 
@@ -92,6 +99,22 @@ Build Instructions:
        - test_decimal.sh     : Decimal arithmetic operations
        - test_mixed.sh       : Mixed C1/C2/Yuhu compilation
        - test_nine.sh        : Complex multi-method scenarios
+       - test_llvminline.sh  : LLVM-IR inlining - branches, loops, nested invokes,
+                             athrow and monitors inside an inlined callee
+       - test_safepointdeopt.sh : Spontaneous deopt of a plain (non-synchronized)
+                             Yuhu frame - the control for the synchronized cases
+       - test_syncspont.sh   : Spontaneous deopt involving a synchronized method
+       - test_syncmethoddeopt.sh : Deopt of a Yuhu-compiled synchronized method
+       - test_reusedslot.sh  : Reproducer for the reused-slot (T_BOTTOM / T_CONFLICT)
+                             compile-time assert on Guava's
+                             LocalCache$Segment.lockedGetOrLoad; needs a Guava jar
+       - test_iso8601_jumptable.sh : Reproducer for a tableswitch jump-table crash;
+                             dumps the linked code with -XX:+YuhuTraceMachineCode
+
+     IR verification helpers (inspect the dumped IR instead of running a program):
+       - verify_llvm_inlining.sh : checks the "fully flattened" invariant and the
+                             inlining evidence in the dumped _tmp_yuhu_ir_*.ll files
+       - verify_all_ir.sh    : runs LLVM 'opt -passes=verify' over every dumped IR file
 
   License:
   yuhujdk8 is licensed under the same terms as OpenJDK (GPL v2 with Classpath Exception).
