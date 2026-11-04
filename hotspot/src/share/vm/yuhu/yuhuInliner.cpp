@@ -361,28 +361,48 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 // Trapping division (idiv / ldiv / irem / lrem) is permitted since M1+.
 // Yuhu's do_div emits the JVM's INT_MIN / -1 = INT_MIN overflow rule
 // (AArch64 sdiv traps or returns 0 for that encoding) plus an explicit
-// zero-divisor guard that fires an ArithmeticException trap; both paths
-// are frame-aware via the same statepoint-id + inline-node mechanism as
-// null-check traps.
+// zero-divisor guard that calls the throw_ArithmeticException stub; the
+// frame-state note below says what that implies across an inline edge.
 //
-// Known M1 gap (now significantly more load-bearing): the deopt bundle
-// attached to any safepoint or trap inside an inlinee captures only the
-// inlinee's current_state(), not the caller's virtual state at the
-// inline call site.  This is now triggered by any null-check (getfield /
-// putfield / arraylength / *aload / *astore / invokevirtual receiver),
-// bounds-check (*aload / *astore), class-check (checkcast), zero-divisor
-// (idiv / ldiv / irem / lrem), monitorenter's lockee null-check, or
-// allocation slow path.  Non-trap paths
-// (safepoint stop-and-resume, RS4GC gc-live reporting on the merged
-// frame, ordinary control flow) are correct.  Trap paths still resolve
-// to the correct bytecode-level bci via the statepoint-id + inline-node
-// sender chain, and the caller's compile succeeds (the trap is emitted
-// as an ordinary branch to the deopt handler), but at runtime the
-// interpreter re-execution sees a partial virtual frame (inlinee
-// locals/stack present, caller locals/stack at the inline call site
-// missing).  Production safety REQUIRES closing this gap before relying
-// on any trap-emitting opcode inside a Path B inlinee.  Full multi-level
-// bundle capture is the immediate follow-up subtask.
+// Frame state across the inline boundary -- this paragraph supersedes
+// the one that used to sit here ("Known M1 gap"), which claimed that a
+// deopt bundle inside an inlinee captured only the inlinee's own state.
+// Two things about that claim were wrong:
+//
+//  (1) Yuhu raises NO uncommon trap for implicit exceptions.  check_null
+//      (the receiver of getfield / putfield / arraylength / *aload /
+//      *astore / invokevirtual / monitorenter / the athrow operand),
+//      check_bounds, the divide-by-zero guard and the checkcast test all
+//      call the throw_NullPointerException / throw_ArrayIndexOutOfBounds-
+//      Exception / throw_ArithmeticException / throw_ClassCastException
+//      stubs and then dispatch against the current method's handler table
+//      -- see YuhuTopLevelBlock::zero_check_value, check_bounds and
+//      do_type_check.  None of those paths can reach a deopt handler.
+//      The traps that do exist are constant-pool conditions: the
+//      Reason_unloaded trap ciTypeFlow reports through scan_for_traps
+//      (unresolved ldc / klass / method / field) plus the unloaded-catch-
+//      klass and unresolved-holder traps marshal_exception_mixed installs,
+//      and Reason_uninitialized / Reason_unhandled at invoke and
+//      exception dispatch sites.
+//
+//  (2) Those traps, and every safepoint poll, are already multi-level
+//      safe.  A site inside an inlinee resolves through the statepoint-
+//      id + inline-node chain, and YuhuDebugInformationRecorder::
+//      generate_safepoint_and_describe_scope walks that chain building
+//      one CallSiteDeoptBundleFrameHolder per level: the innermost
+//      level's DeoptBundle comes from the raising site, each enclosing
+//      level's from the inlinee_call site that pulled it in -- whose
+//      caller state do_llvm_inline_call materializes with
+//      decache_for_inlinee_call() before register_deopt_bundle(), which
+//      is exactly what makes the ancestor level's slots describable.
+//      The chain is then traversed twice, parent to child: once to union
+//      every level's oop slots into the single flattened frame's OopMap,
+//      once to describe_scope() one ScopeDesc per level, so
+//      uncommon_trap unpacks a complete interpreter frame per inline
+//      level.  Reproduce / re-check with a Path-B caller under
+//      -XX:+DeoptimizeALot -XX:+TraceDeoptimization: the trace lists the
+//      callee at its own bci with the caller at the invoke bci as its
+//      sender, both unpacked from one nmethod.
 bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
   if (!may_be_inlinable(target, /* allow_exception_handlers = */ true,
                              /* allow_monitors = */ true))
@@ -585,17 +605,22 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 
       // ---- arraylength (M1+) ----
       // Emits a check_null on the receiver and a load from the array's
-      // length field.  Null receiver deopts; no bounds concern.
+      // length field.  A null receiver calls the throw_NullPointer-
+      // Exception stub, it does not deopt; no bounds concern.
     case Bytecodes::_arraylength:
       needs_path_b = true;
       break;
 
       // ---- array load / store (M1+) ----
-      // do_array_load / do_array_store emit a null-check + bounds-check
-      // pair; on bounds failure an implicit ArrayIndexOutOfBounds trap
-      // fires; aastore additionally runs the array-klass store-type
-      // check and may throw ArrayStoreException.  See the "Traps" note
-      // in the function-level doc for the M1 deopt-bundle caveat.
+      // do_array_load / do_array_store emit a check_null + check_bounds
+      // pair; on failure they call the throw_NullPointerException /
+      // throw_ArrayIndexOutOfBoundsException stubs and dispatch against
+      // the method's own handler table, so no deopt is involved (see the
+      // frame-state note in the function-level doc).  Note that, unlike
+      // the template interpreter, do_array_store performs NO array-klass
+      // store-type check: aastore of a wrong-typed reference is silently
+      // accepted and no ArrayStoreException can be raised.  That is a
+      // pre-existing Shark-inherited correctness hole, not a Path B one.
     case Bytecodes::_iaload: case Bytecodes::_laload: case Bytecodes::_faload:
     case Bytecodes::_daload: case Bytecodes::_aaload: case Bytecodes::_baload:
     case Bytecodes::_caload: case Bytecodes::_saload:
@@ -611,8 +636,12 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // pointer form is emitted when the klass size is a compile
       // constant.  Both flows can trigger GC + safepoint; RS4GC tracks
       // the freshly-allocated oop as gc-live at the statepoint.  Out-of-
-      // memory is delivered as a pending_exception rather than a deopt
-      // trap, so the M1 multi-level bundle gap does NOT apply here.
+      // memory arrives as a pending_exception rather than a trap, so it
+      // is handled by the ordinary exception machinery.  An UNRESOLVED
+      // klass is different: scan_for_traps installs a Reason_unloaded /
+      // Action_reinterpret trap at the bytecode, which is a real
+      // uncommon trap inside the inlinee and reconstructs every inline
+      // level -- see the frame-state note in the function-level doc.
     case Bytecodes::_new: case Bytecodes::_anewarray:
     case Bytecodes::_newarray: case Bytecodes::_multianewarray:
       needs_path_b = true;
@@ -620,11 +649,12 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 
       // ---- type check (M1+) ----
       // instanceof emits a subtype test and pushes 0/1; it cannot trap.
-      // checkcast emits a subtype test that throws ClassCastException on
-      // failure via the deopt trap path; see the "Traps" note in the
-      // function-level doc.  Unloaded klass operand dispatches to the
-      // fine-grained Reason_unloaded_object / variant-2 reinterpret
-      // trap already used at top-level checkcast sites.
+      // checkcast emits the same test and, on failure, calls the
+      // throw_ClassCastException stub and dispatches handlers -- a VM
+      // call, not a deopt trap.  What checkcast CAN trap on is an
+      // unresolved klass operand: scan_for_traps installs a
+      // Reason_unloaded / Action_reinterpret trap for it, the same
+      // request a top-level checkcast site makes.
     case Bytecodes::_instanceof:
     case Bytecodes::_checkcast:
       needs_path_b = true;
@@ -633,8 +663,9 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // ---- trapping integer/long division (M1+) ----
       // Yuhu's do_div emits the JVM's INT_MIN / -1 = INT_MIN overflow
       // rule (AArch64 sdiv traps or returns 0 for that encoding) plus
-      // an explicit zero-divisor guard that fires an ArithmeticException
-      // trap.  See the "Traps" note in the function-level doc.
+      // an explicit zero-divisor guard that calls the throw_Arithmetic-
+      // Exception stub; like the other checked opcodes it dispatches in
+      // compiled code rather than raising a deopt trap.
     case Bytecodes::_idiv: case Bytecodes::_ldiv:
     case Bytecodes::_irem: case Bytecodes::_lrem:
       needs_path_b = true;
@@ -671,8 +702,12 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
       // falls through to handle_return(T_VOID, exception) at the CALLER
       // level (which is NOT an inlinee, so it does hit the top-level
       // unwind patchpoint); the caller's own bundle reconstructs cor-
-      // rectly, sidestepping the multi-level deopt bundle gap.  Note
-      // the caller's IR-level fast dispatch is the only path that can
+      // rectly.  Deopting at the inlinee's own throw site would be
+      // frame-correct too now that every inline level travels with a
+      // trap (frame-state note above), but it would pay a deopt plus a
+      // full frame unpack for every throw, so dispatch stays in the
+      // caller.  Note the caller's IR-level fast dispatch is the only
+      // path that can
       // fire here (Yuhu still registers an empty ExceptionHandlerTable
       // per memory "Yuhu ExceptionHandlerTable population require-
       // ment"), so callers without a try/catch around the inline call

@@ -1035,11 +1035,20 @@ void YuhuTopLevelBlock::handle_return(BasicType type, Value* exception) {
     // ret becomes an unconditional branch to that caller continuation,
     // and the caller's own emit_handler_checks dispatches against the
     // CALLER's exception table using the CALLER's own statepoint-id +
-    // deopt bundle -- which side-steps the multi-level deopt bundle gap
-    // called out in is_llvm_inlineable's function-level doc (see
-    // "Known M1 gap" paragraph): we never need to reconstruct a virtual
-    // frame across the inline boundary because we never deopt at the
-    // inlinee's throw site.
+    // deopt bundle.
+    //
+    // This is a cost choice, not a correctness requirement.  Yuhu used to
+    // need it because a bundle captured inside an inlinee described only
+    // the inlinee's frame; that limitation is gone, since the debug
+    // recorder now walks the inline-node chain and rebuilds one
+    // CallSiteDeoptBundleFrameHolder (call site + deopt bundle + frame
+    // layout) per level, with decache_for_inlinee_call() having already
+    // materialized each enclosing level's state at its invoke site.  So
+    // deopting at the inlinee's throw site would reconstruct the whole
+    // virtual frame correctly today -- it would just pay an uncommon_trap
+    // plus a full frame unpack for every throw that crosses the boundary,
+    // which the caller-side check avoids.  See the frame-state note on
+    // YuhuInliner::is_llvm_inlineable.
     //
     // The unified_exit_block's `ret` for a non-void inlinee reads from
     // return_slot; for the exception path we've not stashed anything

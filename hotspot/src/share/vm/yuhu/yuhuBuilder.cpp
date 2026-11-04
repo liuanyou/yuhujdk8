@@ -554,9 +554,13 @@ CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id) {
   // Create the call with deopt bundle
   llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, {deopt_bundle});
   
-  // Attach custom Statepoint ID to distinguish deopt statepoints from GC statepoints
-  // GC safepoints use DefaultStatepointID (0), deopt traps use 0x1000+
-  // This allows runtime to differentiate between GC stackmaps and deopt stackmaps
+  // Attach the call site's unique statepoint ID.  RS4GC rewrites this intrinsic
+  // into a patchpoint but keeps the attribute, and the same ID is then read back
+  // from __llvm_stackmaps, so it is the key that joins the machine-code stackmap
+  // to the CallSiteEntry and the DeoptBundle recorded for this trap.
+  // The ID no longer encodes the kind of site: every call site - deopt trap,
+  // safepoint poll, VM or Java call - takes its own number from
+  // YuhuStatepointIDGenerator::next(), and the kind lives in CallSiteEntry.
   llvm::LLVMContext &Ctx = getContext();
   llvm::AttrBuilder AB(Ctx);
   AB.addAttribute("statepoint-id", std::to_string(statepoint_id));

@@ -41,11 +41,11 @@ class YuhuStack : public YuhuCompileInvariants {
  public:
   // `is_inlinee` selects the reduced frame protocol used for a callee built
   // as a separate alwaysinline llvm::Function (see YuhuFunction::
-  // build_inlinee): the frame's own alloca/layout is unchanged, but the three
-  // compilation-wide side effects -- the EXTENDED_SP fixed-ID stackmap, the
-  // register_frame_layout_info_with_frame_fields() registration and the
-  // final CreateStoreFramePointer() (which writes thread->last_Java_fp) --
-  // are skipped, because those are keyed once per compilation and must
+  // build_inlinee): the frame's own alloca, the
+  // register_frame_layout_frame_fields() registration and the EXTENDED_SP
+  // stackmap still run per inlinee (each keeps its own statepoint id), but the
+  // final CreateStoreFramePointer() -- which writes thread->last_Java_fp -- is
+  // skipped, because that is a per-compilation singleton side effect that must
   // belong to the outermost function only.
   static YuhuStack* CreateBuildAndPushFrame(
     YuhuFunction* function, llvm::Value* method, bool is_inlinee = false);

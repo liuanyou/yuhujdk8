@@ -59,9 +59,22 @@ private:
     llvm::Error dumpMachineCode(llvm::jitlink::LinkGraph &G);
 };
 
-// CallSiteExtractorPlugin - Extract call site information from compiled machine code
-// This plugin scans for dual virtual address placeholders (0xDEADxxxx and 0xBEEFBEEFxxxx)
-// and patches them with actual values, then update call site with correct return pc addresses
+// CallSiteExtractorPlugin - Harvest the finalized LinkGraph for the nmethod builder.
+// It registers a post-fixup pass, so every address and edge value it reads is the
+// linked one.  It patches no machine code; it records into the calling compiler
+// thread's YuhuDebugInformationRecorder:
+//   1. __DATA,__const / __DATA,__data symbol ranges (jump tables, oop/metadata slots)
+//   2. interior fixups - pointer words living inside those symbols, classified by
+//      comparing the in-memory value against the resolved edge, because the Mach-O
+//      arm64 pointer edge kinds are not exposed by LLVM's public headers
+//      (absolute64 / relative64 / relative32)
+//   3. $__GOT entries, validated to reference a known call target or const/data symbol
+//   4. the compiled function's __text edges, tagged got_symbol or const_symbol and
+//      stored as function-relative offsets (an ADRP + LDR pair yields two edges)
+// The nmethod builder then copies the referenced symbols into cb->consts(), re-points
+// the ADRP immediates at the copies and registers the relocations that keep the
+// references - the code-side hop and the pointer words inside the copied tables -
+// valid once the code leaves the LLVM arena.
 class CallSiteExtractorPlugin : public llvm::orc::ObjectLinkingLayer::Plugin {
 public:
     void notifyLoaded(llvm::orc::MaterializationResponsibility &MR) override;

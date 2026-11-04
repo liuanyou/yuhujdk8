@@ -165,7 +165,9 @@ void CallSiteExtractorPlugin::notifyTransferringResources(llvm::orc::JITDylib &J
 }
 
 // CallSiteExtractorPlugin implementation
-// Scans for movz/movk/blr patterns and extracts VM call site information
+// Reads the linked graph - symbol ranges, interior fixups, GOT entries and the
+// function's ADRP edges - and records it for the nmethod builder.  No instruction
+// decoding is involved: at post-fixup time JITLink has already resolved the values.
 void CallSiteExtractorPlugin::modifyPassConfig(llvm::orc::MaterializationResponsibility &MR,
                                               llvm::jitlink::LinkGraph &LG,
                                               llvm::jitlink::PassConfiguration &PassConfig) {

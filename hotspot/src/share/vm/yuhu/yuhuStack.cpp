@@ -145,19 +145,19 @@ void YuhuStack::initialize(Value* method, YuhuInlineNodeOrMethod* inline_node_or
 
   // Frame header
   // For AArch64, we use a simple frame marker (not Zero-specific)
-  // Use a recognizable marker value for debugging.
-  // 0xDEADBEEF: a plain Yuhu frame (bytecode-level inlining only, or no
-  //              inlining at all).
-  // 0xDEADBABE: a Yuhu frame whose compilation unit at least one Path-B
-  //              (LLVM-IR / alwaysinline) callee was flattened into.  This is
-  //              an end-to-end runtime signal that Path B actually engaged --
-  //              stronger than the compile-time YuhuTraceInlining planner line,
-  //              because it survives into a live stack dump and would visibly
-  //              fall back to 0xDEADBEEF after the per-method flatten-miss
-  //              back-off disables Path B on retry.  Only the caller's marker
-  //              slot is observable to a runtime frame walker; an inlinee's
-  //              own alloca-slot is dead after AlwaysInlinerPass merges allocas,
-  //              so is_inlinee=true always keeps 0xDEADBEEF.
+  // Use a recognizable marker value for debugging, chosen by frame role:
+  // 0xDEADBABE: the outer (non-inlinee) frame of a Yuhu compilation.  This is
+  //              the only marker a runtime frame walker can ever observe,
+  //              because a walk reaches frame headers through the x29 chain of
+  //              real frames, and a Path-B inlinee has no frame of its own.
+  // 0xDEADBEEF: a Path-B (LLVM-IR / alwaysinline) inlinee's own marker slot.
+  //              AlwaysInlinerPass merges that alloca into the caller's frame,
+  //              so nothing ever reads this word.  The store remains because the
+  //              reduced inlinee protocol gates only CreateStoreFramePointer,
+  //              and the slot counter has to advance through frame_marker either
+  //              way to keep _locals_slots_offset on the caller's layout.
+  // Note the marker no longer says anything about whether Path B engaged: every
+  // outer frame carries 0xDEADBABE, inlinee-free methods included.
   const intptr_t frame_marker = !is_inlinee ? (intptr_t)0xDEADBABE : (intptr_t)0xDEADBEEF;
   builder()->CreateStore(
     LLVMValue::intptr_constant(frame_marker), slot_addr(offset++)); // Frame marker (YUHU_FRAME equivalent)

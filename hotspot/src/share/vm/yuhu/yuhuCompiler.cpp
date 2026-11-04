@@ -323,7 +323,8 @@ public:
             // Add GOTAndPLTHandlerPlugin to fix edge before we patch
 //    Layer->addPlugin(std::make_unique<GOTAndPLTHandlerPlugin>());
 
-            // Add CallSiteExtractorPlugin to scan for virtual address placeholders and update return pc addresses
+            // Add CallSiteExtractorPlugin to harvest the linked graph (const/data symbol
+            // ranges, interior fixups, GOT entries, ADRP edges) for the nmethod builder
             Layer->addPlugin(std::make_unique<CallSiteExtractorPlugin>());
 
             // Add MachineCodePrinterPlugin to trace generated machine code
@@ -367,8 +368,11 @@ public:
 
         _jit = std::move(*JIT);
 
-        // Add DynamicLibrarySearchGenerator so ORC JIT can resolve symbols from
-        // the current process (e.g. yuhu_resolve_static_field in libjvm.dylib)
+        // Add DynamicLibrarySearchGenerator so ORC JIT can resolve the remaining
+        // undefined symbols against the current process image (libc functions reached
+        // through compiler-generated libcalls, helpers exported by libjvm.dylib).
+        // Symbols we want bound to a specific address are defined explicitly below
+        // instead, and take precedence over this generator.
         auto &MainJD = _jit->getMainJITDylib();
         auto DLSGOrErr = llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
                 _jit->getDataLayout().getGlobalPrefix());
