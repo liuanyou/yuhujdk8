@@ -411,10 +411,12 @@ CompLevel AdvancedThresholdPolicy::call_event(Method* method, CompLevel cur_leve
     CompLevel yuhu_level = CompLevel_yuhu_optimized;
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
-  // Yuhu trigger: reuse base-class hook so advanced policy也支持 Yuhu 选择
-  if (should_compile_with_yuhu(method)) {
-    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
-    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+  // Yuhu trigger: reuse base-class rung chooser (0 -> 3 -> 5 -> 6).  Only
+  // intercept once the method has passed through tier 3 (C1 full_profile), the
+  // sole profiler whose output level 6 consumes; mature -> optimized (6),
+  // complex-but-unmature -> fast (5).
+  if (cur_level >= CompLevel_full_profile && should_compile_with_yuhu(method)) {
+    CompLevel yuhu_level = yuhu_compile_level(method);
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
 #endif
@@ -448,10 +450,9 @@ CompLevel AdvancedThresholdPolicy::loop_event(Method* method, CompLevel cur_leve
     CompLevel yuhu_level = CompLevel_yuhu_optimized;
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
-  // Yuhu trigger for OSR path
-  if (should_compile_with_yuhu(method)) {
-    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
-    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+  // Yuhu trigger for OSR path: same ladder rule as call_event above.
+  if (cur_level >= CompLevel_full_profile && should_compile_with_yuhu(method)) {
+    CompLevel yuhu_level = yuhu_compile_level(method);
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
 #endif

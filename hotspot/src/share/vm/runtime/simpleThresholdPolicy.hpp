@@ -86,6 +86,13 @@ protected:
   //   3. Method complexity exceeds YuhuComplexityThreshold
   bool should_compile_with_yuhu(Method* method);
 
+  // Given a method that has cleared the Yuhu complexity gate, pick which Yuhu
+  // rung to compile at.  The ladder is 0 -> 3 -> 5 -> 6, where tier 3 (C1
+  // full_profile) is the sole profiler: a method whose profile has matured is
+  // compiled optimized (level 6, consumes the tier-3 MDO); a complex method
+  // that is not yet mature gets the cheap, profile-free fast compile (level 5).
+  CompLevel yuhu_compile_level(Method* method);
+
   // Predicate helpers are used by .*_predicate() methods as well as others.
   // They check the given counter values, multiplied by the scale against the thresholds.
   template<CompLevel level> static inline bool call_predicate_helper(int i, int b, double scale);

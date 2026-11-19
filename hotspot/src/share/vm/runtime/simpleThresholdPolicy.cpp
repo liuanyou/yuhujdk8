@@ -125,6 +125,18 @@ bool SimpleThresholdPolicy::should_compile_with_yuhu(Method* method) {
   return false;
 }
 
+// Pick the Yuhu rung for a method that has already cleared the complexity gate.
+// Tier 3 (C1 full_profile) is the only profiler feeding Yuhu right now, so the
+// profile maturity of the live MDO decides the level:
+//   mature   -> CompLevel_yuhu_optimized (6): heavy, profile-driven LLVM pipeline
+//   unripe   -> CompLevel_yuhu_fast      (5): cheap, low-latency, profile-free
+// The 5 -> 6 promotion fires on a later event only once the profile has matured;
+// with level 5 not instrumented, a method that leaves tier 3 for level 5 keeps
+// whatever profiles tier 3 produced before the switch.
+CompLevel SimpleThresholdPolicy::yuhu_compile_level(Method* method) {
+  return is_mature(method) ? CompLevel_yuhu_optimized : CompLevel_yuhu_fast;
+}
+
 void SimpleThresholdPolicy::print_counters(const char* prefix, methodHandle mh) {
   int invocation_count = mh->invocation_count();
   int backedge_count = mh->backedge_count();
@@ -437,10 +449,12 @@ CompLevel SimpleThresholdPolicy::call_event(Method* method,  CompLevel cur_level
     CompLevel yuhu_level = CompLevel_yuhu_optimized;
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
-  // Yuhu trigger: allow Yuhu to intercept before C1/C2 decisions
-  if (should_compile_with_yuhu(method)) {
-    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
-    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+  // Ladder trigger: only intercept once the method has passed through tier 3
+  // (C1 full_profile), because tier 3 is the sole profiler whose output level 6
+  // consumes.  A complex-but-unmature method takes the fast rung (5); a
+  // complex-and-mature method takes the optimized rung (6).
+  if (cur_level >= CompLevel_full_profile && should_compile_with_yuhu(method)) {
+    CompLevel yuhu_level = yuhu_compile_level(method);
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
 #endif
@@ -475,10 +489,10 @@ CompLevel SimpleThresholdPolicy::loop_event(Method* method, CompLevel cur_level)
     CompLevel yuhu_level = CompLevel_yuhu_optimized;
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
-  // Yuhu trigger for OSR path
-  if (should_compile_with_yuhu(method)) {
-    // Respect TieredStopAtLevel: if it's less than 6, fall back to C2
-    CompLevel yuhu_level = CompLevel_yuhu_optimized;
+  // Ladder trigger for OSR: see call_event above -- tier 3 is the sole profiler,
+  // mature profiles drive level 6, complex-but-unmature loops drive level 5.
+  if (cur_level >= CompLevel_full_profile && should_compile_with_yuhu(method)) {
+    CompLevel yuhu_level = yuhu_compile_level(method);
     return MIN2(yuhu_level, (CompLevel)TieredStopAtLevel);
   }
 #endif
