@@ -140,7 +140,7 @@ void TracingIRCompiler::parseStackMap(llvm::Expected<std::unique_ptr<llvm::objec
         // Section: __LLVM_STACKMAPS,__llvm_stackmaps
         // Section: __TEXT,__lcl_macho_hdr
         // Section: __TEXT,__unwind_info
-        if (!Section.getName()->ends_with("__llvm_stackmaps")) continue;
+        if (!NameOrErr->ends_with("__llvm_stackmaps")) continue;
         if (YuhuTraceMachineCode) {
             if (YuhuStackMapFile != NULL) {
                 YUHU_STACK_MAP_LOG("[StackMap] Section: %d", Section.getSize());

@@ -25,11 +25,14 @@
 
 using namespace llvm;
 
-// GC heap references live in addrspace(1). With ni:1 in the DataLayout these
-// pointer<->integer casts are ill-typed per the LangRef, but the LLVM verifier
-// only rejects the ConstantExpr forms, so instruction-level escapes must be
-// caught by this scan. Every hit is a frontend site that must migrate to
-// GEP-based addressing on ptr addrspace(1).
+// GC heap references live in addrspace(1). A ptr<->integer cast on addrspace(1)
+// strands the reference in an integer that RS4GC liveness cannot relocate, so it
+// is only safe at the two audited boundaries: the compressed-oop encode/decode
+// pair (whose shift is hidden in side-effecting inline asm) and the __oop_slot_*
+// constant materialisation. Every OTHER hit is a frontend site that should
+// migrate to GEP-based addressing on ptr addrspace(1). (Advisory scan only; the
+// module DataLayout no longer carries a -ni marker, so this is not a
+// well-formedness check -- it is a GC-escape review aid under YuhuTraceIRCompilation.)
 static const unsigned GC_ADDRSPACE = 1;
 
 static void reportNonIntegralPointerCasts(Module &M) {
@@ -86,8 +89,8 @@ static void reportNonIntegralPointerCasts(Module &M) {
     if (escapes > 0) {
         if (YuhuTraceIRCompilation) {
             errs() << "Yuhu GC-escape: " << escapes
-                   << " non-integral pointer cast(s) in module " << M.getName()
-                   << " - unsafe under ni:1, must be converted to addrspace(1) GEPs\n";
+                   << " addrspace(1) pointer cast(s) in module " << M.getName()
+                   << " - review: only the opaque encode/decode and __oop_slot_* sites are audited\n";
         }
     }
 }

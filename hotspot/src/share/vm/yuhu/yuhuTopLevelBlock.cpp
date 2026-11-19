@@ -1312,7 +1312,9 @@ void YuhuTopLevelBlock::do_if(ICmpInst::Predicate p,
   Value *llvm_a, *llvm_b;
   if (a->is_jobject()) {
     // Compare oops as addrspace(1) pointers.  A ptrtoint here would escape
-    // the reference from RS4GC's liveness (and is ill-typed under ni:1).
+    // the reference from RS4GC's liveness.  (With the module DataLayout's -ni
+    // marker removed, this branch is also no longer at risk of being folded
+    // away by a poisoned constant-derived addrspace(1) operand.)
     llvm_a = a->jobject_value();
     llvm_b = b->jobject_value();
   }

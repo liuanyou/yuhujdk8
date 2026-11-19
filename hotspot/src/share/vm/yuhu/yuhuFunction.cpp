@@ -424,8 +424,8 @@ void YuhuFunction::initialize(const char *name) {
           // Handle different return types from intptr slot
           if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
               // Load the oop directly as ptr addrspace(1).  Loading as i64 +
-              // inttoptr would hide the reference in an integer (invisible to
-              // RS4GC and ill-typed under the ni:1 DataLayout).
+              // inttoptr would hide the reference in an integer, invisible to
+              // RS4GC liveness (the module DataLayout carries no -ni marker).
               builder()->CreateRet(builder()->CreateLoad(ret_llvm_type, _return_slot));
           } else if (ret_type == T_FLOAT) {
               // Load directly as float (32-bit) from the return slot

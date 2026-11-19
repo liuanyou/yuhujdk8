@@ -241,7 +241,9 @@ public:
         // LLVM 20+: Set DataLayout for modules BEFORE creating ExecutionEngine
         // This is critical to avoid SIGSEGV in getABITypeAlign
         // We need to create a TargetMachine to get the DataLayout
-        std::string DLStrWithNI;
+        // DataLayout handed to the modules and to LLJIT; declared here because
+        // the LLJIT builder below consumes it too.
+        std::string DLStr;
 #if LLVM_VERSION_MAJOR >= 20
         {
             // Get target triple from module
@@ -271,23 +273,43 @@ public:
             if (TM) {
                 // Get DataLayout string from TargetMachine
                 const llvm::DataLayout& DL = TM->createDataLayout();
-                // Mark addrspace(1) (GC heap references) as non-integral so the
-                // optimizer is forbidden from folding ptrtoint/inttoptr round-trips
-                // that would carry a GC pointer across a statepoint as a raw i64
-                std::string DLStr = DL.getStringRepresentation() + "-ni:1";
+                // The module DataLayout must be EXACTLY the codegen TargetMachine's:
+                // llvm::MachineFunction::init asserts Target.isCompatibleDataLayout(
+                // module DL), which is a field-wise DataLayout comparison, and the
+                // codegen TM is rebuilt from the triple inside LLJIT (its DataLayout
+                // member is const, so it cannot be aligned to the module instead).
+                //
+                // Do NOT append "-ni:1" to mark addrspace(1) non-integral:
+                //  * it does not satisfy the check -- parsing -ni:1 inserts a
+                //    PointerSpec for AS 1 and PointerSpec::operator== compares
+                //    IsNonIntegral, so module DL != TM DL and an assertions-enabled
+                //    LLVM aborts on every compiled function;
+                //  * it never was the guard against encode(decode(x)) folding to an
+                //    identity -- that round trip folds even with -ni:1 present.  The
+                //    protection is YuhuBuilder::CreateOpaqueOopShift /
+                //    CreateOpaqueBaseSub, which hide the shift in side-effecting
+                //    inline asm and take the ptr addrspace(1) directly, so no
+                //    integer form of a GC pointer exists to be spilled unrelocated;
+                //  * and as a constant inttoptr into AS 1 is poison under -ni:1, it
+                //    actively endangered the __oop_slot_* globals and any branch
+                //    condition they flowed into.
+                // Keeping non-integrality enforced outside the DataLayout is the
+                // deliberate choice here; see YuhuCheckNarrowOopInvariant for the net
+                // that fails a compile instead of shipping a folded nmethod.
+                std::string ModuleDL = DL.getStringRepresentation();
 
                 // Set DataLayout for both modules BEFORE creating ExecutionEngine
-                _normal_context->module()->setDataLayout(DLStr);
-                _native_context->module()->setDataLayout(DLStr);
-                DLStrWithNI = DLStr;
-                _normal_data_layout = DLStr;
+                _normal_context->module()->setDataLayout(ModuleDL);
+                _native_context->module()->setDataLayout(ModuleDL);
+                DLStr = ModuleDL;
+                _normal_data_layout = ModuleDL;
 
                 // DEBUG: Verify DataLayout was set
                 std::string verify1 = _normal_context->module()->getDataLayout().getStringRepresentation();
                 std::string verify2 = _native_context->module()->getDataLayout().getStringRepresentation();
-                if (verify1 != DLStr || verify2 != DLStr) {
+                if (verify1 != ModuleDL || verify2 != ModuleDL) {
                     fatal(err_msg("DataLayout mismatch! Expected: %s, Got normal: %s, Got native: %s",
-                                  DLStr.c_str(), verify1.c_str(), verify2.c_str()));
+                                  ModuleDL.c_str(), verify1.c_str(), verify2.c_str()));
                 }
             }
         }
@@ -336,9 +358,10 @@ public:
         // Configure ORC JIT with custom ObjectLinkingLayer and TracingIRCompiler
         auto JITBuilder = llvm::orc::LLJITBuilder();
         // Keep LLJIT's DataLayout (used for symbol mangling) identical to the
-        // module DataLayout, including the ni:1 non-integral marker
-        if (!DLStrWithNI.empty()) {
-            JITBuilder.setDataLayout(llvm::DataLayout(DLStrWithNI));
+        // module DataLayout; both are the codegen TargetMachine's own layout, so
+        // MachineFunction::init's compatibility assert holds for every function.
+        if (!DLStr.empty()) {
+            JITBuilder.setDataLayout(llvm::DataLayout(DLStr));
         }
         auto JIT = JITBuilder
                 .setJITTargetMachineBuilder(JTMB)
@@ -753,7 +776,12 @@ public:
             // Try to lookup the function
             auto Sym = jit()->lookup(func_name);
             if (!Sym) {
-                // Function not found - may need to add module
+                // Function not found - may need to add module.
+                // Drain the "symbol not found" error now: an Expected left in an
+                // error state stays "unchecked", and the reassignment below
+                // (Sym = jit()->lookup(...)) would trip Expected::moveAssign's
+                // assertIsChecked() (LLVM_ENABLE_ABI_BREAKING_CHECKS) and abort.
+                llvm::consumeError(Sym.takeError());
 
                 // Clone the module using the SAME context (not a new one)
                 // This preserves metadata nodes and register name information

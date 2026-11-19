@@ -79,7 +79,8 @@ Value* YuhuBuilder::CreateAddressOfStructEntry(Value*      base,
   // GC-managed oops (addrspace 1) must be addressed with a GEP so the result
   // stays a derived pointer that RS4GC's liveness can track and relocate.
   // ptrtoint/inttoptr addressing strands the address in an integer, which is
-  // invisible to RS4GC and ill-typed under the ni:1 DataLayout.
+  // invisible to RS4GC (the module DataLayout intentionally carries no -ni
+  // marker; keeping the pointer typed here is what preserves GC visibility).
   llvm::PointerType* base_ptr_type = llvm::dyn_cast<llvm::PointerType>(base->getType());
   if (base_ptr_type != NULL && base_ptr_type->getAddressSpace() == 1) {
     return CreateGEP(
