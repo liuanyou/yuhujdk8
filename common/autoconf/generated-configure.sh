@@ -739,8 +739,6 @@ LDEXECXX
 LDCXX
 LDEXE
 USE_CLANG
-KEYSTONE_INCLUDE_PATH
-KEYSTONE_LIB_PATH
 USE_YUHU_COMPILER
 LLVM_INCLUDE_PATH
 LLVM_LIB_PATH
@@ -1071,13 +1069,8 @@ enable_sjavac
 enable_precompiled_headers
 enable_ccache
 with_ccache_dir
-with_keystone
-with_keystone_include
-with_keystone_lib
 enable_yuhu_compiler
 with_llvm
-with_llvm_include
-with_llvm_lib
 with_zstd_lib
 '
       ac_precious_vars='build_alias
@@ -1833,12 +1826,7 @@ Optional Packages:
                           headers under PATH/include)
   --with-freetype-include specify directory for the freetype include files
   --with-freetype-lib     specify directory for the freetype library
-  --with-keystone         specify prefix directory for keystone
-  --with-keystone-include specify directory for keystone include files
-  --with-keystone-lib     specify directory for keystone library
-  --with-llvm             specify prefix directory for llvm
-  --with-llvm-include     specify directory for llvm include files
-  --with-llvm-lib         specify directory for llvm library
+  --with-llvm             specify directory for llvm
   --with-zstd-lib         specify directory for zstd library (required for Yuhu compiler)
   --with-alsa             specify prefix directory for the alsa package
                           (expecting the libraries under PATH/lib and the
@@ -27823,42 +27811,11 @@ $as_echo "$CUPS_FOUND" >&6; }
     fi
   fi
 
-
-# Check whether --with-keystone or --with-keystone-include or --with-keystone-lib was given
-if test "x$with_keystone" != x || test "x$with_keystone_include" != x || test "x$with_keystone_lib" != x; then
-  # User has specified settings
-  if test "x$with_keystone" != x; then
-    KEYSTONE_INCLUDE_PATH="$with_keystone/include"
-    KEYSTONE_LIB_PATH="$with_keystone/lib"
-  fi
-  # Allow --with-keystone-lib and --with-keystone-include to override
-  if test "x$with_keystone_include" != x; then
-    KEYSTONE_INCLUDE_PATH="$with_keystone_include"
-  fi
-  if test "x$with_keystone_lib" != x; then
-    KEYSTONE_LIB_PATH="$with_keystone_lib"
-  fi
-fi
-
 # Check whether --with-llvm was given.
 if test "${with_llvm+set}" = set; then :
   withval=$with_llvm;
 else
   with_llvm=
-fi
-
-# Check whether --with-llvm-include was given.
-if test "${with_llvm_include+set}" = set; then :
-  withval=$with_llvm_include;
-else
-  with_llvm_include=
-fi
-
-# Check whether --with-llvm-lib was given.
-if test "${with_llvm_lib+set}" = set; then :
-  withval=$with_llvm_lib;
-else
-  with_llvm_lib=
 fi
 
 # Check whether --with-zstd-lib was given.
@@ -27880,27 +27837,11 @@ if test "x$enable_yuhu_compiler" = xyes; then
   USE_YUHU_COMPILER=true
   # User has specified settings
   if test "x$with_llvm" != x; then
-    LLVM_INCLUDE_PATH="$with_llvm/include"
-    LLVM_LIB_PATH="$with_llvm/lib"
-    # Allow --with-llvm-include and --with-llvm-lib to override
-    if test "x$with_llvm_include" != x; then
-      LLVM_INCLUDE_PATH="$with_llvm_include"
-    fi
-    if test "x$with_llvm_lib" != x; then
-      LLVM_LIB_PATH="$with_llvm_lib"
-    fi
-  else
-    if test "x$with_llvm_include" = x || test "x$with_llvm_lib" = x; then
-      as_fn_error $? "Either specify --with-llvm or both --with-llvm-include and --with-llvm-lib when --enable-yuhu-compiler is enabled" "$LINENO" 5
-    else
-      LLVM_INCLUDE_PATH="$with_llvm_include"
-      LLVM_LIB_PATH="$with_llvm_lib"
-    fi
+    LLVM_CONFIG="$with_llvm/bin/llvm-config"
   fi
 else
   USE_YUHU_COMPILER=false
-  LLVM_INCLUDE_PATH=""
-  LLVM_LIB_PATH=""
+  LLVM_CONFIG=""
   ZSTD_LIB_PATH=""
 fi
 

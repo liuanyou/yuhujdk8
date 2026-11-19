@@ -98,11 +98,10 @@ HOTSPOT_BUILD_JOBS:=$(JOBS)
 TEST_IN_BUILD=@TEST_IN_BUILD@
 
 USE_CLANG := @USE_CLANG@
-KEYSTONE_INCLUDE_PATH := @KEYSTONE_INCLUDE_PATH@
-KEYSTONE_LIB_PATH := @KEYSTONE_LIB_PATH@
 USE_YUHU_COMPILER := @USE_YUHU_COMPILER@
-LLVM_INCLUDE_PATH := @LLVM_INCLUDE_PATH@
-LLVM_LIB_PATH := @LLVM_LIB_PATH@
+# llvm-config resolved by configure; in a Yuhu build it is the only source of
+# llvm include, library and linker flags (no hard-coded install paths).
+LLVM_CONFIG := @LLVM_CONFIG@
 
 # For hotspot, override compiler/tools definition to not include FIXPATH prefix.
 # Hotspot has its own handling on the Windows path situation.

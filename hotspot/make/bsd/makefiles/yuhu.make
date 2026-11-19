@@ -36,16 +36,6 @@ ifeq ($(USE_YUHU_COMPILER), true)
 
   # LLVM configuration from configure script
   # These variables are set by configure based on:
-  #   --with-llvm=PREFIX (sets both include and lib paths)
-  #   --with-llvm-include=DIR (overrides include path)
-  #   --with-llvm-lib=DIR (overrides lib path)
-        ifneq ($(LLVM_INCLUDE_PATH),)
-          CFLAGS += -I$(LLVM_INCLUDE_PATH)
-        endif
-
-        ifneq ($(LLVM_LIB_PATH),)
-          LDFLAGS += -L$(LLVM_LIB_PATH)
-        endif
 
         # ZSTD library path from configure script
         ifneq ($(ZSTD_LIB_PATH),)
