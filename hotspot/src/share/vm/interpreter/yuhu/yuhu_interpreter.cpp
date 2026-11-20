@@ -2,6 +2,7 @@
 // Created by Anyou Liu on 2025/4/23.
 //
 #include "precompiled.hpp"
+#include "code/nmethod.hpp"
 #include "interpreter/yuhu/yuhu_interpreter.hpp"
 #include "interpreter/yuhu/yuhu_interpreterGenerator.hpp"
 
@@ -198,7 +199,7 @@ int YuhuInterpreter::TosState_as_index(TosState state) {
 /**
  * If a deoptimization happens, this function returns the point of next bytecode to continue execution.
  */
-address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp, int callee_parameters, bool is_top_frame) {
+address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp, int callee_parameters, bool is_top_frame, nmethod* deopt_nm) {
     assert(method->contains(bcp), "just checkin'");
 
     // Get the original and rewritten bytecode.
@@ -263,7 +264,18 @@ address YuhuInterpreter::deopt_continue_after_entry(Method* method, address bcp,
             type = Bytecodes::result_type(code);
             // if vm call is deoptimization, it must be top frame
             assert(is_top_frame, "must be top frame");
-            return YuhuInterpreter::deopt_entry_with_vm_result(as_TosState(type), length);
+            // Yuhu runtime helpers (YuhuRuntime::new_type_array etc.) deliver the
+            // produced oop only through Thread::vm_result(); unlike C1/C2 stubs,
+            // there is no wrapper epilogue that loads vm_result into x0 before the
+            // deopt handler runs. So the interpreter entry must fetch vm_result
+            // itself. For C1/C2 deopted frames the deopt blob has already restored
+            // x0 from RegisterSaver::r0_offset, so fall through to the standard
+            // deopt_entry path instead of overwriting x0 with a possibly stale
+            // Thread::vm_result.
+            if (deopt_nm != NULL && deopt_nm->is_compiled_by_yuhu()) {
+                return YuhuInterpreter::deopt_entry_with_vm_result(as_TosState(type), length);
+            }
+            break;
         }
 
         default:

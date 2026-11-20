@@ -226,10 +226,14 @@ public:
 
     // Deoptimization support
     // Compute the entry address for continuation after
+    // deopt_nm is the nmethod being deoptimized; used to select between the
+    // vm_result resumption path (Yuhu) and the x0-register path (C1/C2) for
+    // allocation bcis whose runtime helpers deliver results via Thread::vm_result.
     static address deopt_continue_after_entry(Method* method,
                                               address bcp,
                                               int callee_parameters,
-                                              bool is_top_frame);
+                                              bool is_top_frame,
+                                              nmethod* deopt_nm);
 
     static bool bytecode_should_reexecute(Bytecodes::Code code);
 

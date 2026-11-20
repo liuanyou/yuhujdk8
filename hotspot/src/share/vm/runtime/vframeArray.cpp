@@ -181,7 +181,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     pc  = UseYuhuInt ? YuhuInterpreter::deopt_reexecute_entry(method(), bcp) : Interpreter::deopt_reexecute_entry(method(), bcp);
   } else {
     bcp = method()->bcp_from(bci());
-    pc  = UseYuhuInt ? YuhuInterpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame) :
+    pc  = UseYuhuInt ? YuhuInterpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame, thread->deopt_nmethod()) :
             Interpreter::deopt_continue_after_entry(method(), bcp, callee_parameters, is_top_frame);
     use_next_mdp = true;
   }
