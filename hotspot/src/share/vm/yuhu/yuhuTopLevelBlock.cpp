@@ -1446,6 +1446,45 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   return NULL;
 }
 
+// Increment 2: profile-driven devirtualization guard.  Emitted before the
+// body/callee substituted for the site's runtime receiver.  Exact klass
+// equality is sufficient because the profile records the concrete klass the
+// site actually dispatched to; a mismatch means the speculative target may
+// be wrong, so we back out to the interpreter (which performs the real
+// vtable dispatch) via a Reason_class_check / Action_reinterpret trap.
+//
+// do_trap() builds the deopt bundle from current_state(); we invoke it
+// before the inlinee or direct call has popped the receiver/args, so the
+// pre-invoke frame state is what gets materialized.  The interpreter then
+// reexecutes the invokevirtual normally against the actual receiver.
+void YuhuTopLevelBlock::emit_devirtualize_guard(YuhuValue* receiver, ciKlass* expected_klass) {
+  assert(receiver != NULL, "receiver required for devirt guard");
+  assert(expected_klass != NULL, "profiled klass required");
+
+  Value* recv_obj   = receiver->jobject_value();
+  Value* recv_klass = builder()->load_klass_from_object(recv_obj);
+  Value* expected   = builder()->CreateInlineMetadata(expected_klass, YuhuType::klass_type());
+  Value* klass_eq   = builder()->CreateICmpEQ(recv_klass, expected);
+
+  BasicBlock* guard_ok   = function()->CreateBlock("deopt_guard_ok");
+  BasicBlock* guard_fail = function()->CreateBlock("deopt_guard_fail");
+  builder()->CreateCondBr(klass_eq, guard_ok, guard_fail);
+
+  // Guard-fail path:  terminate the block with the trap.  do_trap decaches
+  // the complete pre-invoke state and emits llvm.experimental.deoptimize;
+  // register_call_site sets CallSiteType::deopt_call, which the debug-info
+  // recorder maps to reexecute=true so the interpreter redoes the invoke.
+  builder()->SetInsertPoint(guard_fail);
+  do_trap(Deoptimization::make_trap_request(
+      Deoptimization::Reason_class_check,
+      Deoptimization::Action_reinterpret));
+
+  // Continue in guard_ok with the same pre-invoke virtual state.  do_trap
+  // only reads current_state() and terminates guard_fail with a Return, so
+  // current_state() is unchanged here.
+  builder()->SetInsertPoint(guard_ok);
+}
+
 bool YuhuTopLevelBlock::do_llvm_inline_call(YuhuFunction*        func,
                                              YuhuInlineTree*      inline_tree,
                                              YuhuInlineNode*      inline_node,
@@ -1679,6 +1718,29 @@ void YuhuTopLevelBlock::do_call() {
   // Try to improve non-direct calls
   bool call_is_virtual = is_virtual || is_interface;
   ciMethod *call_method = dest_method;
+
+  // Increment 2: profile-driven devirtualization takes precedence over the
+  // CHA improve when the inline tree carries a devirtualized child for this
+  // bci (recorded by YuhuInlinePlanner::virtual_call_target).  The runtime
+  // receiver-klass guard emitted here is what makes the substitution safe;
+  // the CHA improve below only returns non-null for already statically-bound
+  // targets where no guard is required.
+  if (is_virtual) {
+    YuhuFunction* func_tree = function();
+    YuhuInlineNode* devirt_child = NULL;
+    if (func_tree != NULL && func_tree->inline_tree() != NULL &&
+        func_tree->inline_tree()->llvm_inline_allowed() &&
+        func_tree->inline_node_or_method() != NULL &&
+        func_tree->inline_node_or_method()->is_inline_node()) {
+      devirt_child = func_tree->inline_node_or_method()->as_inline_node()->find_child_by_bci(bci());
+    }
+    if (devirt_child != NULL && devirt_child->is_devirtualized()) {
+      emit_devirtualize_guard(receiver, devirt_child->expected_recv_klass());
+      call_method = devirt_child->method();
+      call_is_virtual = false;
+    }
+  }
+
   if (call_is_virtual) {
     ciMethod *optimized_method = improve_virtual_call(
       target(), klass, dest_method, receiver->type());

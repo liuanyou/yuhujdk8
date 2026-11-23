@@ -9,6 +9,7 @@
 #define SHARE_VM_YUHU_YUHUINLINETREE_HPP
 
 #include "ci/ciMethod.hpp"
+#include "ci/ciKlass.hpp"
 #include "memory/allocation.hpp"
 
 // Forward declarations
@@ -24,7 +25,25 @@ class YuhuInlineNode : public ResourceObj {
       _children(NULL),
       _parent(parent),
       _max_locals(method->max_locals()),
-      _max_stack(method->max_stack()) {}
+      _max_stack(method->max_stack()),
+      _expected_recv_klass(NULL) {}
+
+  // Constructor used when the site was devirtualized from a receiver-type
+  // profile.  Store the profiled receiver klass so that IR generation can
+  // emit a receiver-klass guard against it before entering the inlined body
+  // or issuing the direct (non-vtable) call.  The klass is only meaningful
+  // when the substituted target differs from the CP-cache statically
+  // resolved target.
+  YuhuInlineNode(ciMethod* method, int bci, int inline_depth, YuhuInlineNode* parent,
+                 ciKlass* expected_recv_klass)
+    : _method(method),
+      _bci(bci),
+      _inline_depth(inline_depth),
+      _children(NULL),
+      _parent(parent),
+      _max_locals(method->max_locals()),
+      _max_stack(method->max_stack()),
+      _expected_recv_klass(expected_recv_klass) {}
 
  private:
   ciMethod* _method;           // The inlined method
@@ -34,6 +53,10 @@ class YuhuInlineNode : public ResourceObj {
   YuhuInlineNode* _parent; // parent node for this inlined node
   int _max_locals;             // Method's max_locals
   int _max_stack;              // Method's max_stack
+  // Non-null only when this node was created by profile-driven devirtualization
+  // (Increment 2).  IR generation must emit a receiver-klass guard against
+  // this klass before entering the substituted body/callee.
+  ciKlass* _expected_recv_klass;
 
  public:
   ciMethod* method() const { return _method; }
@@ -41,6 +64,8 @@ class YuhuInlineNode : public ResourceObj {
   int inline_depth() const { return _inline_depth; }
   int max_locals() const { return _max_locals; }
   int max_stack() const { return _max_stack; }
+  ciKlass* expected_recv_klass() const { return _expected_recv_klass; }
+  bool is_devirtualized() const { return _expected_recv_klass != NULL; }
 
   GrowableArray<YuhuInlineNode*>* children() const { return _children; }
   YuhuInlineNode* parent() const { return _parent; }

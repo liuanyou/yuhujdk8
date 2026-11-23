@@ -517,6 +517,15 @@ class YuhuTopLevelBlock : public YuhuBlock {
                                  ciInstanceKlass* klass,
                                  ciMethod*        dest_method,
                                  ciType*          receiver_type);
+
+  // Increment 2: profile-driven devirtualization guard.  Emits a receiver
+  // klass equality check against the profiled klass.  On mismatch a
+  // Reason_class_check / Action_reinterpret trap runs so the interpreter
+  // re-executes the invokevirtual against the actual receiver via the normal
+  // vtable dispatch.  Insertion point after this call is the guard_ok block
+  // with the same pre-invoke virtual state that the caller passed in.
+  void emit_devirtualize_guard(YuhuValue* receiver, ciKlass* expected_klass);
+
   void do_call();
 
   // LLVM-IR inlining (M0): build (or reuse) an alwaysinline llvm::Function

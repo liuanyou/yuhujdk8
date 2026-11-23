@@ -46,6 +46,11 @@
   product(intx, YuhuMaxInlineLevel, 2,                                       \
           "Maximum depth of nested method inlining when using Yuhu")         \
                                                                               \
+  product(intx, YuhuInlineHotSiteThreshold, 1000,                           \
+          "Executions recorded at a call site (or in the callee) below which "\
+          "the optimized tier keeps the call as a real call instead of "       \
+          "inlining it")                                                      \
+                                                                              \
   develop(bool, YuhuTraceInlining, false,                                    \
           "Trace inlining decisions during compilation")                     \
                                                                               \
@@ -53,6 +58,12 @@
           "Inline eligible callees as separate LLVM functions merged by the " \
           "AlwaysInliner pass instead of only supporting the bytecode-level " \
           "inliner for straight-line callees")                               \
+                                                                              \
+  product(bool, YuhuDevirtualize, true,                                      \
+          "At the optimized tier, use the caller's receiver-type profile to " \
+          "substitute a monomorphic concrete target for invokevirtual sites " \
+          "in the inline plan; a receiver-klass guard will be emitted at IR " \
+          "generation before the substitution becomes observable")            \
                                                                               \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \

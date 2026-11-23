@@ -403,7 +403,7 @@ bool YuhuInliner::may_be_inlinable(ciMethod *target, bool allow_exception_handle
 //      -XX:+DeoptimizeALot -XX:+TraceDeoptimization: the trace lists the
 //      callee at its own bci with the caller at the invoke bci as its
 //      sender, both unpacked from one nmethod.
-bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
+bool YuhuInliner::is_llvm_inlineable(ciMethod *target, ciKlass *guard_klass) {
   if (!may_be_inlinable(target, /* allow_exception_handlers = */ true,
                              /* allow_monitors = */ true))
     return false;
@@ -414,6 +414,19 @@ bool YuhuInliner::is_llvm_inlineable(ciMethod *target) {
 
   if (YuhuCompiler::contains_incomplete_state_analysis(flow)) {
       return false;
+  }
+
+  // Increment 2: profile-driven devirtualization.  A non-null guard_klass
+  // means virtual_call_target already substituted a concrete receiver method
+  // behind a runtime receiver-klass guard.  Claim it for Path B regardless of
+  // needs_path_b, so even a straight-line callee (e.g. Mono.compute: iload /
+  // imul / iadd -- every opcode Path A would normally absorb) is recorded in
+  // the inline tree and materialised as an alwaysinline llvm::Function.  The
+  // three safety gates above (may_be_inlinable, typeflow, state analysis)
+  // still apply, so oversized/native/abstract/synchronized/jsr/unlinked or
+  // incompletely-analysed callees keep being rejected here.
+  if (guard_klass != NULL) {
+    return true;
   }
 
   // Path B claims a callee only when the bytecode inliner (Path A)

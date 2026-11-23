@@ -105,7 +105,17 @@ class YuhuInliner : public AllStatic {
   // InlinerPass via the statepoint-id attribute.  See is_llvm_inlineable's
   // function-level doc for the full opcode inventory and the M1 deopt-
   // bundle caveat.
-  static bool is_llvm_inlineable(ciMethod* target);
+  //
+  // Increment 2: guard_klass is the receiver klass recorded by
+  // YuhuInlinePlanner::virtual_call_target for a profile-driven
+  // devirtualized callee.  When non-null the callee is claimed by Path B
+  // unconditionally (after the safety gates below), independent of
+  // needs_path_b, so a substituted-but-straight-line concrete target (e.g.
+  // Mono.compute) travels through the alwaysinline llvm::Function path and
+  // the inline tree records the devirtualized child for guard emission in
+  // YuhuTopLevelBlock::do_call.  Defaulted to null so all existing callers
+  // keep the needs_path_b behaviour.
+  static bool is_llvm_inlineable(ciMethod* target, ciKlass* guard_klass = NULL);
 };
 
 #endif // SHARE_VM_YUHU_YUHUINLINER_HPP
