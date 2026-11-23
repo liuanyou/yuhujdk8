@@ -1381,8 +1381,11 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
   // condition which is enforced by the dependency tracker.  If the
   // dependency tracker determines a method has become invalid it
   // will mark it for recompilation, causing running copies to be
-  // deoptimized.  Yuhu currently can't deoptimize arbitrarily like
-  // that, so this optimization cannot be used.
+  // deoptimized.  Yuhu now supports dependent deoptimization through
+  // YuhuCompiler::generate_deopt_handler (adr lr, current_pc + far
+  // jump to SharedRuntime::deopt_blob()->unpack()), so this
+  // optimization is safe to enable.
+  // Historically disabled while the deopt entry was missing:
   // http://icedtea.classpath.org/bugzilla/show_bug.cgi?id=481
 
   // All other interesting cases are instance classes
@@ -1408,32 +1411,14 @@ ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,
     assert(!monomorphic_target->is_abstract(), "shouldn't be");
 
     function()->dependencies()->assert_unique_concrete_method(actual_receiver, monomorphic_target);
-
-    // Opto has a bunch of type checking here that I don't
-    // understand.  It's to inhibit casting in one direction,
-    // possibly because objects in Opto can have inexact
-    // types, but I can't even tell which direction it
-    // doesn't like.  For now I'm going to block *any* cast.
-    if (monomorphic_target != dest_method) {
-      if (YuhuPerformanceWarnings) {
-        warning("found monomorphic target, but inhibited cast:");
-        tty->print("  dest_method = ");
-        dest_method->print_short_name(tty);
-        tty->cr();
-        tty->print("  monomorphic_target = ");
-        monomorphic_target->print_short_name(tty);
-        tty->cr();
-      }
-      monomorphic_target = NULL;
-    }
   }
 
   // Replace the virtual call with a direct one.  This makes
   // us dependent on that target method not getting overridden
-  // by dynamic class loading.
+  // by dynamic class loading.  A later class load that violates
+  // assert_unique_concrete_method flushes this nmethod and any
+  // live frames deoptimize through the dependent-deopt entry.
   if (monomorphic_target != NULL) {
-    dependencies()->assert_unique_concrete_method(
-      actual_receiver, monomorphic_target);
     return monomorphic_target;
   }
 
