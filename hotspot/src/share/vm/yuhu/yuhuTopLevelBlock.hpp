@@ -507,6 +507,14 @@ class YuhuTopLevelBlock : public YuhuBlock {
                     YuhuState*               not_taken_state);
   void do_if(llvm::ICmpInst::Predicate p, YuhuValue* b, YuhuValue* a);
 
+  // Reads the caller MDO's BranchData slice for a conditional bytecode
+  // at `bci`.  Returns false when there is no usable profile (missing
+  // MDO, immature, tag mismatch, or both counters zero).  Never calls
+  // ciMethodData::load_data() directly: method_data_or_null() already
+  // snapshots under VM_ENTRY_MARK, so reads on the returned object are
+  // safe on the native compiler thread.
+  bool branch_profile(int bci, uint& taken, uint& not_taken);
+
   // tableswitch and lookupswitch
  private:
   void do_switch();

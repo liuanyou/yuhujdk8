@@ -65,6 +65,12 @@
           "in the inline plan; a receiver-klass guard will be emitted at IR " \
           "generation before the substitution becomes observable")            \
                                                                               \
+  product(bool, YuhuBranchProbabilities, true,                               \
+          "At the optimized tier, use the caller's two-way branch profile "   \
+          "(BranchData taken/not_taken) to orient conditional branches so "   \
+          "the hot edge is the br's first successor, and attach LLVM !prof "   \
+          "branch_weights metadata for downstream layout passes")             \
+                                                                              \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \
                                                                               \

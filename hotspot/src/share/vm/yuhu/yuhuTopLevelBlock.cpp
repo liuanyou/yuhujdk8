@@ -1333,12 +1333,75 @@ void YuhuTopLevelBlock::do_if_helper(ICmpInst::Predicate p,
   YuhuTopLevelBlock *if_taken  = successor(ciTypeFlow::IF_TAKEN);
   YuhuTopLevelBlock *not_taken = successor(ciTypeFlow::IF_NOT_TAKEN);
 
-  builder()->CreateCondBr(
-    builder()->CreateICmp(p, a, b),
-    if_taken->entry_block(), not_taken->entry_block());
+  // Option B: profile-driven hot-edge orientation.  If the caller MDO's
+  // BranchData says the not-taken edge is strictly hotter, invert the
+  // comparison predicate and swap the two successors so the br's first
+  // successor is the hot one.  This is a semantics-preserving rewrite:
+  // add_incoming() stays bound to the *semantic* if_taken/not_taken
+  // YuhuTopLevelBlock pointers (which own the ciTypeFlow edge and the
+  // phi insertion), not to the emission order of the br.  Branch
+  // probabilities are a hint, not a speculation, so no guard and no
+  // deopt trap is required here.
+  uint taken_cnt = 0, not_taken_cnt = 0;
+  const bool have_profile = branch_profile(bci(), taken_cnt, not_taken_cnt);
+  const bool swap = have_profile && not_taken_cnt > taken_cnt;
+
+  ICmpInst::Predicate emit_p = swap ? ICmpInst::getInversePredicate(p) : p;
+  Value* cond = builder()->CreateICmp(emit_p, a, b);
+
+  BasicBlock* hot_bb  = swap ? not_taken->entry_block() : if_taken->entry_block();
+  BasicBlock* cold_bb = swap ? if_taken->entry_block()  : not_taken->entry_block();
+  const uint  hot_cnt  = swap ? not_taken_cnt : taken_cnt;
+  const uint  cold_cnt = swap ? taken_cnt     : not_taken_cnt;
+
+  BranchInst* br = builder()->CreateCondBr(cond, hot_bb, cold_bb);
+
+  // Attach !prof { !"branch_weights", i32 hot, i32 cold } for LLVM's
+  // SimplifyCFG / MachineBlockPlacement / AArch64 branch-lowering
+  // passes.  LLVM's verifier rejects zero weights, so clamp both sides
+  // to 1 while preserving the ratio's direction.
+  if (have_profile) {
+    llvm::LLVMContext& ctx = builder()->GetInsertBlock()->getContext();
+    llvm::Type* int32 = llvm::Type::getInt32Ty(ctx);
+    const uint w_hot  = hot_cnt  == 0 ? 1u : hot_cnt;
+    const uint w_cold = cold_cnt == 0 ? 1u : cold_cnt;
+    llvm::Metadata* ops[] = {
+      llvm::MDString::get(ctx, "branch_weights"),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(int32, w_hot)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(int32, w_cold)),
+    };
+    br->setMetadata(llvm::LLVMContext::MD_prof, llvm::MDNode::get(ctx, ops));
+  }
 
   if_taken->add_incoming(if_taken_state);
   not_taken->add_incoming(not_taken_state);
+}
+
+// Reads the caller MDO's BranchData slice for a conditional bytecode
+// at `bci`.  Uses the same access pattern as the devirtualization
+// planner: method_data_or_null() VM_ENTRY-snapshots the MDO, is_mature()
+// gates on the live compilation-policy predicate, bci_to_data() returns
+// the already-copied ciProfileData entry, and we tag-check before
+// down-casting.  Never call ciMethodData::load_data() directly here --
+// translate_from walks every entry and calls ciEnv::get_klass which
+// asserts IS_IN_VM on this native compiler thread.
+bool YuhuTopLevelBlock::branch_profile(int bci, uint& taken, uint& not_taken) {
+  taken = not_taken = 0;
+  if (!YuhuBranchProbabilities) return false;
+  ciMethodData* mdo = target()->method_data_or_null();
+  if (mdo == NULL || !mdo->is_mature()) return false;
+  ciProfileData* data = mdo->bci_to_data(bci);
+  if (data == NULL) return false;
+  // JDK8 lays conditional branches out as BranchData (a JumpData
+  // subclass).  ProfileData exposes a generated `is_BranchData()`
+  // virtual (the same pattern the devirtualization path uses with
+  // `is_VirtualCallData()`); the underlying DataLayout::branch_data_tag
+  // is not publicly readable via ProfileData::tag() in this fork.
+  if (!data->is_BranchData()) return false;
+  BranchData* bd = data->as_BranchData();
+  taken     = bd->taken();
+  not_taken = bd->not_taken();
+  return (taken + not_taken) > 0;
 }
 
 void YuhuTopLevelBlock::do_switch() {
