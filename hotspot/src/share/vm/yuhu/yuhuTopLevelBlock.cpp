@@ -49,6 +49,10 @@
 #include "yuhu/yuhu_globals.hpp"
 #include "yuhu/yuhuRuntime.hpp"
 #include "utilities/debug.hpp"
+// Raw LLVM headers stay after every HotSpot include (house rule documented
+// in yuhuInvariants.cpp): they pull <cassert> and would clobber HotSpot's
+// two-argument assert() used by the ci/*.hpp headers reached above.
+#include "llvm/ADT/SmallVector.h"
 
 using namespace llvm;
 
@@ -1407,6 +1411,20 @@ bool YuhuTopLevelBlock::branch_profile(int bci, uint& taken, uint& not_taken) {
 void YuhuTopLevelBlock::do_switch() {
   int len = switch_table_length();
 
+  // Option R2 (metadata-only): weight vector for !prof branch_weights,
+  // ordered [default successor, then cases in addCase order] -- the
+  // layout LLVM 20's BPI expects (verified against the linked
+  // toolchain).  Case emission order stays in bytecode order: jump
+  // tables dispatch by value-lo index and clusterifySwitch re-sorts by
+  // value and clusters from these probabilities, so operand order is
+  // cosmetic; the weights are the optimization.
+  MultiBranchData* mb = multi_branch_data(bci());
+  GrowableArray<julong> weights(len + 1);
+  const bool have_profile = (mb != NULL);
+  if (have_profile) {
+    weights.append(mb->default_count());
+  }
+
   YuhuTopLevelBlock *dest_block = successor(ciTypeFlow::SWITCH_DEFAULT);
   SwitchInst *switchinst = builder()->CreateSwitch(
     pop()->jint_value(), dest_block->entry_block(), len);
@@ -1414,14 +1432,76 @@ void YuhuTopLevelBlock::do_switch() {
 
   for (int i = 0; i < len; i++) {
     int dest_bci = switch_dest(i);
+    // MultiBranchData row i corresponds 1:1 to bytecode case index i
+    // (value - lo for tableswitch, pair index for lookupswitch), which
+    // is exactly this loop's iteration variable.
+    const uint case_cnt = (have_profile && i < mb->number_of_cases())
+                              ? mb->count_at(i) : 0;
     if (dest_bci != switch_default_dest()) {
       dest_block = bci_successor(dest_bci);
       switchinst->addCase(
         LLVMValue::jint_constant(switch_key(i)),
         dest_block->entry_block());
       dest_block->add_incoming(current_state());
+      if (have_profile) {
+        weights.append(case_cnt);
+      }
+    } else if (have_profile) {
+      // Cases folded into the default successor must move their traffic
+      // into the default weight, or BPI understates the default edge.
+      weights.at_put(0, weights.at(0) + case_cnt);
     }
   }
+
+  // Attach the weights.  The LLVM verifier rejects zero entries, so
+  // clamp zeros to 1 (same policy as do_if_helper) and cap at max uint
+  // for the i32 operand type.  If the row count disagreed with the
+  // bytecode table (corrupt or oddly-sized MDO), emit no metadata
+  // rather than a positional mismatch.
+  if (have_profile && weights.length() == (int)(switchinst->getNumCases() + 1)) {
+    llvm::LLVMContext& ctx = builder()->GetInsertBlock()->getContext();
+    llvm::Type* int32 = llvm::Type::getInt32Ty(ctx);
+    llvm::SmallVector<llvm::Metadata*, 16> ops;
+    ops.push_back(llvm::MDString::get(ctx, "branch_weights"));
+    for (int k = 0; k < weights.length(); k++) {
+      julong w = weights.at(k);
+      if (w == 0)                 { w = 1; }
+      else if (w > 0xFFFFFFFFull) { w = 0xFFFFFFFFull; }
+      ops.push_back(llvm::ConstantAsMetadata::get(
+          llvm::ConstantInt::get(int32, w)));
+    }
+    switchinst->setMetadata(llvm::LLVMContext::MD_prof, llvm::MDNode::get(ctx, ops));
+  }
+}
+
+// Reads the caller MDO's MultiBranchData slice for a switch bytecode
+// at `bci`.  Same snapshot discipline as branch_profile: this fork
+// allocates multi_branch_data_tag for every tableswitch/lookupswitch
+// with one row per case index and no truncation, and all cells are
+// plain ints, so reads after method_data_or_null() are pure memory
+// reads on the already-copied buffer and safe in native state.
+// Returns NULL on any of: flag off, missing/immature MDO, wrong tag,
+// or every counter zero.
+MultiBranchData* YuhuTopLevelBlock::multi_branch_data(int bci) {
+  if (!YuhuSwitchProfile) return NULL;
+  ciMethodData* mdo = target()->method_data_or_null();
+  if (mdo == NULL || !mdo->is_mature()) {
+    return NULL;
+  }
+  ciProfileData* data = mdo->bci_to_data(bci);
+  if (data == NULL) {
+    return NULL;
+  }
+  if (!data->is_MultiBranchData()) {
+    return NULL;
+  }
+  MultiBranchData* mb = data->as_MultiBranchData();
+  julong total = mb->default_count();
+  const int nc = mb->number_of_cases();
+  for (int i = 0; i < nc; i++) {
+    total += mb->count_at(i);
+  }
+  return total > 0 ? mb : NULL;
 }
 
 ciMethod* YuhuTopLevelBlock::improve_virtual_call(ciMethod*   caller,

@@ -71,6 +71,12 @@
           "the hot edge is the br's first successor, and attach LLVM !prof "   \
           "branch_weights metadata for downstream layout passes")             \
                                                                               \
+  product(bool, YuhuSwitchProfile, true,                                    \
+          "At the optimized tier, attach LLVM !prof branch_weights metadata "  \
+          "to tableswitch/lookupswitch SwitchInsts built from the caller's "   \
+          "MultiBranchData profile (default count plus per-case counts, with "  \
+          "skipped-default case traffic folded into the default weight)")     \
+                                                                              \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \
                                                                               \

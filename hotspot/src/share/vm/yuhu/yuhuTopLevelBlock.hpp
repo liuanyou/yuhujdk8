@@ -515,6 +515,14 @@ class YuhuTopLevelBlock : public YuhuBlock {
   // safe on the native compiler thread.
   bool branch_profile(int bci, uint& taken, uint& not_taken);
 
+  // Reads the caller MDO's MultiBranchData slice for a tableswitch or
+  // lookupswitch at `bci`.  Returns NULL when there is no usable profile
+  // (flag off, missing MDO, immature, tag mismatch, or every counter
+  // zero).  Same access rules as branch_profile: method_data_or_null()
+  // snapshots under VM_ENTRY_MARK, so row reads are safe on the native
+  // compiler thread; never call ciMethodData::load_data() here.
+  MultiBranchData* multi_branch_data(int bci);
+
   // tableswitch and lookupswitch
  private:
   void do_switch();
