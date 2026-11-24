@@ -1710,7 +1710,14 @@ void YuhuTopLevelBlock::do_call() {
   // receiver-klass guard emitted here is what makes the substitution safe;
   // the CHA improve below only returns non-null for already statically-bound
   // targets where no guard is required.
-  if (is_virtual) {
+  //
+  // Same path handles _invokeinterface sites: the planner accepts both
+  // bytecode kinds (their MDO slices share the VirtualCallData layout in
+  // JDK8), the guard only reads the receiver oop's klass and compares it
+  // against the profiled concrete klass, and after substitution the site
+  // becomes a direct call_method with call_is_virtual=false, which the
+  // existing inline / real-call machinery below already supports.
+  if (is_virtual || is_interface) {
     YuhuFunction* func_tree = function();
     YuhuInlineNode* devirt_child = NULL;
     if (func_tree != NULL && func_tree->inline_tree() != NULL &&

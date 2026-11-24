@@ -84,8 +84,17 @@ class YuhuInlinePlanner : public StackObj {
         // tree; the runtime receiver-klass guard is emitted at IR generation
         // (YuhuTopLevelBlock::do_call).  A null guard_klass means the site
         // stays on the existing path.
+        //
+        // The same path applies to _invokeinterface: in JDK8, both
+        // _invokevirtual and _invokeinterface lay out their MDO slice as
+        // VirtualCallData (see methodData.cpp allocate_data: both branches
+        // share the code that picks virtual_call_data_tag).  Receiver rows
+        // have identical semantics, and find_monomorphic_target resolves
+        // through resolve_invoke against the profiled concrete receiver
+        // klass (which walks the itable for interface method holders).
         ciKlass* guard_klass = NULL;
-        if (will_link && target != NULL && bc == Bytecodes::_invokevirtual) {
+        if (will_link && target != NULL &&
+            (bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface)) {
           ciMethod* devirt = virtual_call_target(method, bci, target, &guard_klass);
           if (devirt != NULL) {
             target = devirt;
