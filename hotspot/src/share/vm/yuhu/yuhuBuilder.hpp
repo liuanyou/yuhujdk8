@@ -217,8 +217,11 @@ class YuhuBuilder : public llvm::IRBuilder<> {
   llvm::Value* throw_StackOverflowError();
   llvm::Value* debug_stack_overflow_check();
   
-  // LLVM intrinsics for deoptimization
-  llvm::CallInst* CreateExperimentalDeoptimize(uint64_t statepoint_id);
+  // LLVM intrinsics for deoptimization.
+  // trap_request is a compile-time constant (Deoptimization::make_trap_request(...))
+  // passed as a call argument so each deopt site carries its own reason/action to
+  // the runtime stub, which forwards it to SharedRuntime::uncommon_trap_blob.
+  llvm::CallInst* CreateExperimentalDeoptimize(uint64_t statepoint_id, int trap_request);
 
   llvm::CallInst* CreateStackMap(uint64_t id, uint32_t num_shadow_bytes, llvm::ArrayRef<llvm::Value*> live_values);
 

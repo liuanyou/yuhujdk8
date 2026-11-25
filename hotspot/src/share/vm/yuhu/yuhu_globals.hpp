@@ -77,6 +77,14 @@
           "MultiBranchData profile (default count plus per-case counts, with "  \
           "skipped-default case traffic folded into the default weight)")     \
                                                                               \
+  product(bool, YuhuProfileNullCast, false,                                 \
+          "At the optimized tier, when the caller MDO's BitData null_seen "   \
+          "flag has never fired at this checkcast or instanceof bci, "        \
+          "redirect the null successor to an uncommon-trap block and mark "   \
+          "the cast (or the source object of a fused instanceof-if pattern) "  \
+          "value as zero_checked, so downstream getfield/invokevirtual/"      \
+          "array-access null checks on that SSA value are elided")           \
+                                                                              \
   product(ccstr, YuhuOptimizationLevel, "Default",                           \
           "The optimization level passed to LLVM, possible values: None, Less, Default and Agressive") \
                                                                               \

@@ -525,6 +525,22 @@ class YuhuTopLevelBlock : public YuhuBlock {
   // ciMethodData::load_data() here.
   MultiBranchData* multi_branch_data(int bci);
 
+  // Returns true when the profile evidence at the current bytecode permits
+  // speculating that the operand at this checkcast site is never null.  Gate
+  // order mirrors branch_profile / multi_branch_data: product flag first,
+  // env()->comp_level() != CompLevel_yuhu_optimized bail second, then
+  // method_data_or_null() + is_mature() + is_BitData() + !null_seen().  The
+  // null_seen flag is set by the interpreter (interp_masm_aarch64.cpp
+  // profile_null_seen) and by Yuhu's tier-0 twin (yuhu_templateTable via
+  // write_insts_profile_null_seen) at checkcast/instanceof/aastore; a mature
+  // MDO for a checkcast site with the flag still unset is the signal that
+  // the JVMS-required null NO-OP path may be replaced by an uncommon trap.
+  // ciMethodData::bci_to_data returns a ProfileData* whose slice may be a
+  // BitData or (under TypeProfileCasts, default true on aarch64) a larger
+  // VirtualCallData; is_BitData() dispatches correctly for both because
+  // VirtualCallData inherits BitData transitively.
+  bool speculate_never_null_at_cast();
+
   // tableswitch and lookupswitch
  private:
   void do_switch();

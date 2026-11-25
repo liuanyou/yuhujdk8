@@ -1990,10 +1990,11 @@ address YuhuRuntime::generate_handle_deoptimization_stub() {
     CodeBuffer cb(name, stub_size, stub_size);
     YuhuMacroAssembler masm(&cb);
 
-    int trap_request = Deoptimization::make_trap_request(
-            Deoptimization::Reason_unloaded,
-            Deoptimization::Action_reinterpret);
-    masm.write_insts_mov_imm32(YuhuMacroAssembler::x1, trap_request);
+    // The compiled code (via LLVM lowering of @llvm.experimental.deoptimize)
+    // places the per-site trap_request into x0 (first integer argument per
+    // aarch64 PCS).  Forward it to x1 where SharedRuntime::uncommon_trap_blob
+    // expects it, then tail-jump to the blob.
+    masm.write_inst_mov_reg(YuhuMacroAssembler::x1, YuhuMacroAssembler::x0);
     masm.write_insts_far_jump(YuhuRuntimeAddress(SharedRuntime::uncommon_trap_blob()->entry_point()));
     masm.flush();
 

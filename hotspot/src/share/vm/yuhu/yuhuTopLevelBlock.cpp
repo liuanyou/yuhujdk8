@@ -966,8 +966,10 @@ void YuhuTopLevelBlock::do_trap(int trap_request) {
 
   // Call @llvm.experimental.deoptimize intrinsic
   // This marks the call as a deoptimization point for LLVM's statepoint infrastructure
-  // The deopt bundle preserves all live JVM state for frame reconstruction
-  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize(statepoint_id);
+  // The deopt bundle preserves all live JVM state for frame reconstruction.
+  // trap_request is passed as a call argument so each site carries its own
+  // reason/action to the runtime stub (rather than a single hardcoded value).
+  llvm::Value* deopt_result = builder()->CreateExperimentalDeoptimize(statepoint_id, trap_request);
 
   if (target()->return_type()->is_void()) {
       builder()->CreateRetVoid();
@@ -1412,6 +1414,30 @@ bool YuhuTopLevelBlock::branch_profile(int bci, uint& taken, uint& not_taken) {
   taken     = bd->taken();
   not_taken = bd->not_taken();
   return (taken + not_taken) > 0;
+}
+
+// Returns true when profile evidence at the current bci permits speculating
+// that the operand at this checkcast site is never null.  The null_seen bit
+// is written by the template interpreter (interp_masm_aarch64.cpp
+// profile_null_seen at checkcast/instanceof/aastore) and mirrored by Yuhu's
+// tier-0 twin (write_insts_profile_null_seen in yuhu_templateTable_aarch64).
+// A mature MDO at a checkcast bci whose BitData slice has never had its
+// null_seen flag set is the signal that the JVMS-required null NO-OP path
+// may be safely replaced by an uncommon trap.  The slice is either a plain
+// BitData (TypeProfileCasts=off) or, under the aarch64 default of
+// TypeProfileCasts=true, a larger VirtualCallData that inherits BitData
+// transitively; the generated is_BitData()/as_BitData() virtuals dispatch
+// correctly for both.  Gate order mirrors branch_profile / multi_branch_data:
+// product flag first, comp_level second, then MDO liveness.
+bool YuhuTopLevelBlock::speculate_never_null_at_cast() {
+  if (!YuhuProfileNullCast) return false;
+  if (env() == NULL || env()->comp_level() != CompLevel_yuhu_optimized) return false;
+  ciMethodData* mdo = target()->method_data_or_null();
+  if (mdo == NULL || !mdo->is_mature()) return false;
+  ciProfileData* data = mdo->bci_to_data(bci());
+  if (data == NULL) return false;
+  if (!data->is_BitData()) return false;
+  return !data->as_BitData()->null_seen();
 }
 
 void YuhuTopLevelBlock::do_switch() {
@@ -2321,6 +2347,25 @@ bool YuhuTopLevelBlock::maybe_do_instanceof_if() {
   if (static_subtype_check(check_klass, object_klass))
     return false;
 
+  // Fused `instanceof; if*` never-null propagation: when the same profile
+  // gate the checkcast path uses (`YuhuProfileNullCast` + tier 6 + mature
+  // MDO + BitData slice with null_seen never fired) succeeds here, pre-mark
+  // `old_object` so `new_object` (constructed a few lines below) inherits
+  // `zero_checked=true`.  `new_state->replace_all(old_object, new_object)`
+  // then swaps the true-branch's uses of the local / stack slot to the
+  // hinted copy, and the existing yuhuBlock.hpp:187 gate elides downstream
+  // check_null on getfield/invokevirtual/array-access in that branch.  This
+  // is the win that makes extending the consumer past checkcast worth the
+  // extra branch elimination: standalone instanceof only pushes an int
+  // result, so its nullness would not flow anywhere.
+  //
+  // The same gate is checked inside do_full_instance_check just below so
+  // the null successor is redirected to a Reason_null_check uncommon trap;
+  // the helper is a pure read of the caller MDO and is cheap to call twice.
+  if (speculate_never_null_at_cast()) {
+    old_object->set_zero_checked(true);
+  }
+
   // Perform the instance check
   do_full_instance_check(check_klass);
   Value *result = pop()->jint_value();
@@ -2378,11 +2423,40 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
   // Pop the object off the stack
   Value *object = pop()->jobject_value();
 
-  // Null objects aren't instances of anything
+  // Null objects aren't instances of anything.  When YuhuProfileNullCast is
+  // active at tier 6 and the caller MDO's BitData null_seen flag has never
+  // fired at this checkcast bci, redirect the null successor to an uncommon-
+  // trap block instead of the IC_IS_NULL merge path; the interpreter
+  // re-executes the bytecode and per JVMS a null operand to checkcast is a
+  // NO-OP, so the trap is always recoverable.  The success push downstream
+  // then marks the cast value zero_checked=true so the existing
+  // yuhuBlock.hpp:187 gate lets getfield/invokevirtual/array-access/athrow
+  // on the same SSA elide their own check_null sites.
+  const bool speculate_nonnull =
+      (bc() == Bytecodes::_checkcast || bc() == Bytecodes::_instanceof)
+      && speculate_never_null_at_cast();
+  BasicBlock *null_successor = merge2;
+  if (speculate_nonnull) {
+    null_successor = function()->CreateBlock("checkcast_null_deopt");
+  }
   builder()->CreateCondBr(
     builder()->CreateICmpEQ(object, LLVMValue::null()),
-    merge2, not_null);
+    null_successor, not_null);
   BasicBlock *null_block = builder()->GetInsertBlock();
+
+  if (speculate_nonnull) {
+    // Emit the uncommon-trap body.  do_trap() terminates the block, so the
+    // compiler-side state used for the non-null continuation must be snap-
+    // shot first.  The object is put back on the JVM stack before the trap
+    // so register_deopt_bundle captures the pre-bytecode frame shape.
+    YuhuState *post_pop_state = current_state()->copy();
+    builder()->SetInsertPoint(null_successor);
+    push(YuhuValue::create_generic(klass, object, /*zero_checked*/ false));
+    do_trap(Deoptimization::make_trap_request(
+        Deoptimization::Reason_null_check,
+        Deoptimization::Action_reinterpret));
+    set_current_state(post_pop_state);
+  }
 
   // Get the class we're checking against
   builder()->SetInsertPoint(not_null);
@@ -2460,7 +2534,13 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
   builder()->SetInsertPoint(merge2);
   PHINode *result = builder()->CreatePHI(
     YuhuType::jint_type(), 0, "result");
-  result->addIncoming(LLVMValue::jint_constant(IC_IS_NULL), null_block);
+  // Under never-null speculation the null successor deopts and never
+  // flows into merge2, so merge2 has exactly one predecessor and the
+  // phi drops the IC_IS_NULL incoming; SimplifyCFG collapses the trivial
+  // phi during tier-6 codegen.
+  if (!speculate_nonnull) {
+    result->addIncoming(LLVMValue::jint_constant(IC_IS_NULL), null_block);
+  }
   result->addIncoming(nonnull_result, nonnull_block);
 
   // Handle the result
@@ -2490,7 +2570,8 @@ void YuhuTopLevelBlock::do_full_instance_check(ciKlass* klass) {
 
     set_current_state(saved_state);
     builder()->SetInsertPoint(success);
-    push(YuhuValue::create_generic(klass, object, false));
+    push(YuhuValue::create_generic(klass, object,
+                                   /*zero_checked*/ speculate_nonnull));
   }
   else {
     push(

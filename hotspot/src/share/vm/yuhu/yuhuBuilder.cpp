@@ -540,7 +540,7 @@ Value* YuhuBuilder::throw_StackOverflowError() {
   return make_function((address) YuhuRuntime::throw_StackOverflowError_stub(), "T", "v");
 }
 
-CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id) {
+CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id, int trap_request) {
     llvm::Type* return_type = YuhuType::to_stackType(function()->target_method()->return_type());
 
     std::vector<llvm::Value*> deopt_operands;
@@ -551,9 +551,15 @@ CallInst* YuhuBuilder::CreateExperimentalDeoptimize(uint64_t statepoint_id) {
     GetInsertBlock()->getModule(),
     llvm::Intrinsic::experimental_deoptimize,
     { return_type });
-  
+
+  // Pass trap_request as a call argument so the backend materializes it into
+  // x0 (first integer arg per aarch64 PCS).  The runtime stub forwards x0→x1
+  // for the uncommon_trap_blob which reads trap_request from x1.
+  llvm::Value* trap_request_val = llvm::ConstantInt::get(
+      llvm::Type::getInt32Ty(getContext()), (uint32_t)trap_request);
+
   // Create the call with deopt bundle
-  llvm::CallInst* call = CreateCall(deopt_intrinsic, {}, {deopt_bundle});
+  llvm::CallInst* call = CreateCall(deopt_intrinsic, {trap_request_val}, {deopt_bundle});
   
   // Attach the call site's unique statepoint ID.  RS4GC rewrites this intrinsic
   // into a patchpoint but keeps the attribute, and the same ID is then read back
