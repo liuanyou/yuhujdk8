@@ -1389,9 +1389,15 @@ void YuhuTopLevelBlock::do_if_helper(ICmpInst::Predicate p,
 // down-casting.  Never call ciMethodData::load_data() directly here --
 // translate_from walks every entry and calls ciEnv::get_klass which
 // asserts IS_IN_VM on this native compiler thread.
+//
+// Optimized tier only: profile-driven layout is a level-6 decision, so
+// CompLevel_yuhu_fast (and any level below it) must emit the same IR it
+// always did, without paying for MDO reads.  Same tier convention as
+// YuhuInlinePlanner, which likewise no-ops outside CompLevel_yuhu_optimized.
 bool YuhuTopLevelBlock::branch_profile(int bci, uint& taken, uint& not_taken) {
   taken = not_taken = 0;
   if (!YuhuBranchProbabilities) return false;
+  if (env() == NULL || env()->comp_level() != CompLevel_yuhu_optimized) return false;
   ciMethodData* mdo = target()->method_data_or_null();
   if (mdo == NULL || !mdo->is_mature()) return false;
   ciProfileData* data = mdo->bci_to_data(bci);
@@ -1480,10 +1486,14 @@ void YuhuTopLevelBlock::do_switch() {
 // with one row per case index and no truncation, and all cells are
 // plain ints, so reads after method_data_or_null() are pure memory
 // reads on the already-copied buffer and safe in native state.
-// Returns NULL on any of: flag off, missing/immature MDO, wrong tag,
-// or every counter zero.
+// Returns NULL on any of: flag off, compiling below the optimized tier,
+// missing/immature MDO, wrong tag, or every counter zero.
+//
+// The tier gate mirrors branch_profile: only CompLevel_yuhu_optimized
+// consumes switch profiles, so the fast tier keeps its original IR.
 MultiBranchData* YuhuTopLevelBlock::multi_branch_data(int bci) {
   if (!YuhuSwitchProfile) return NULL;
+  if (env() == NULL || env()->comp_level() != CompLevel_yuhu_optimized) return NULL;
   ciMethodData* mdo = target()->method_data_or_null();
   if (mdo == NULL || !mdo->is_mature()) {
     return NULL;

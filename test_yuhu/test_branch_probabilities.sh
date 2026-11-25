@@ -25,6 +25,10 @@
 #   [3] +YuhuBranchProbabilities test: correct + >=1 branch_weights
 #       occurrence + numeric equality against control's oracle.
 #   [4] +YuhuBranchProbabilities +DeoptimizeALot stress.
+#   [5] Fast-tier negative control: +YuhuBranchProbabilities with the
+#       tier ceiling at 5 must emit ZERO branch_weights metadata, because
+#       branch_profile() is gated on CompLevel_yuhu_optimized.  Before
+#       that gate, level 5 produced IR identical to level 6.
 
 set -u
 
@@ -70,6 +74,17 @@ COMMON_YUHU_FLAGS=(
     -XX:+PrintCompilation
 )
 
+# Scenario 5 arm: same flags, ceiling pulled down to the fast tier.
+# Derived from COMMON_YUHU_FLAGS rather than restated, so the two arms
+# cannot drift apart when flags are added.
+TIER5_YUHU_FLAGS=()
+for _f in "${COMMON_YUHU_FLAGS[@]}"; do
+    case "$_f" in
+        -XX:TieredStopAtLevel=*) _f="-XX:TieredStopAtLevel=5" ;;
+    esac
+    TIER5_YUHU_FLAGS+=("$_f")
+done
+
 # glob helper: expand "any IR file for BranchProfileTest.run" safely
 # (empty result returns nothing, no zsh/bash abort).
 ir_glob() {
@@ -99,7 +114,7 @@ overall_rc=0
 # Scenario 1: stock JVM, no Yuhu.  Fixture self-validation.
 # ---------------------------------------------------------------------
 LOG1="$TMP_DIR/scenario1.log"
-echo "=== [1/4] Baseline (stock interpreter + default tiering) ==="
+echo "=== [1/5] Baseline (stock interpreter + default tiering) ==="
 wipe_ir
 "$JAVA" -cp . com.example.BranchProfileTest > "$LOG1" 2>&1
 rc=$?
@@ -129,7 +144,7 @@ echo ""
 LOG2="$TMP_DIR/scenario2.log"
 IR2="$TMP_DIR/ir_off"
 mkdir -p "$IR2"
-echo "=== [2/4] Yuhu ON, -YuhuBranchProbabilities (control) ==="
+echo "=== [2/5] Yuhu ON, -YuhuBranchProbabilities (control) ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:-YuhuBranchProbabilities \
     -cp . com.example.BranchProfileTest > "$LOG2" 2>&1
@@ -173,7 +188,7 @@ echo ""
 LOG3="$TMP_DIR/scenario3.log"
 IR3="$TMP_DIR/ir_on"
 mkdir -p "$IR3"
-echo "=== [3/4] Yuhu ON, +YuhuBranchProbabilities (branch profile) ==="
+echo "=== [3/5] Yuhu ON, +YuhuBranchProbabilities (branch profile) ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:+YuhuBranchProbabilities \
     -cp . com.example.BranchProfileTest > "$LOG3" 2>&1
@@ -223,13 +238,68 @@ echo ""
 # forced deopts.
 # ---------------------------------------------------------------------
 LOG4="$TMP_DIR/scenario4.log"
-echo "=== [4/4] +YuhuBranchProbabilities +DeoptimizeALot stress ==="
+echo "=== [4/5] +YuhuBranchProbabilities +DeoptimizeALot stress ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:+YuhuBranchProbabilities -XX:+DeoptimizeALot \
     -cp . com.example.BranchProfileTest > "$LOG4" 2>&1
 rc=$?
 wipe_ir
 pass_fail "branch profile + DeoptimizeALot" "$LOG4" $rc || overall_rc=1
+echo ""
+
+# ---------------------------------------------------------------------
+# Scenario 5: fast-tier negative control.  branch_profile() bails unless
+# env()->comp_level() == CompLevel_yuhu_optimized, so the same bytecode
+# compiled with the ceiling at 5 must carry no profile metadata at all
+# even with +YuhuBranchProbabilities explicitly ON.  Locks down the rule
+# that profiling consumption is an optimized-tier decision.
+#
+# Non-vacuity is asserted first: run() must really have compiled at level
+# 5 and really have produced IR dumps, otherwise "zero hits" would only
+# mean Yuhu never ran.
+# ---------------------------------------------------------------------
+LOG5="$TMP_DIR/scenario5.log"
+IR5="$TMP_DIR/ir_tier5"
+mkdir -p "$IR5"
+echo "=== [5/5] Fast-tier negative control (+YuhuBranchProbabilities, StopAtLevel=5) ==="
+wipe_ir
+"$JAVA" "${TIER5_YUHU_FLAGS[@]}" -XX:+YuhuBranchProbabilities \
+    -cp . com.example.BranchProfileTest > "$LOG5" 2>&1
+rc=$?
+while IFS= read -r f; do mv -f "$f" "$IR5/" 2>/dev/null; done < <(ir_glob)
+pass_fail "tier-5 run produces correct results" "$LOG5" $rc || overall_rc=1
+
+if grep -qE ' 5[[:space:]]+com\.example\.BranchProfileTest::run' "$LOG5"; then
+    echo "PASS: run() compiled at tier-5 (control is not vacuous)"
+else
+    echo "FAIL: run() never compiled at tier-5; this arm proves nothing"
+    grep -E 'BranchProfileTest::run' "$LOG5" | head -5
+    overall_rc=1
+fi
+
+n_ir5=$(find "$IR5" -type f -name '*.ll' | wc -l | tr -d ' ')
+if [ "$n_ir5" -ge 1 ]; then
+    echo "PASS: IR files captured from tier-5 run (count=$n_ir5)"
+else
+    echo "FAIL: no IR files captured from tier-5 run -- absence of metadata is vacuous"
+    overall_rc=1
+fi
+
+if find "$IR5" -type f -name '*.ll' -exec grep -l '"branch_weights"' {} + 2>/dev/null | grep -q .; then
+    echo "FAIL: tier-5 IR carries branch_weights despite the level-6 gate"
+    find "$IR5" -type f -name '*.ll' -exec grep -Hn '"branch_weights"' {} + | head -5
+    overall_rc=1
+else
+    echo "PASS: no branch_weights metadata in tier-5 IR"
+fi
+
+# Semantics must not depend on the tier either.
+if grep -q "BranchProfileTest: ALL OK" "$LOG3" && grep -q "BranchProfileTest: ALL OK" "$LOG5"; then
+    echo "PASS: tier-5 and tier-6 runs agree on all oracle sums"
+else
+    echo "FAIL: tier-5/tier-6 runs disagree"
+    overall_rc=1
+fi
 echo ""
 
 if [ "$overall_rc" -eq 0 ]; then

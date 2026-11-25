@@ -34,6 +34,9 @@
 #       right arity + >=1 clamped-to-1 weight + numeric equality against
 #       control.
 #   [5] +YuhuSwitchProfile +DeoptimizeALot stress.
+#   [6] Fast-tier negative control: +YuhuSwitchProfile with the tier
+#       ceiling at 5 must annotate NOTHING, because profile consumption is
+#       gated on CompLevel_yuhu_optimized inside multi_branch_data().
 #
 # Why Tier0ProfilingStartPercentage is pinned down:
 #   MultiBranchData case cells have exactly one writer in this VM -- the
@@ -97,6 +100,17 @@ COMMON_YUHU_FLAGS=(
     -XX:+PrintCompilation
 )
 
+# Scenario 6 arm: same flags, ceiling pulled down to the fast tier.
+# Derived from COMMON_YUHU_FLAGS rather than restated, so the two arms
+# cannot drift apart when flags are added.
+TIER5_YUHU_FLAGS=()
+for _f in "${COMMON_YUHU_FLAGS[@]}"; do
+    case "$_f" in
+        -XX:TieredStopAtLevel=*) _f="-XX:TieredStopAtLevel=5" ;;
+    esac
+    TIER5_YUHU_FLAGS+=("$_f")
+done
+
 # glob helper: expand "any IR file for dense/sparse" safely
 # (empty result returns nothing, no zsh/bash abort).
 ir_glob() {
@@ -126,6 +140,13 @@ pass_fail() {
 tier6_fired() {
     local log="$1"; local meth="$2"
     grep -qE " 6[[:space:]]+%?[[:space:]]+com\.example\.SwitchProfileTest::${meth}\b" "$log"
+}
+
+# Same check for the fast tier.  Scenario 6 needs it: "no annotations" is
+# only evidence if Yuhu really compiled that method at level 5.
+tier5_fired() {
+    local log="$1"; local meth="$2"
+    grep -qE " 5[[:space:]]+%?[[:space:]]+com\.example\.SwitchProfileTest::${meth}\b" "$log"
 }
 
 # Structural IR validator: every 'switch' instruction must carry !prof,
@@ -229,7 +250,7 @@ overall_rc=0
 # Scenario 1: stock JVM, no Yuhu.  Fixture self-validation.
 # ---------------------------------------------------------------------
 LOG1="$TMP_DIR/scenario1.log"
-echo "=== [1/5] Baseline (stock interpreter + default tiering) ==="
+echo "=== [1/6] Baseline (stock interpreter + default tiering) ==="
 wipe_ir
 "$JAVA" -cp . com.example.SwitchProfileTest > "$LOG1" 2>&1
 rc=$?
@@ -241,7 +262,7 @@ echo ""
 # TABLESWITCH and sparse() as a LOOKUPSWITCH, or the two switch forms
 # under test are not the ones we think they are.
 # ---------------------------------------------------------------------
-echo "=== [2/5] javap bytecode-shape gate ==="
+echo "=== [2/6] javap bytecode-shape gate ==="
 JAVAP_OUT="$TMP_DIR/javap.log"
 "$JAVAP" -p -c com/example/SwitchProfileTest.class > "$JAVAP_OUT" 2>&1 \
     || { echo "FAIL: javap could not disassemble"; overall_rc=1; }
@@ -281,7 +302,7 @@ echo ""
 LOG3="$TMP_DIR/scenario3.log"
 IR3="$TMP_DIR/ir_off"
 mkdir -p "$IR3"
-echo "=== [3/5] Yuhu ON, -YuhuSwitchProfile (control) ==="
+echo "=== [3/6] Yuhu ON, -YuhuSwitchProfile (control) ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:-YuhuSwitchProfile \
     -cp . com.example.SwitchProfileTest > "$LOG3" 2>&1
@@ -345,7 +366,7 @@ echo ""
 LOG4="$TMP_DIR/scenario4.log"
 IR4="$TMP_DIR/ir_on"
 mkdir -p "$IR4"
-echo "=== [4/5] Yuhu ON, +YuhuSwitchProfile (switch profile) ==="
+echo "=== [4/6] Yuhu ON, +YuhuSwitchProfile (switch profile) ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:+YuhuSwitchProfile \
     -cp . com.example.SwitchProfileTest > "$LOG4" 2>&1
@@ -418,13 +439,91 @@ echo ""
 # metadata path under tier churn and re-profiling).
 # ---------------------------------------------------------------------
 LOG5="$TMP_DIR/scenario5.log"
-echo "=== [5/5] +YuhuSwitchProfile +DeoptimizeALot stress ==="
+echo "=== [5/6] +YuhuSwitchProfile +DeoptimizeALot stress ==="
 wipe_ir
 "$JAVA" "${COMMON_YUHU_FLAGS[@]}" -XX:+YuhuSwitchProfile -XX:+DeoptimizeALot \
     -cp . com.example.SwitchProfileTest > "$LOG5" 2>&1
 rc=$?
 wipe_ir
 pass_fail "switch profile + DeoptimizeALot" "$LOG5" $rc || overall_rc=1
+echo ""
+
+# ---------------------------------------------------------------------
+# Scenario 6: fast-tier negative control.  multi_branch_data() and
+# branch_profile() both bail unless env()->comp_level() ==
+# CompLevel_yuhu_optimized, so with the ceiling at 5 the identical
+# bytecode must compile with +YuhuSwitchProfile explicitly ON and still
+# emit no switch metadata at all.  Before the tier gate, levels 5 and 6
+# produced byte-identical annotated IR (8 annotated switches and 88
+# branch_weights nodes in this very fixture), which is what this
+# scenario now locks down.
+#
+# Non-vacuity is asserted first: the methods must really have compiled at
+# level 5 and their IR must really contain switches, otherwise "annotated
+# = 0" would merely mean nothing was compiled.
+# ---------------------------------------------------------------------
+LOG6="$TMP_DIR/scenario6.log"
+IR6="$TMP_DIR/ir_tier5"
+mkdir -p "$IR6"
+echo "=== [6/6] Fast-tier negative control (+YuhuSwitchProfile, StopAtLevel=5) ==="
+wipe_ir
+"$JAVA" "${TIER5_YUHU_FLAGS[@]}" -XX:+YuhuSwitchProfile \
+    -cp . com.example.SwitchProfileTest > "$LOG6" 2>&1
+rc=$?
+while IFS= read -r f; do mv -f "$f" "$IR6/" 2>/dev/null; done < <(ir_glob)
+pass_fail "tier-5 run produces correct results" "$LOG6" $rc || overall_rc=1
+
+for meth in dense sparse; do
+    if tier5_fired "$LOG6" "$meth"; then
+        echo "PASS: ${meth}() compiled at tier-5 (control is not vacuous)"
+    else
+        echo "FAIL: ${meth}() never compiled at tier-5; this arm proves nothing"
+        grep -E "SwitchProfileTest::${meth}" "$LOG6" | head -5
+        overall_rc=1
+    fi
+done
+
+n_ir6=$(find "$IR6" -type f -name '*.ll' | wc -l | tr -d ' ')
+if [ "$n_ir6" -ge 2 ]; then
+    echo "PASS: IR files captured from tier-5 run (count=$n_ir6)"
+else
+    echo "FAIL: expected >=2 IR files (dense + sparse), got $n_ir6"
+    overall_rc=1
+fi
+
+if find "$IR6" -type f -name '*.ll' -exec grep -lE 'switch\s+i32' {} + 2>/dev/null | grep -q .; then
+    echo "PASS: switch instructions present in tier-5 IR"
+else
+    echo "FAIL: no switch instructions in tier-5 IR -- annotation absence is vacuous"
+    overall_rc=1
+fi
+
+T5_FILES=()
+while IFS= read -r f; do T5_FILES+=("$f"); done < <(find "$IR6" -type f -name '*.ll')
+VAL_OUT_T5="$TMP_DIR/validate_tier5.log"
+validate_switch_prof "${T5_FILES[@]}" > "$VAL_OUT_T5" 2>&1
+sed 's/^/    /' "$VAL_OUT_T5"
+T5_SW=$(grep -oE 'switches=[0-9]+' "$VAL_OUT_T5" | cut -d= -f2)
+T5_AN=$(grep -oE 'annotated=[0-9]+' "$VAL_OUT_T5" | cut -d= -f2)
+if [ "${T5_SW:-0}" -ge 1 ] && [ "${T5_AN:-1}" -eq 0 ]; then
+    echo "PASS: tier-5 emits switches but annotates none (switches=$T5_SW annotated=$T5_AN)"
+else
+    echo "FAIL: tier-5 must annotate nothing (switches=${T5_SW:-?} annotated=${T5_AN:-?})"
+    overall_rc=1
+fi
+
+# Informational, not gated here: branch_profile() carries the same tier
+# gate, and scenario 5 of test_branch_probabilities.sh asserts the count.
+BW_T5=$(find "$IR6" -type f -name '*.ll' -exec grep -h '"branch_weights"' {} + 2>/dev/null | wc -l | tr -d ' ')
+echo "    tier-5 branch_weights nodes (expected 0, gated in the branch suite): ${BW_T5:-0}"
+
+# Semantics must not depend on the tier either.
+if grep -q "SwitchProfileTest: ALL OK" "$LOG4" && grep -q "SwitchProfileTest: ALL OK" "$LOG6"; then
+    echo "PASS: tier-5 and tier-6 runs agree on all oracle sums"
+else
+    echo "FAIL: tier-5/tier-6 runs disagree"
+    overall_rc=1
+fi
 echo ""
 
 if [ "$overall_rc" -eq 0 ]; then
